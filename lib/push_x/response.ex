@@ -1,0 +1,148 @@
+defmodule PushX.Response do
+  @moduledoc """
+  A struct representing the response from a push notification request.
+
+  ## Fields
+
+    * `:provider` - The provider used (`:apns` or `:fcm`)
+    * `:status` - The result status (see below)
+    * `:id` - Provider-specific message ID (if available)
+    * `:reason` - Error reason string (if failed)
+    * `:raw` - Raw response body (for debugging)
+
+  ## Status Values
+
+    * `:sent` - Message was successfully sent
+    * `:invalid_token` - Device token is invalid or expired
+    * `:expired_token` - Device token has expired
+    * `:unregistered` - Device is no longer registered
+    * `:payload_too_large` - Payload exceeds size limit
+    * `:rate_limited` - Too many requests, try again later
+    * `:server_error` - Provider server error
+    * `:connection_error` - Network/connection failure
+    * `:unknown_error` - Unrecognized error
+
+  """
+
+  @type status ::
+          :sent
+          | :invalid_token
+          | :expired_token
+          | :unregistered
+          | :payload_too_large
+          | :rate_limited
+          | :server_error
+          | :connection_error
+          | :unknown_error
+
+  @type t :: %__MODULE__{
+          provider: :apns | :fcm,
+          status: status(),
+          id: String.t() | nil,
+          reason: String.t() | nil,
+          raw: any()
+        }
+
+  defstruct [
+    :provider,
+    :status,
+    :id,
+    :reason,
+    :raw
+  ]
+
+  @doc """
+  Creates a successful response.
+  """
+  @spec success(provider :: :apns | :fcm, id :: String.t() | nil) :: t()
+  def success(provider, id \\ nil) do
+    %__MODULE__{
+      provider: provider,
+      status: :sent,
+      id: id
+    }
+  end
+
+  @doc """
+  Creates an error response.
+  """
+  @spec error(provider :: :apns | :fcm, status :: status(), reason :: String.t() | nil) :: t()
+  def error(provider, status, reason \\ nil) do
+    %__MODULE__{
+      provider: provider,
+      status: status,
+      reason: reason
+    }
+  end
+
+  @doc """
+  Creates an error response with raw data.
+  """
+  @spec error(
+          provider :: :apns | :fcm,
+          status :: status(),
+          reason :: String.t() | nil,
+          raw :: any()
+        ) :: t()
+  def error(provider, status, reason, raw) do
+    %__MODULE__{
+      provider: provider,
+      status: status,
+      reason: reason,
+      raw: raw
+    }
+  end
+
+  @doc """
+  Maps an APNS error reason to a status atom.
+
+  See: https://developer.apple.com/documentation/usernotifications/setting_up_a_remote_notification_server/handling_notification_responses_from_apns
+  """
+  @spec apns_reason_to_status(String.t()) :: status()
+  def apns_reason_to_status(reason) do
+    case reason do
+      "BadDeviceToken" -> :invalid_token
+      "Unregistered" -> :unregistered
+      "ExpiredToken" -> :expired_token
+      "PayloadTooLarge" -> :payload_too_large
+      "TooManyRequests" -> :rate_limited
+      "InternalServerError" -> :server_error
+      "ServiceUnavailable" -> :server_error
+      "Shutdown" -> :server_error
+      _ -> :unknown_error
+    end
+  end
+
+  @doc """
+  Maps an FCM error code to a status atom.
+
+  See: https://firebase.google.com/docs/reference/fcm/rest/v1/ErrorCode
+  """
+  @spec fcm_error_to_status(String.t()) :: status()
+  def fcm_error_to_status(error_code) do
+    case error_code do
+      "INVALID_ARGUMENT" -> :invalid_token
+      "UNREGISTERED" -> :unregistered
+      "SENDER_ID_MISMATCH" -> :invalid_token
+      "QUOTA_EXCEEDED" -> :rate_limited
+      "UNAVAILABLE" -> :server_error
+      "INTERNAL" -> :server_error
+      _ -> :unknown_error
+    end
+  end
+
+  @doc """
+  Returns true if the response indicates success.
+  """
+  @spec success?(t()) :: boolean()
+  def success?(%__MODULE__{status: :sent}), do: true
+  def success?(%__MODULE__{}), do: false
+
+  @doc """
+  Returns true if the token should be removed from the database.
+  """
+  @spec should_remove_token?(t()) :: boolean()
+  def should_remove_token?(%__MODULE__{status: status}) do
+    status in [:invalid_token, :expired_token, :unregistered]
+  end
+end
