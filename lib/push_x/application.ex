@@ -14,12 +14,12 @@ defmodule PushX.Application do
            "https://api.push.apple.com" => [
              size: PushX.Config.finch_pool_size(),
              count: PushX.Config.finch_pool_count(),
-             protocol: :http2
+             protocols: [:http2]
            ],
            "https://api.development.push.apple.com" => [
              size: PushX.Config.finch_pool_size(),
              count: PushX.Config.finch_pool_count(),
-             protocol: :http2
+             protocols: [:http2]
            ],
            :default => [
              size: PushX.Config.finch_pool_size(),

@@ -2,7 +2,7 @@ defmodule PushX.MixProject do
   use Mix.Project
 
   @version "0.1.0"
-  @source_url "https://github.com/emmtry/pushx"
+  @source_url "https://github.com/cignosystems/pushx"
 
   def project do
     [
@@ -52,7 +52,7 @@ defmodule PushX.MixProject do
       links: %{
         "GitHub" => @source_url
       },
-      maintainers: ["Emmtry"]
+      maintainers: ["Cigno Systems AB"]
     ]
   end
 
