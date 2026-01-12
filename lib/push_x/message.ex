@@ -184,7 +184,7 @@ defmodule PushX.Message do
       %{}
       |> maybe_put("alert", if(alert != %{}, do: alert))
       |> maybe_put("badge", message.badge)
-      |> maybe_put("sound", message.sound || (if message.title, do: "default"))
+      |> maybe_put("sound", message.sound || if(message.title, do: "default"))
       |> maybe_put("category", message.category)
       |> maybe_put("thread-id", message.thread_id)
 
