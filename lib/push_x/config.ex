@@ -28,6 +28,13 @@ defmodule PushX.Config do
     * `:finch_pool_size` - Pool size per connection (default: 10)
     * `:finch_pool_count` - Number of pools (default: 1)
 
+  ### Retry Settings
+
+    * `:retry_enabled` - Enable automatic retry (default: `true`)
+    * `:retry_max_attempts` - Maximum retry attempts (default: `3`)
+    * `:retry_base_delay_ms` - Base delay in milliseconds (default: `10_000`)
+    * `:retry_max_delay_ms` - Maximum delay in milliseconds (default: `60_000`)
+
   ## Example Configuration
 
       config :pushx,
@@ -152,4 +159,32 @@ defmodule PushX.Config do
     get(:fcm_project_id) != nil and
       get(:fcm_credentials) != nil
   end
+
+  # Retry configuration
+
+  @doc """
+  Checks if retry is enabled.
+  """
+  @spec retry_enabled?() :: boolean()
+  def retry_enabled?, do: get(:retry_enabled, true)
+
+  @doc """
+  Gets the maximum number of retry attempts.
+  """
+  @spec retry_max_attempts() :: pos_integer()
+  def retry_max_attempts, do: get(:retry_max_attempts, 3)
+
+  @doc """
+  Gets the base delay for exponential backoff in milliseconds.
+  Default: 10 seconds (Google's recommended minimum).
+  """
+  @spec retry_base_delay_ms() :: pos_integer()
+  def retry_base_delay_ms, do: get(:retry_base_delay_ms, 10_000)
+
+  @doc """
+  Gets the maximum delay for exponential backoff in milliseconds.
+  Default: 60 seconds.
+  """
+  @spec retry_max_delay_ms() :: pos_integer()
+  def retry_max_delay_ms, do: get(:retry_max_delay_ms, 60_000)
 end

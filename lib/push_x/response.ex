@@ -40,7 +40,8 @@ defmodule PushX.Response do
           status: status(),
           id: String.t() | nil,
           reason: String.t() | nil,
-          raw: any()
+          raw: any(),
+          retry_after: non_neg_integer() | nil
         }
 
   defstruct [
@@ -48,7 +49,8 @@ defmodule PushX.Response do
     :status,
     :id,
     :reason,
-    :raw
+    :raw,
+    :retry_after
   ]
 
   @doc """
@@ -90,6 +92,26 @@ defmodule PushX.Response do
       status: status,
       reason: reason,
       raw: raw
+    }
+  end
+
+  @doc """
+  Creates an error response with raw data and retry_after value.
+  """
+  @spec error(
+          provider :: :apns | :fcm,
+          status :: status(),
+          reason :: String.t() | nil,
+          raw :: any(),
+          retry_after :: non_neg_integer() | nil
+        ) :: t()
+  def error(provider, status, reason, raw, retry_after) do
+    %__MODULE__{
+      provider: provider,
+      status: status,
+      reason: reason,
+      raw: raw,
+      retry_after: retry_after
     }
   end
 
@@ -144,5 +166,18 @@ defmodule PushX.Response do
   @spec should_remove_token?(t()) :: boolean()
   def should_remove_token?(%__MODULE__{status: status}) do
     status in [:invalid_token, :expired_token, :unregistered]
+  end
+
+  @doc """
+  Returns true if the error is retryable.
+
+  Retryable errors:
+  - `:connection_error` - Network/connection failure
+  - `:rate_limited` - Too many requests (with backoff)
+  - `:server_error` - Provider server error (5xx)
+  """
+  @spec retryable?(t()) :: boolean()
+  def retryable?(%__MODULE__{status: status}) do
+    status in [:connection_error, :rate_limited, :server_error]
   end
 end

@@ -16,7 +16,7 @@ defmodule PushX.Application do
              count: PushX.Config.finch_pool_count(),
              protocols: [:http2]
            ],
-           "https://api.development.push.apple.com" => [
+           "https://api.sandbox.push.apple.com" => [
              size: PushX.Config.finch_pool_size(),
              count: PushX.Config.finch_pool_count(),
              protocols: [:http2]

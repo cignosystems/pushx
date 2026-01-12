@@ -34,7 +34,7 @@ defmodule PushX.FCM do
 
   require Logger
 
-  alias PushX.{Config, Message, Response}
+  alias PushX.{Config, Message, Response, Retry}
 
   @fcm_base_url "https://fcm.googleapis.com/v1/projects"
 
@@ -48,7 +48,10 @@ defmodule PushX.FCM do
           | {:webpush, map()}
 
   @doc """
-  Sends a push notification to an Android device.
+  Sends a push notification to an Android device with automatic retry.
+
+  Uses exponential backoff for transient failures following Google's best practices.
+  Permanent failures (bad token, invalid argument) are not retried.
 
   ## Options
 
@@ -66,6 +69,16 @@ defmodule PushX.FCM do
   """
   @spec send(token(), payload(), [option()]) :: {:ok, Response.t()} | {:error, Response.t()}
   def send(device_token, payload, opts \\ []) do
+    Retry.with_retry(fn -> send_once(device_token, payload, opts) end)
+  end
+
+  @doc """
+  Sends a push notification without retry.
+
+  Use this when you want to handle retries yourself or for testing.
+  """
+  @spec send_once(token(), payload(), [option()]) :: {:ok, Response.t()} | {:error, Response.t()}
+  def send_once(device_token, payload, opts \\ []) do
     project_id = Keyword.get(opts, :project_id, Config.fcm_project_id())
     url = "#{@fcm_base_url}/#{project_id}/messages:send"
 
@@ -91,8 +104,8 @@ defmodule PushX.FCM do
             {:ok, Response.success(:fcm)}
         end
 
-      {:ok, %{status: status, body: body}} ->
-        handle_error_response(status, body)
+      {:ok, %{status: status, headers: response_headers, body: body}} ->
+        handle_error_response(status, body, response_headers)
 
       {:error, reason} ->
         Logger.error("[PushX.FCM] Connection error: #{inspect(reason)}")
@@ -116,10 +129,18 @@ defmodule PushX.FCM do
   end
 
   @doc """
-  Sends a data-only message (no visible notification).
+  Sends a data-only message (no visible notification) with automatic retry.
   """
   @spec send_data(token(), map(), [option()]) :: {:ok, Response.t()} | {:error, Response.t()}
   def send_data(device_token, data, opts \\ []) do
+    Retry.with_retry(fn -> send_data_once(device_token, data, opts) end)
+  end
+
+  @doc """
+  Sends a data-only message without retry.
+  """
+  @spec send_data_once(token(), map(), [option()]) :: {:ok, Response.t()} | {:error, Response.t()}
+  def send_data_once(device_token, data, opts \\ []) do
     project_id = Keyword.get(opts, :project_id, Config.fcm_project_id())
     url = "#{@fcm_base_url}/#{project_id}/messages:send"
 
@@ -148,8 +169,8 @@ defmodule PushX.FCM do
             {:ok, Response.success(:fcm)}
         end
 
-      {:ok, %{status: status, body: body}} ->
-        handle_error_response(status, body)
+      {:ok, %{status: status, headers: response_headers, body: body}} ->
+        handle_error_response(status, body, response_headers)
 
       {:error, reason} ->
         {:error, Response.error(:fcm, :connection_error, inspect(reason))}
@@ -204,7 +225,7 @@ defmodule PushX.FCM do
     Map.new(map, fn {k, v} -> {to_string(k), to_string(v)} end)
   end
 
-  defp handle_error_response(status, body) do
+  defp handle_error_response(status, body, response_headers) do
     {error_code, error_message} =
       case JSON.decode(body) do
         {:ok, %{"error" => %{"status" => code, "message" => msg}}} ->
@@ -218,8 +239,33 @@ defmodule PushX.FCM do
       end
 
     error_status = Response.fcm_error_to_status(error_code)
+    retry_after = parse_retry_after(response_headers)
+
     Logger.warning("[PushX.FCM] Failed #{status}: #{error_code} - #{error_message}")
-    {:error, Response.error(:fcm, error_status, error_message, body)}
+    {:error, Response.error(:fcm, error_status, error_message, body, retry_after)}
+  end
+
+  defp parse_retry_after(headers) do
+    case get_header(headers, "retry-after") do
+      nil -> nil
+      value -> parse_retry_after_value(value)
+    end
+  end
+
+  defp parse_retry_after_value(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {seconds, ""} -> seconds
+      _ -> nil
+    end
+  end
+
+  defp parse_retry_after_value(_), do: nil
+
+  defp get_header(headers, key) do
+    case List.keyfind(headers, key, 0) do
+      {_, value} -> value
+      nil -> nil
+    end
   end
 
   defp get_access_token do

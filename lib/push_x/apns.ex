@@ -33,10 +33,10 @@ defmodule PushX.APNS do
 
   require Logger
 
-  alias PushX.{Config, Message, Response}
+  alias PushX.{Config, Message, Response, Retry}
 
   @apns_prod_url "https://api.push.apple.com"
-  @apns_sandbox_url "https://api.development.push.apple.com"
+  @apns_sandbox_url "https://api.sandbox.push.apple.com"
 
   # JWT token cache (cached for 50 minutes, Apple allows 60 min)
   @jwt_cache_ttl_ms 50 * 60 * 1000
@@ -52,7 +52,10 @@ defmodule PushX.APNS do
           | {:collapse_id, String.t()}
 
   @doc """
-  Sends a push notification to an iOS device.
+  Sends a push notification to an iOS device with automatic retry.
+
+  Uses exponential backoff for transient failures following Apple's best practices.
+  Permanent failures (bad token, payload too large) are not retried.
 
   ## Options
 
@@ -62,6 +65,7 @@ defmodule PushX.APNS do
     * `:priority` - 5 or 10 (default: 10)
     * `:expiration` - Unix timestamp when notification expires
     * `:collapse_id` - Group notifications with the same ID
+    * `:retry` - Enable/disable retry (default: true from config)
 
   ## Returns
 
@@ -71,6 +75,16 @@ defmodule PushX.APNS do
   """
   @spec send(token(), payload(), [option()]) :: {:ok, Response.t()} | {:error, Response.t()}
   def send(device_token, payload, opts \\ []) do
+    Retry.with_retry(fn -> send_once(device_token, payload, opts) end)
+  end
+
+  @doc """
+  Sends a push notification without retry.
+
+  Use this when you want to handle retries yourself or for testing.
+  """
+  @spec send_once(token(), payload(), [option()]) :: {:ok, Response.t()} | {:error, Response.t()}
+  def send_once(device_token, payload, opts \\ []) do
     topic = Keyword.get(opts, :topic) || raise ArgumentError, ":topic option is required"
     mode = Keyword.get(opts, :mode, Config.apns_mode())
 
@@ -86,8 +100,8 @@ defmodule PushX.APNS do
         apns_id = get_header(response_headers, "apns-id")
         {:ok, Response.success(:apns, apns_id)}
 
-      {:ok, %{status: status, body: body}} ->
-        handle_error_response(status, body)
+      {:ok, %{status: status, headers: response_headers, body: body}} ->
+        handle_error_response(status, body, response_headers)
 
       {:error, reason} ->
         Logger.error("[PushX.APNS] Connection error: #{inspect(reason)}")
@@ -162,7 +176,7 @@ defmodule PushX.APNS do
     end
   end
 
-  defp handle_error_response(status, body) do
+  defp handle_error_response(status, body, response_headers) do
     reason =
       case JSON.decode(body) do
         {:ok, %{"reason" => reason}} -> reason
@@ -170,9 +184,27 @@ defmodule PushX.APNS do
       end
 
     error_status = Response.apns_reason_to_status(reason)
+    retry_after = parse_retry_after(response_headers)
+
     Logger.warning("[PushX.APNS] Failed #{status}: #{reason}")
-    {:error, Response.error(:apns, error_status, reason, body)}
+    {:error, Response.error(:apns, error_status, reason, body, retry_after)}
   end
+
+  defp parse_retry_after(headers) do
+    case get_header(headers, "retry-after") do
+      nil -> nil
+      value -> parse_retry_after_value(value)
+    end
+  end
+
+  defp parse_retry_after_value(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {seconds, ""} -> seconds
+      _ -> nil
+    end
+  end
+
+  defp parse_retry_after_value(_), do: nil
 
   # JWT Token Management with caching
 
