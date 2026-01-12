@@ -48,7 +48,7 @@ defmodule PushX.Retry do
       PushX.Retry.with_retry(fn -> PushX.APNS.send_once(token, payload, opts) end)
 
   """
-  @spec with_retry((() -> {:ok, Response.t()} | {:error, Response.t()}), keyword()) ::
+  @spec with_retry((-> {:ok, Response.t()} | {:error, Response.t()}), keyword()) ::
           {:ok, Response.t()} | {:error, Response.t()}
   def with_retry(fun, opts \\ []) do
     if retry_enabled?() do
@@ -129,7 +129,12 @@ defmodule PushX.Retry do
   """
   @spec calculate_delay(Response.t(), pos_integer(), pos_integer(), pos_integer()) ::
           pos_integer()
-  def calculate_delay(%Response{status: :rate_limited, retry_after: retry_after}, _attempt, _base, _max)
+  def calculate_delay(
+        %Response{status: :rate_limited, retry_after: retry_after},
+        _attempt,
+        _base,
+        _max
+      )
       when is_integer(retry_after) and retry_after > 0 do
     # Use the server-specified retry-after value
     retry_after * 1000
@@ -142,7 +147,7 @@ defmodule PushX.Retry do
 
   def calculate_delay(_response, attempt, base_delay, max_delay) do
     # Exponential backoff: base * 2^(attempt-1)
-    exponential = base_delay * :math.pow(2, attempt - 1) |> round()
+    exponential = (base_delay * :math.pow(2, attempt - 1)) |> round()
 
     # Add jitter (±10%) to prevent thundering herd
     jitter = round(exponential * 0.1 * (:rand.uniform() * 2 - 1))

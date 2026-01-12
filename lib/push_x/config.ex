@@ -86,9 +86,14 @@ defmodule PushX.Config do
   @spec apns_private_key() :: String.t()
   def apns_private_key do
     case get!(:apns_private_key) do
-      {:file, path} -> File.read!(path)
-      {:system, env_var} -> System.get_env(env_var) || raise "Environment variable #{env_var} not set"
-      pem when is_binary(pem) -> pem
+      {:file, path} ->
+        File.read!(path)
+
+      {:system, env_var} ->
+        System.get_env(env_var) || raise "Environment variable #{env_var} not set"
+
+      pem when is_binary(pem) ->
+        pem
     end
   end
 
@@ -111,15 +116,21 @@ defmodule PushX.Config do
   @spec fcm_credentials() :: map() | {:file, String.t()}
   def fcm_credentials do
     case get!(:fcm_credentials) do
-      {:file, path} -> {:file, path}
-      {:json, json} -> JSON.decode!(json)
+      {:file, path} ->
+        {:file, path}
+
+      {:json, json} ->
+        JSON.decode!(json)
+
       {:system, env_var} ->
         System.get_env(env_var)
         |> then(fn
           nil -> raise "Environment variable #{env_var} not set"
           json -> JSON.decode!(json)
         end)
-      map when is_map(map) -> map
+
+      map when is_map(map) ->
+        map
     end
   end
 

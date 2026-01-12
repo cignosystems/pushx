@@ -109,7 +109,9 @@ defmodule PushX.APNSTest do
 
       result = send_via_bypass(bypass, "bad-token", %{"aps" => %{"alert" => "Hello"}})
 
-      assert {:error, %Response{status: :invalid_token, reason: "BadDeviceToken", provider: :apns}} = result
+      assert {:error,
+              %Response{status: :invalid_token, reason: "BadDeviceToken", provider: :apns}} =
+               result
     end
 
     test "returns unregistered error on Unregistered", %{bypass: bypass} do

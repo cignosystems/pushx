@@ -49,9 +49,15 @@ defmodule PushX.FCMTest do
         |> Plug.Conn.resp(200, ~s({"name": "projects/test-project/messages/msg-123"}))
       end)
 
-      result = send_via_bypass(bypass, "test-device-token", %{"title" => "Hello", "body" => "World"})
+      result =
+        send_via_bypass(bypass, "test-device-token", %{"title" => "Hello", "body" => "World"})
 
-      assert {:ok, %Response{status: :sent, id: "projects/test-project/messages/msg-123", provider: :fcm}} = result
+      assert {:ok,
+              %Response{
+                status: :sent,
+                id: "projects/test-project/messages/msg-123",
+                provider: :fcm
+              }} = result
     end
 
     test "returns success even without message ID in response", %{bypass: bypass} do
@@ -70,22 +76,30 @@ defmodule PushX.FCMTest do
       Bypass.expect_once(bypass, "POST", "/v1/projects/test-project/messages:send", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(400, ~s({"error": {"status": "INVALID_ARGUMENT", "message": "Invalid token"}}))
+        |> Plug.Conn.resp(
+          400,
+          ~s({"error": {"status": "INVALID_ARGUMENT", "message": "Invalid token"}})
+        )
       end)
 
       result = send_via_bypass(bypass, "bad-token", %{"title" => "Hi", "body" => "There"})
 
-      assert {:error, %Response{status: :invalid_token, reason: "Invalid token", provider: :fcm}} = result
+      assert {:error, %Response{status: :invalid_token, reason: "Invalid token", provider: :fcm}} =
+               result
     end
 
     test "returns unregistered error on UNREGISTERED", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/v1/projects/test-project/messages:send", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(404, ~s({"error": {"status": "UNREGISTERED", "message": "Token not registered"}}))
+        |> Plug.Conn.resp(
+          404,
+          ~s({"error": {"status": "UNREGISTERED", "message": "Token not registered"}})
+        )
       end)
 
-      result = send_via_bypass(bypass, "unregistered-token", %{"title" => "Hi", "body" => "There"})
+      result =
+        send_via_bypass(bypass, "unregistered-token", %{"title" => "Hi", "body" => "There"})
 
       assert {:error, %Response{status: :unregistered, reason: "Token not registered"}} = result
     end
@@ -94,7 +108,10 @@ defmodule PushX.FCMTest do
       Bypass.expect_once(bypass, "POST", "/v1/projects/test-project/messages:send", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(429, ~s({"error": {"status": "QUOTA_EXCEEDED", "message": "Rate limit exceeded"}}))
+        |> Plug.Conn.resp(
+          429,
+          ~s({"error": {"status": "QUOTA_EXCEEDED", "message": "Rate limit exceeded"}})
+        )
       end)
 
       result = send_via_bypass(bypass, "token", %{"title" => "Hi", "body" => "There"})
@@ -106,7 +123,10 @@ defmodule PushX.FCMTest do
       Bypass.expect_once(bypass, "POST", "/v1/projects/test-project/messages:send", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(503, ~s({"error": {"status": "UNAVAILABLE", "message": "Service unavailable"}}))
+        |> Plug.Conn.resp(
+          503,
+          ~s({"error": {"status": "UNAVAILABLE", "message": "Service unavailable"}})
+        )
       end)
 
       result = send_via_bypass(bypass, "token", %{"title" => "Hi", "body" => "There"})
