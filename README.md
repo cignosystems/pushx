@@ -51,7 +51,7 @@ config :pushx,
 
 ### Retry Configuration (Optional)
 
-PushX includes automatic retry with exponential backoff, following Apple and Google's recommended best practices:
+PushX includes automatic retry with exponential backoff:
 
 ```elixir
 config :pushx,
@@ -60,16 +60,6 @@ config :pushx,
   retry_base_delay_ms: 10_000,   # Base delay: 10 seconds (Google's minimum)
   retry_max_delay_ms: 60_000     # Maximum delay: 60 seconds
 ```
-
-#### Retry Behavior
-
-| Error Type | Retry Behavior |
-|------------|---------------|
-| Connection timeout | Retry with exponential backoff |
-| Server error (5xx) | Retry with exponential backoff |
-| Rate limited (429) | Respect retry-after header, or 60s default |
-| Invalid token | No retry (permanent failure) |
-| Payload too large | No retry (permanent failure) |
 
 ## Usage
 
@@ -83,18 +73,18 @@ PushX.push(:apns, device_token, "Hello World", topic: "com.example.app")
 PushX.push(:fcm, device_token, "Hello World")
 
 # With title and body
-PushX.push(:apns, token, %{title: "Alert", body: "Door unlocked"}, topic: "com.example.app")
+PushX.push(:apns, token, %{title: "New Message", body: "You have a new notification"}, topic: "com.example.app")
 ```
 
 ### Message Builder
 
 ```elixir
 message = PushX.message()
-  |> PushX.Message.title("Lock Alert")
-  |> PushX.Message.body("Front door unlocked")
+  |> PushX.Message.title("Order Update")
+  |> PushX.Message.body("Your order has been shipped!")
   |> PushX.Message.badge(1)
   |> PushX.Message.sound("default")
-  |> PushX.Message.data(%{lock_id: "abc123"})
+  |> PushX.Message.data(%{order_id: "12345"})
 
 PushX.push(:apns, token, message, topic: "com.example.app")
 ```
@@ -148,11 +138,6 @@ end
 # Check if token should be removed
 if PushX.Response.should_remove_token?(response) do
   Tokens.delete(token)
-end
-
-# Check if error is retryable (useful with send_once)
-if PushX.Response.retryable?(response) do
-  # Schedule retry...
 end
 ```
 

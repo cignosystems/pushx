@@ -12,11 +12,11 @@ defmodule PushX.Message do
 
       # Builder pattern
       message = PushX.Message.new()
-        |> PushX.Message.title("Lock Alert")
-        |> PushX.Message.body("Front door unlocked")
+        |> PushX.Message.title("Order Update")
+        |> PushX.Message.body("Your order has been shipped!")
         |> PushX.Message.badge(1)
         |> PushX.Message.sound("default")
-        |> PushX.Message.data(%{lock_id: "abc123"})
+        |> PushX.Message.data(%{order_id: "12345"})
 
   """
 

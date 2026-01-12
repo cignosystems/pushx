@@ -22,7 +22,7 @@ defmodule PushX do
       PushX.push(:fcm, device_token, "Hello World")
 
       # With title and body
-      PushX.push(:apns, token, %{title: "Alert", body: "Door unlocked"}, topic: "...")
+      PushX.push(:apns, token, %{title: "New Message", body: "You have a notification"}, topic: "...")
 
   ## Configuration
 
@@ -90,8 +90,8 @@ defmodule PushX do
 
       # Using Message struct
       message = PushX.Message.new()
-        |> PushX.Message.title("Lock Alert")
-        |> PushX.Message.body("Front door unlocked")
+        |> PushX.Message.title("Order Update")
+        |> PushX.Message.body("Your order has been shipped!")
         |> PushX.Message.badge(1)
 
       PushX.push(:apns, token, message, topic: "com.example.app")
