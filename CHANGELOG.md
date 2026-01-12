@@ -1,0 +1,61 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.2.2] - 2026-01-12
+
+### Added
+- Added CHANGELOG.md with full version history
+- Added Changelog link to hex.pm package
+
+## [0.2.1] - 2026-01-12
+
+### Fixed
+- Fixed CI workflow for documentation generation
+- Fixed code formatting issues
+
+### Changed
+- Updated documentation examples to use generic messaging
+
+## [0.2.0] - 2026-01-12
+
+### Added
+- Automatic retry with exponential backoff following Apple/Google best practices
+- `PushX.Retry` module for retry logic
+- `send_once/3` functions for APNS and FCM (single attempt without retry)
+- `retry_after` field in `PushX.Response` struct
+- `retryable?/1` helper function in `PushX.Response`
+- Configuration options for retry behavior:
+  - `retry_enabled` - Enable/disable retry (default: `true`)
+  - `retry_max_attempts` - Maximum retry attempts (default: `3`)
+  - `retry_base_delay_ms` - Base delay in milliseconds (default: `10_000`)
+  - `retry_max_delay_ms` - Maximum delay in milliseconds (default: `60_000`)
+
+### Fixed
+- Fixed APNS sandbox URL (`api.sandbox.push.apple.com`)
+
+## [0.1.1] - 2026-01-09
+
+### Fixed
+- Initial bug fixes and improvements
+
+## [0.1.0] - 2026-01-09
+
+### Added
+- Initial release
+- APNS (Apple Push Notification Service) support with JWT authentication
+- FCM (Firebase Cloud Messaging) support with OAuth2 via Goth
+- Unified API for both providers (`PushX.push/4`)
+- Message builder API (`PushX.Message`)
+- Structured response handling (`PushX.Response`)
+- HTTP/2 connections via Finch
+- Zero external JSON dependency (uses Elixir 1.18+ built-in JSON)
+
+[0.2.2]: https://github.com/cignosystems/pushx/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/cignosystems/pushx/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/cignosystems/pushx/compare/v0.1.1...v0.2.0
+[0.1.1]: https://github.com/cignosystems/pushx/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/cignosystems/pushx/releases/tag/v0.1.0
