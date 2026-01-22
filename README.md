@@ -30,101 +30,136 @@ def deps do
 end
 ```
 
-## Getting Your Credentials
-
-### Apple APNS Setup
-
-You'll need three things from Apple: **Key ID**, **Team ID**, and a **Private Key (.p8 file)**.
-
-#### Step 1: Get Your Team ID
-
-1. Go to [Apple Developer Account](https://developer.apple.com/account)
-2. Your **Team ID** is shown in the top-right corner (10 characters, e.g., `TEAM123456`)
-
-#### Step 2: Create an APNS Key
-
-1. Go to [Certificates, Identifiers & Profiles](https://developer.apple.com/account/resources/authkeys/list)
-2. Click **Keys** → **+** (Create a new key)
-3. Enter a name (e.g., "PushX APNS Key")
-4. Check **Apple Push Notifications service (APNs)**
-5. Click **Continue** → **Register**
-6. **Download the .p8 file** (you can only download it once!)
-7. Note the **Key ID** shown (10 characters, e.g., `ABC123DEFG`)
-
-#### Step 3: Configure PushX
-
-```elixir
-# config/config.exs or config/runtime.exs
-config :pushx,
-  apns_key_id: "ABC123DEFG",           # From step 2
-  apns_team_id: "TEAM123456",          # From step 1
-  apns_private_key: {:file, "priv/keys/AuthKey_ABC123DEFG.p8"},
-  apns_mode: :prod                      # :prod or :sandbox
-```
-
-Or use environment variables:
-
-```elixir
-config :pushx,
-  apns_key_id: System.get_env("APNS_KEY_ID"),
-  apns_team_id: System.get_env("APNS_TEAM_ID"),
-  apns_private_key: System.get_env("APNS_PRIVATE_KEY"),  # PEM string directly
-  apns_mode: :prod
-```
-
-> **Note:** The `:topic` option in `push/4` should be your app's Bundle ID (e.g., `com.yourcompany.app`)
-
 ---
 
-### Google FCM Setup
+## API Reference
 
-You'll need a **Project ID** and a **Service Account JSON file** from Firebase.
+### `PushX.push/4`
 
-#### Step 1: Create/Open Firebase Project
-
-1. Go to [Firebase Console](https://console.firebase.google.com/)
-2. Create a new project or select an existing one
-3. Note your **Project ID** (shown in Project Settings, e.g., `my-app-12345`)
-
-#### Step 2: Enable Cloud Messaging API
-
-1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Select your Firebase project
-3. Go to **APIs & Services** → **Library**
-4. Search for "Firebase Cloud Messaging API" and **Enable** it
-
-#### Step 3: Create Service Account Key
-
-1. In Firebase Console, go to **Project Settings** (gear icon)
-2. Click **Service accounts** tab
-3. Click **Generate new private key**
-4. Save the JSON file securely (e.g., `priv/keys/firebase-service-account.json`)
-
-#### Step 4: Configure PushX
+Send a push notification to a device.
 
 ```elixir
-# config/config.exs or config/runtime.exs
-config :pushx,
-  fcm_project_id: "my-app-12345",
-  fcm_credentials: {:file, "priv/keys/firebase-service-account.json"}
+PushX.push(provider, device_token, message, opts)
 ```
 
-Or inline the credentials:
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `provider` | `:apns` \| `:fcm` | Target platform |
+| `device_token` | `String.t()` | Device push token |
+| `message` | `String.t()` \| `map()` \| `PushX.Message.t()` | Notification content |
+| `opts` | `Keyword.t()` | Provider-specific options |
+
+**Returns:** `{:ok, %PushX.Response{}}` | `{:error, %PushX.Response{}}`
+
+#### APNS Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `:topic` | `String.t()` | *required* | App bundle ID (e.g., `"com.example.app"`) |
+| `:mode` | `:prod` \| `:sandbox` | from config | APNS environment |
+| `:push_type` | `String.t()` | `"alert"` | `"alert"`, `"background"`, `"voip"`, `"complication"`, `"fileprovider"`, `"mdm"` |
+| `:priority` | `5` \| `10` | `10` | Delivery priority (5 = throttled, 10 = immediate) |
+| `:expiration` | `integer()` | `nil` | Unix timestamp when notification expires |
+| `:collapse_id` | `String.t()` | `nil` | Group notifications (max 64 bytes) |
+
+#### FCM Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `:project_id` | `String.t()` | from config | Firebase project ID |
+| `:data` | `map()` | `nil` | Custom key-value data payload |
+| `:android` | `map()` | `nil` | Android-specific options |
+| `:apns` | `map()` | `nil` | APNS options (for iOS via FCM) |
+| `:webpush` | `map()` | `nil` | Web push options |
+
+### `PushX.push!/4`
+
+Same as `push/4` but returns `:ok` | `:error` (without response details).
 
 ```elixir
-config :pushx,
-  fcm_project_id: "my-app-12345",
-  fcm_credentials: %{
-    "type" => "service_account",
-    "project_id" => "my-app-12345",
-    "private_key_id" => "...",
-    "private_key" => "-----BEGIN PRIVATE KEY-----\n...",
-    "client_email" => "firebase-adminsdk-xxx@my-app-12345.iam.gserviceaccount.com",
-    # ... rest of service account JSON
-  }
+case PushX.push!(:apns, token, "Hello", topic: "com.example.app") do
+  :ok -> Logger.info("Sent!")
+  :error -> Logger.error("Failed")
+end
 ```
 
-> **Security:** Never commit credentials to git! Use environment variables or secret management in production.
+### `PushX.Message`
+
+Fluent builder for constructing notification payloads.
+
+```elixir
+message = PushX.message()
+  |> PushX.Message.title("New Message")
+  |> PushX.Message.body("You have a new notification")
+  |> PushX.Message.badge(1)
+  |> PushX.Message.sound("default")
+  |> PushX.Message.data(%{user_id: "12345"})
+```
+
+| Function | Description |
+|----------|-------------|
+| `title(msg, string)` | Set notification title |
+| `body(msg, string)` | Set notification body |
+| `badge(msg, integer)` | Set app badge count (iOS) |
+| `sound(msg, string)` | Set notification sound |
+| `data(msg, map)` | Set custom data payload |
+| `put_data(msg, key, value)` | Add single data key-value |
+| `category(msg, string)` | Set notification category (iOS) |
+| `thread_id(msg, string)` | Set thread ID for grouping (iOS) |
+| `image(msg, url)` | Set image URL (FCM) |
+| `priority(msg, :high \| :normal)` | Set delivery priority |
+| `ttl(msg, seconds)` | Set time-to-live |
+| `collapse_key(msg, string)` | Set collapse key (FCM) |
+
+### `PushX.Response`
+
+Response struct returned from push operations.
+
+```elixir
+%PushX.Response{
+  provider: :apns | :fcm,
+  status: :sent | :invalid_token | :expired_token | ...,
+  id: "message-id" | nil,
+  reason: "error reason" | nil,
+  raw: raw_response_body
+}
+```
+
+| Status | Description | Action |
+|--------|-------------|--------|
+| `:sent` | Successfully delivered | None |
+| `:invalid_token` | Token is malformed or invalid | Remove token |
+| `:expired_token` | Token has expired | Remove token |
+| `:unregistered` | Device unregistered | Remove token |
+| `:payload_too_large` | Payload exceeds limit | Reduce payload size |
+| `:rate_limited` | Too many requests | Retry with backoff |
+| `:server_error` | Provider server error | Retry later |
+| `:connection_error` | Network failure | Retry later |
+| `:unknown_error` | Unrecognized error | Check `reason` field |
+
+**Helper functions:**
+
+```elixir
+PushX.Response.success?(response)           # true if status == :sent
+PushX.Response.should_remove_token?(response)  # true for invalid/expired/unregistered
+```
+
+### Direct Provider Access
+
+For more control, use the provider modules directly:
+
+```elixir
+# APNS
+PushX.APNS.send(token, payload, opts)
+PushX.APNS.notification(title, body, badge \\ nil)
+PushX.APNS.notification_with_data(title, body, data, badge \\ nil)
+PushX.APNS.silent_notification(data \\ %{})
+
+# FCM
+PushX.FCM.send(token, payload, opts)
+PushX.FCM.send_data(token, data, opts)  # Data-only message
+PushX.FCM.notification(title, body, opts \\ [])
+```
 
 ---
 
@@ -140,6 +175,13 @@ config :pushx,
   apns_mode: :prod  # or :sandbox
 ```
 
+| Option | Type | Description |
+|--------|------|-------------|
+| `:apns_key_id` | `String.t()` | 10-character Key ID from Apple |
+| `:apns_team_id` | `String.t()` | 10-character Team ID from Apple |
+| `:apns_private_key` | `String.t()` \| `{:file, path}` | PEM string or file path |
+| `:apns_mode` | `:prod` \| `:sandbox` | APNS environment (default: `:prod`) |
+
 ### FCM (Firebase Cloud Messaging)
 
 ```elixir
@@ -148,7 +190,12 @@ config :pushx,
   fcm_credentials: {:file, "priv/keys/firebase-service-account.json"}
 ```
 
-### Finch Pool Configuration (Optional)
+| Option | Type | Description |
+|--------|------|-------------|
+| `:fcm_project_id` | `String.t()` | Firebase project ID |
+| `:fcm_credentials` | `map()` \| `{:file, path}` | Service account JSON or file path |
+
+### Pool Configuration (Optional)
 
 ```elixir
 config :pushx,
@@ -156,72 +203,210 @@ config :pushx,
   finch_pool_count: 1    # number of pools (default: 1)
 ```
 
-## Usage
+---
 
-### Unified API
+## Credential Storage Options
+
+### Option 1: File System (Development)
+
+Store credentials in `priv/keys/` (gitignored):
+
+```elixir
+# config/dev.exs
+config :pushx,
+  apns_private_key: {:file, "priv/keys/AuthKey.p8"},
+  fcm_credentials: {:file, "priv/keys/firebase-service-account.json"}
+```
+
+Add to `.gitignore`:
+```
+/priv/keys/
+```
+
+### Option 2: Environment Variables (Production)
+
+Store credentials as environment variables:
+
+```elixir
+# config/runtime.exs
+config :pushx,
+  apns_key_id: System.get_env("APNS_KEY_ID"),
+  apns_team_id: System.get_env("APNS_TEAM_ID"),
+  apns_private_key: System.get_env("APNS_PRIVATE_KEY"),
+  apns_mode: if(System.get_env("APNS_SANDBOX") == "true", do: :sandbox, else: :prod),
+
+  fcm_project_id: System.get_env("FCM_PROJECT_ID"),
+  fcm_credentials: System.get_env("FCM_CREDENTIALS") |> Jason.decode!()
+```
+
+> **Tip:** For multiline keys (APNS .p8), encode as base64 or replace newlines with `\n`.
+
+### Option 3: Fly.io Secrets
+
+```bash
+# Set APNS credentials
+fly secrets set APNS_KEY_ID="ABC123DEFG"
+fly secrets set APNS_TEAM_ID="TEAM123456"
+fly secrets set APNS_PRIVATE_KEY="$(cat AuthKey.p8)"
+
+# Set FCM credentials (JSON as string)
+fly secrets set FCM_PROJECT_ID="my-project-id"
+fly secrets set FCM_CREDENTIALS="$(cat firebase-service-account.json)"
+```
+
+Then in `config/runtime.exs`:
+
+```elixir
+if config_env() == :prod do
+  config :pushx,
+    apns_key_id: System.fetch_env!("APNS_KEY_ID"),
+    apns_team_id: System.fetch_env!("APNS_TEAM_ID"),
+    apns_private_key: System.fetch_env!("APNS_PRIVATE_KEY"),
+    apns_mode: :prod,
+
+    fcm_project_id: System.fetch_env!("FCM_PROJECT_ID"),
+    fcm_credentials: System.fetch_env!("FCM_CREDENTIALS") |> JSON.decode!()
+end
+```
+
+### Option 4: AWS Secrets Manager / Vault
+
+Fetch secrets at runtime in `config/runtime.exs`:
+
+```elixir
+if config_env() == :prod do
+  # Example with ExAws
+  {:ok, %{"SecretString" => apns_key}} = 
+    ExAws.SecretsManager.get_secret_value("pushx/apns-key")
+    |> ExAws.request()
+
+  config :pushx,
+    apns_private_key: apns_key
+end
+```
+
+---
+
+## Getting Your Credentials
+
+### Apple APNS Setup
+
+You'll need: **Key ID**, **Team ID**, and a **Private Key (.p8 file)**.
+
+#### Step 1: Get Your Team ID
+
+1. Go to [Apple Developer Account](https://developer.apple.com/account)
+2. Your **Team ID** is shown in the top-right corner (10 characters)
+
+#### Step 2: Create an APNS Key
+
+1. Go to [Certificates, Identifiers & Profiles](https://developer.apple.com/account/resources/authkeys/list)
+2. Click **Keys** → **+** (Create a new key)
+3. Enter a name (e.g., "Push Notifications Key")
+4. Check **Apple Push Notifications service (APNs)**
+5. Click **Continue** → **Register**
+6. **Download the .p8 file** (you can only download it once!)
+7. Note the **Key ID** shown (10 characters)
+
+### Google FCM Setup
+
+You'll need: **Project ID** and a **Service Account JSON file**.
+
+#### Step 1: Create/Open Firebase Project
+
+1. Go to [Firebase Console](https://console.firebase.google.com/)
+2. Create a new project or select an existing one
+3. Note your **Project ID** in Project Settings
+
+#### Step 2: Enable Cloud Messaging API
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Select your Firebase project
+3. Go to **APIs & Services** → **Library**
+4. Search for "Firebase Cloud Messaging API" and **Enable** it
+
+#### Step 3: Create Service Account Key
+
+1. In Firebase Console, go to **Project Settings** (gear icon)
+2. Click **Service accounts** tab
+3. Click **Generate new private key**
+4. Save the JSON file securely
+
+---
+
+## Usage Examples
+
+### Basic Usage
 
 ```elixir
 # Send to iOS
-PushX.push(:apns, device_token, "Hello World", topic: "com.example.app")
+PushX.push(:apns, device_token, "Hello!", topic: "com.example.app")
 
 # Send to Android
-PushX.push(:fcm, device_token, "Hello World")
+PushX.push(:fcm, device_token, "Hello!")
 
 # With title and body
-PushX.push(:apns, token, %{title: "Alert", body: "Door unlocked"}, topic: "com.example.app")
+PushX.push(:apns, token, %{title: "Welcome", body: "Thanks for signing up!"}, 
+  topic: "com.example.app")
 ```
 
-### Message Builder
+### Using Message Builder
 
 ```elixir
 message = PushX.message()
-  |> PushX.Message.title("Lock Alert")
-  |> PushX.Message.body("Front door unlocked")
+  |> PushX.Message.title("Order Update")
+  |> PushX.Message.body("Your order #1234 has shipped")
   |> PushX.Message.badge(1)
   |> PushX.Message.sound("default")
-  |> PushX.Message.data(%{lock_id: "abc123"})
+  |> PushX.Message.data(%{order_id: "1234", status: "shipped"})
 
 PushX.push(:apns, token, message, topic: "com.example.app")
 ```
 
-### Direct Provider Access
+### Silent/Background Notification
 
 ```elixir
-# APNS with all options
-PushX.APNS.send(token, payload,
-  topic: "com.app.bundle",
-  mode: :sandbox,
-  push_type: "alert",
-  priority: 10
+payload = PushX.APNS.silent_notification(%{action: "sync", resource: "messages"})
+
+PushX.APNS.send(token, payload, 
+  topic: "com.example.app",
+  push_type: "background",
+  priority: 5
 )
-
-# FCM with data payload
-PushX.FCM.send(token, notification, data: %{"key" => "value"})
-
-# Silent/background notification
-payload = PushX.APNS.silent_notification(%{action: "sync"})
-PushX.APNS.send(token, payload, topic: "com.app", push_type: "background", priority: 5)
 ```
 
 ### Response Handling
 
 ```elixir
-case PushX.push(:apns, token, message, topic: "com.app") do
+case PushX.push(:apns, token, message, topic: "com.example.app") do
   {:ok, %PushX.Response{status: :sent, id: apns_id}} ->
-    Logger.info("Sent! ID: #{apns_id}")
+    Logger.info("Notification sent with ID: #{apns_id}")
 
   {:error, %PushX.Response{status: :invalid_token}} ->
-    Tokens.delete(token)  # Remove invalid token
+    # Remove invalid token from database
+    MyApp.Tokens.delete(token)
+
+  {:error, %PushX.Response{status: :rate_limited}} ->
+    # Retry later with exponential backoff
+    Logger.warning("Rate limited, will retry")
 
   {:error, %PushX.Response{status: status, reason: reason}} ->
-    Logger.warning("Failed: #{status} - #{reason}")
-end
-
-# Check if token should be removed
-if PushX.Response.should_remove_token?(response) do
-  Tokens.delete(token)
+    Logger.error("Push failed: #{status} - #{reason}")
 end
 ```
+
+### Batch Pattern
+
+```elixir
+# Send to multiple tokens (current approach)
+tokens
+|> Task.async_stream(fn token ->
+  PushX.push(:apns, token, message, topic: "com.example.app")
+end, max_concurrency: 50)
+|> Enum.to_list()
+```
+
+---
 
 ## Requirements
 
