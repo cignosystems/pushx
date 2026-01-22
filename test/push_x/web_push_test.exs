@@ -20,7 +20,8 @@ defmodule PushX.WebPushTest do
     end
 
     test "FCM web tokens accept colons and hyphens" do
-      web_token = "dGVzdC10b2tlbi1mb3ItZmNt:APA91bG-" <> String.duplicate("a", 50)
+      # Test token format only - not a real secret
+      web_token = "test-token-format-check:APA91bG-" <> String.duplicate("x", 50)
       assert Token.valid?(:fcm, web_token) == true
     end
   end
