@@ -30,7 +30,7 @@ Add `pushx` to your dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:pushx, "~> 0.4.0"}
+    {:pushx, "~> 0.5.0"}
   ]
 end
 ```
@@ -595,12 +595,68 @@ PushX.FCM.send_once(token, payload)
 
 Tested on Elixir 1.18/1.19 with OTP 26, 27, and 28.
 
+## Web Push Support
+
+PushX supports web push notifications for browsers.
+
+### FCM Web Push (Chrome, Firefox, Edge)
+
+FCM uses the same API for web and mobile. Web tokens come from Firebase Messaging SDK.
+
+```elixir
+# Get token in browser: firebase.messaging().getToken()
+web_token = "eKz7v2j..."
+
+# Same API as mobile!
+PushX.push(:fcm, web_token, %{title: "Hello", body: "From web!"})
+
+# Using web notification helper with click action
+PushX.FCM.send_web(web_token, "New Message", "Check it out", "https://example.com/messages")
+
+# With icon and badge
+PushX.FCM.send_web(web_token, "Alert", "Important update",
+  "https://example.com",
+  icon: "https://example.com/icon.png",
+  badge: "https://example.com/badge.png"
+)
+
+# Build payload manually for more control
+payload = PushX.FCM.web_notification("Title", "Body", "https://example.com",
+  icon: "https://example.com/icon.png",
+  require_interaction: true
+)
+PushX.FCM.send(web_token, payload)
+```
+
+### Safari Web Push (macOS)
+
+Safari uses APNS with a `web.` topic prefix. Tokens are 64 hex characters (same as iOS).
+
+```elixir
+safari_token = "abc123..."  # 64 hex chars
+
+# Topic format: web.{website-push-id}
+PushX.APNS.send(safari_token, payload, topic: "web.com.example.website")
+
+# Using web notification helper
+payload = PushX.APNS.web_notification(
+  "New Article",
+  "Check out our latest post",
+  "https://example.com/article/123"
+)
+PushX.APNS.send(safari_token, payload, topic: "web.com.example.website")
+
+# With custom action button
+payload = PushX.APNS.web_notification("Sale!", "50% off today",
+  "https://shop.com",
+  action: "Shop Now"
+)
+```
+
 ## Roadmap
 
 | Priority | Feature | Description |
 |----------|---------|-------------|
-| 🟢 Low | **Web Push (FCM)** | Browser push notifications via FCM |
-| 🟢 Low | **Web Push (Safari)** | Safari/macOS push notifications via APNS |
 | 🟢 Low | **Connection pooling** | Configurable pool strategies |
 
 ## Contributing

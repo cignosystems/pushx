@@ -5,15 +5,18 @@ defmodule PushX.Token do
   Validates token format before sending to avoid unnecessary API calls.
   Validation is fast (microseconds) and catches obvious errors early.
 
-  ## APNS Tokens
+  ## APNS Tokens (iOS/macOS/Safari)
 
   APNS device tokens are 64 hexadecimal characters (32 bytes).
+  Safari web push tokens use the same format.
   Example: `"a1b2c3d4e5f6...64 hex chars total"`
 
-  ## FCM Tokens
+  ## FCM Tokens (Android/Web)
 
-  FCM registration tokens are variable length (typically 140-250 characters).
-  They contain alphanumeric characters, hyphens, and underscores.
+  FCM registration tokens are variable length:
+  - Mobile tokens: typically 140-250 characters
+  - Web tokens: typically 50-200 characters
+  They contain alphanumeric characters, hyphens, underscores, and colons.
   Example: `"dGVzdC10b2tlbi1mb3ItZmNt..."`
 
   ## Usage
@@ -34,12 +37,15 @@ defmodule PushX.Token do
   @type validation_error :: :empty | :invalid_format | :invalid_length
 
   # APNS tokens are 64 hex characters (32 bytes)
+  # Safari web push tokens use the same format
   @apns_token_length 64
   @apns_token_regex ~r/^[a-fA-F0-9]{64}$/
 
-  # FCM tokens are typically 140-250 chars, but can vary
-  # They use base64-like encoding with some special chars
-  @fcm_min_length 100
+  # FCM tokens vary in length:
+  # - Mobile: typically 140-250 chars
+  # - Web: typically 50-200 chars
+  # We use a wider range to accommodate both
+  @fcm_min_length 20
   @fcm_max_length 500
   @fcm_token_regex ~r/^[a-zA-Z0-9_:\-]+$/
 
@@ -152,7 +158,7 @@ defmodule PushX.Token do
   def error_message(:fcm, :empty), do: "FCM token cannot be empty"
 
   def error_message(:fcm, :invalid_length),
-    do: "FCM token length must be between 100 and 500 characters"
+    do: "FCM token length must be between 20 and 500 characters"
 
   def error_message(:fcm, :invalid_format), do: "FCM token contains invalid characters"
 end

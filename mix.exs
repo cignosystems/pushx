@@ -1,7 +1,7 @@
 defmodule PushX.MixProject do
   use Mix.Project
 
-  @version "0.4.1"
+  @version "0.5.0"
   @source_url "https://github.com/cignosystems/pushx"
 
   def project do
@@ -28,7 +28,7 @@ defmodule PushX.MixProject do
 
   defp deps do
     [
-      {:finch, "~> 0.20"},
+      {:finch, "~> 0.21"},
       {:joken, "~> 2.6"},
       {:goth, "~> 1.4"},
       {:telemetry, "~> 1.3"},

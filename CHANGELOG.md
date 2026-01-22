@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-01-22
+
+### Added
+- **Web Push support** for browsers:
+  - FCM Web Push (Chrome, Firefox, Edge) - same API as mobile
+  - Safari Web Push (macOS) via APNS with `web.` topic prefix
+- `PushX.FCM.web_notification/4` - Create web push payloads with click action
+- `PushX.FCM.send_web/5` - Convenience function for web notifications
+- `PushX.APNS.web_notification/4` - Safari web push payloads with URL args
+- `PushX.APNS.web_notification_with_data/5` - Safari web push with custom data
+- 20 new tests for web push functionality
+- Total test count: 205 tests
+
+### Changed
+- FCM token validation now accepts shorter web tokens (min 20 chars, was 100)
+- Updated Finch dependency to `~> 0.21`
+- Updated documentation with Web Push examples
+
 ## [0.4.1] - 2026-01-22
 
 ### Added
@@ -135,6 +153,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - HTTP/2 connections via Finch
 - Zero external JSON dependency (uses Elixir 1.18+ built-in JSON)
 
+[0.5.0]: https://github.com/cignosystems/pushx/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/cignosystems/pushx/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/cignosystems/pushx/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/cignosystems/pushx/compare/v0.3.2...v0.3.3

@@ -66,7 +66,7 @@ defmodule PushX.TokenTest do
     end
 
     test "too short token" do
-      token = String.duplicate("a", 50)
+      token = String.duplicate("a", 15)
       assert Token.validate(:fcm, token) == {:error, :invalid_length}
     end
 
@@ -76,7 +76,7 @@ defmodule PushX.TokenTest do
     end
 
     test "valid token at minimum length" do
-      token = String.duplicate("a", 100)
+      token = String.duplicate("a", 20)
       assert Token.validate(:fcm, token) == :ok
     end
 
@@ -107,7 +107,7 @@ defmodule PushX.TokenTest do
 
     test "FCM error messages" do
       assert Token.error_message(:fcm, :empty) == "FCM token cannot be empty"
-      assert Token.error_message(:fcm, :invalid_length) =~ "100 and 500"
+      assert Token.error_message(:fcm, :invalid_length) =~ "20 and 500"
       assert Token.error_message(:fcm, :invalid_format) =~ "invalid characters"
     end
   end

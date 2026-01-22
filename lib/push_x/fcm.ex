@@ -2,7 +2,7 @@ defmodule PushX.FCM do
   @moduledoc """
   Firebase Cloud Messaging (FCM) client.
 
-  Sends push notifications to Android devices using the FCM v1 API
+  Sends push notifications to Android devices and web browsers using the FCM v1 API
   with OAuth2 authentication via Goth.
 
   ## Configuration
@@ -29,6 +29,22 @@ defmodule PushX.FCM do
 
       # With custom data
       PushX.FCM.send(device_token, notification, data: %{"key" => "value"})
+
+  ## Web Push (Chrome, Firefox, Edge)
+
+  FCM supports web push using the same API. Web tokens come from the browser's
+  Firebase Messaging SDK (`firebase.messaging().getToken()`).
+
+      # Web push with click action
+      PushX.FCM.send(web_token, payload,
+        webpush: %{
+          "fcm_options" => %{"link" => "https://example.com/page"}
+        }
+      )
+
+      # Using web notification helper
+      payload = PushX.FCM.web_notification("Title", "Body", "https://example.com")
+      PushX.FCM.send(web_token, payload)
 
   """
 
@@ -187,6 +203,91 @@ defmodule PushX.FCM do
   def notification(title, body, opts \\ []) do
     %{"title" => title, "body" => body}
     |> maybe_put("image", Keyword.get(opts, :image))
+  end
+
+  # Web Push helpers
+
+  @doc """
+  Creates a web push notification payload with click action.
+
+  This helper creates a notification optimized for web browsers (Chrome, Firefox, Edge).
+  The `link` option specifies the URL to open when the notification is clicked.
+
+  ## Arguments
+
+    * `title` - Notification title
+    * `body` - Notification body
+    * `link` - URL to open when clicked
+    * `opts` - Optional keyword list:
+      * `:icon` - Icon URL for the notification
+      * `:image` - Large image URL
+      * `:badge` - Badge icon URL (small monochrome icon)
+      * `:tag` - Tag for notification grouping
+      * `:renotify` - Whether to alert again for same tag (default: false)
+      * `:require_interaction` - Keep notification until user interacts (default: false)
+
+  ## Examples
+
+      # Simple web notification
+      PushX.FCM.web_notification("New Message", "You have a new message", "https://example.com/messages")
+
+      # With icon and badge
+      PushX.FCM.web_notification("Sale!", "50% off today",
+        "https://shop.com",
+        icon: "https://shop.com/icon.png",
+        badge: "https://shop.com/badge.png"
+      )
+
+  """
+  @spec web_notification(String.t(), String.t(), String.t(), keyword()) :: map()
+  def web_notification(title, body, link, opts \\ []) do
+    notification_payload =
+      %{"title" => title, "body" => body}
+      |> maybe_put("icon", Keyword.get(opts, :icon))
+      |> maybe_put("image", Keyword.get(opts, :image))
+
+    webpush_notification =
+      %{}
+      |> maybe_put("badge", Keyword.get(opts, :badge))
+      |> maybe_put("tag", Keyword.get(opts, :tag))
+      |> maybe_put("renotify", Keyword.get(opts, :renotify))
+      |> maybe_put("requireInteraction", Keyword.get(opts, :require_interaction))
+
+    %{
+      "notification" => notification_payload,
+      "webpush" =>
+        %{
+          "fcm_options" => %{"link" => link},
+          "notification" => if(webpush_notification == %{}, do: nil, else: webpush_notification)
+        }
+        |> Map.reject(fn {_k, v} -> is_nil(v) end)
+    }
+  end
+
+  @doc """
+  Sends a web push notification with automatic retry.
+
+  Convenience function that combines `web_notification/4` with `send/3`.
+
+  ## Examples
+
+      PushX.FCM.send_web(web_token, "Hello", "World", "https://example.com")
+
+      # With options
+      PushX.FCM.send_web(web_token, "Alert", "Check this out",
+        "https://example.com/page",
+        icon: "https://example.com/icon.png"
+      )
+
+  """
+  @spec send_web(token(), String.t(), String.t(), String.t(), keyword()) ::
+          {:ok, Response.t()} | {:error, Response.t()}
+  def send_web(device_token, title, body, link, opts \\ []) do
+    {web_opts, send_opts} =
+      Keyword.split(opts, [:icon, :image, :badge, :tag, :renotify, :require_interaction])
+
+    payload = web_notification(title, body, link, web_opts)
+    send(device_token, payload, send_opts)
   end
 
   @doc """
