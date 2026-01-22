@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-01-22
+
+### Added
+- **Batch sending** — send to multiple tokens concurrently with configurable parallelism
+  - `PushX.push_batch/4` - Returns list of `{token, result}` tuples
+  - `PushX.push_batch!/4` - Returns summary `%{success: n, failure: n, total: n}`
+  - `PushX.APNS.send_batch/3` and `PushX.FCM.send_batch/3` for direct provider access
+  - Configurable `:concurrency` (default: 50) and `:timeout` (default: 30s) options
+- **Token validation** — validate token format before sending
+  - `PushX.validate_token/2` - Returns `:ok` or `{:error, reason}`
+  - `PushX.valid_token?/2` - Returns boolean
+  - `PushX.Token` module with validation for APNS (64 hex chars) and FCM (100-500 chars) tokens
+  - `:validate_tokens` option for batch sending to filter invalid tokens
+- **Rate limiting** — optional client-side rate limiting
+  - `PushX.check_rate_limit/1` - Check if under rate limit
+  - `PushX.RateLimiter` module with sliding window algorithm
+  - Configurable per-provider limits via config
+  - Automatic rate limit check before each request (when enabled)
+
+### Changed
+- Updated README with batch sending, token validation, and rate limiting documentation
+- Removed completed items from roadmap
+
 ## [0.3.3] - 2026-01-22
 
 ### Fixed
@@ -106,6 +129,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - HTTP/2 connections via Finch
 - Zero external JSON dependency (uses Elixir 1.18+ built-in JSON)
 
+[0.4.0]: https://github.com/cignosystems/pushx/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/cignosystems/pushx/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/cignosystems/pushx/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/cignosystems/pushx/compare/v0.3.0...v0.3.1

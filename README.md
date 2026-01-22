@@ -12,6 +12,9 @@ Modern push notifications for Elixir. Supports Apple APNS and Google FCM with HT
 - **HTTP/2** connections via Finch (Mint-based) for optimal performance
 - **APNS** (Apple Push Notification Service) with JWT authentication
 - **FCM** (Firebase Cloud Messaging) with OAuth2 via Goth
+- **Batch sending** — send to multiple tokens concurrently with configurable parallelism
+- **Token validation** — validate token format before sending to catch errors early
+- **Rate limiting** — optional client-side rate limiting to avoid provider throttling
 - **Automatic retry** — exponential backoff for rate limits and server errors
 - **Telemetry** — built-in instrumentation for metrics and monitoring
 - **Unified API** — single interface for both providers
@@ -27,7 +30,7 @@ Add `pushx` to your dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:pushx, "~> 0.2.0"}
+    {:pushx, "~> 0.4.0"}
   ]
 end
 ```
@@ -146,6 +149,80 @@ PushX.Response.success?(response)           # true if status == :sent
 PushX.Response.should_remove_token?(response)  # true for invalid/expired/unregistered
 ```
 
+### `PushX.push_batch/4`
+
+Send to multiple devices concurrently.
+
+```elixir
+results = PushX.push_batch(:fcm, tokens, "Hello!")
+
+# Process results
+Enum.each(results, fn
+  {token, {:ok, response}} -> Logger.info("Sent to #{token}")
+  {token, {:error, response}} ->
+    if PushX.Response.should_remove_token?(response) do
+      MyApp.Tokens.delete(token)
+    end
+end)
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `:concurrency` | `integer()` | `50` | Max concurrent requests |
+| `:timeout` | `integer()` | `30_000` | Timeout per request (ms) |
+| `:validate_tokens` | `boolean()` | `false` | Filter invalid tokens before sending |
+
+**Returns:** List of `{token, {:ok, Response.t()} | {:error, Response.t()}}` tuples.
+
+### `PushX.push_batch!/4`
+
+Same as `push_batch/4` but returns a summary map:
+
+```elixir
+%{success: 95, failure: 5, total: 100} = PushX.push_batch!(:fcm, tokens, "Hello!")
+```
+
+### Token Validation
+
+Validate tokens before sending to catch obvious format errors early:
+
+```elixir
+# Check if valid
+PushX.valid_token?(:apns, token)  # true/false
+
+# Get detailed error
+PushX.validate_token(:apns, token)
+# :ok | {:error, :empty} | {:error, :invalid_length} | {:error, :invalid_format}
+
+# Validate tokens in batch sending
+PushX.push_batch(:apns, tokens, "Hello", topic: "...", validate_tokens: true)
+```
+
+**APNS tokens:** 64 hexadecimal characters (32 bytes)
+**FCM tokens:** 100-500 characters, alphanumeric with hyphens/underscores
+
+### Rate Limiting
+
+Optional client-side rate limiting prevents exceeding provider limits:
+
+```elixir
+# Check before sending
+case PushX.check_rate_limit(:apns) do
+  :ok -> # Proceed
+  {:error, :rate_limited} -> # Back off
+end
+```
+
+Enable in config:
+
+```elixir
+config :pushx,
+  rate_limit_enabled: true,
+  rate_limit_apns: 5000,        # requests per window
+  rate_limit_fcm: 5000,         # requests per window  
+  rate_limit_window_ms: 1000    # 1 second window
+```
+
 ### Direct Provider Access
 
 For more control, use the provider modules directly:
@@ -153,12 +230,14 @@ For more control, use the provider modules directly:
 ```elixir
 # APNS
 PushX.APNS.send(token, payload, opts)
+PushX.APNS.send_batch(tokens, payload, opts)
 PushX.APNS.notification(title, body, badge \\ nil)
 PushX.APNS.notification_with_data(title, body, data, badge \\ nil)
 PushX.APNS.silent_notification(data \\ %{})
 
 # FCM
 PushX.FCM.send(token, payload, opts)
+PushX.FCM.send_batch(tokens, payload, opts)
 PushX.FCM.send_data(token, data, opts)  # Data-only message
 PushX.FCM.notification(title, body, opts \\ [])
 ```
@@ -408,15 +487,23 @@ case PushX.push(:apns, token, message, topic: "com.example.app") do
 end
 ```
 
-### Batch Pattern
+### Batch Sending
 
 ```elixir
-# Send to multiple tokens (current approach)
-tokens
-|> Task.async_stream(fn token ->
-  PushX.push(:apns, token, message, topic: "com.example.app")
-end, max_concurrency: 50)
-|> Enum.to_list()
+# Send to multiple tokens with built-in concurrency
+results = PushX.push_batch(:apns, tokens, message, topic: "com.example.app")
+
+# With higher concurrency and token validation
+results = PushX.push_batch(:fcm, tokens, message, 
+  concurrency: 100,
+  validate_tokens: true
+)
+
+# Get summary counts
+%{success: sent, failure: failed, total: total} = 
+  PushX.push_batch!(:apns, tokens, message, topic: "com.example.app")
+
+Logger.info("Sent #{sent}/#{total}, failed: #{failed}")
 ```
 
 ---
@@ -510,14 +597,11 @@ Tested on Elixir 1.18/1.19 with OTP 26, 27, and 28.
 
 ## Roadmap
 
-- [x] **Automatic retry** — exponential backoff for rate limits and server errors
-- [x] **Telemetry integration** — metrics and tracing support
-- [ ] **Batch sending** — send to multiple tokens in one call
-- [ ] **Token validation** — validate token format before sending
-- [ ] **Connection pooling options** — configurable pool strategies
-- [ ] **Rate limiting** — client-side rate limiting to avoid provider throttling
-- [ ] **Safari Web Push** — support for Safari push notifications
-- [ ] **Huawei HMS** — support for Huawei Push Kit
+| Priority | Feature | Description |
+|----------|---------|-------------|
+| 🟢 Low | **Web Push (FCM)** | Browser push notifications via FCM |
+| 🟢 Low | **Web Push (Safari)** | Safari/macOS push notifications via APNS |
+| 🟢 Low | **Connection pooling** | Configurable pool strategies |
 
 ## Contributing
 

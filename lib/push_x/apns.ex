@@ -33,7 +33,7 @@ defmodule PushX.APNS do
 
   require Logger
 
-  alias PushX.{Config, Message, Response, Retry, Telemetry}
+  alias PushX.{Config, Message, RateLimiter, Response, Retry, Telemetry}
 
   @apns_prod_url "https://api.push.apple.com"
   @apns_sandbox_url "https://api.sandbox.push.apple.com"
@@ -85,6 +85,17 @@ defmodule PushX.APNS do
   """
   @spec send_once(token(), payload(), [option()]) :: {:ok, Response.t()} | {:error, Response.t()}
   def send_once(device_token, payload, opts \\ []) do
+    # Check rate limit first
+    case RateLimiter.check_and_increment(:apns) do
+      {:error, :rate_limited} ->
+        {:error, Response.error(:apns, :rate_limited, "Client-side rate limit exceeded")}
+
+      :ok ->
+        do_send(device_token, payload, opts)
+    end
+  end
+
+  defp do_send(device_token, payload, opts) do
     topic = Keyword.get(opts, :topic) || raise ArgumentError, ":topic option is required"
     mode = Keyword.get(opts, :mode, Config.apns_mode())
 
@@ -122,6 +133,39 @@ defmodule PushX.APNS do
         Telemetry.exception(:apns, device_token, start_time, :error, e, __STACKTRACE__)
         reraise e, __STACKTRACE__
     end
+  end
+
+  @doc """
+  Sends notifications to multiple devices concurrently.
+
+  ## Options
+
+  All standard options plus:
+    * `:concurrency` - Max concurrent requests (default: 50)
+    * `:timeout` - Timeout per request in ms (default: 30_000)
+
+  ## Returns
+
+  A list of `{token, result}` tuples.
+  """
+  @spec send_batch([token()], payload(), [option()]) ::
+          [{token(), {:ok, Response.t()} | {:error, Response.t()}}]
+  def send_batch(device_tokens, payload, opts \\ []) do
+    concurrency = Keyword.get(opts, :concurrency, 50)
+    timeout = Keyword.get(opts, :timeout, 30_000)
+    send_opts = Keyword.drop(opts, [:concurrency, :timeout])
+
+    device_tokens
+    |> Task.async_stream(
+      fn token -> {token, send(token, payload, send_opts)} end,
+      max_concurrency: concurrency,
+      timeout: timeout,
+      on_timeout: :kill_task
+    )
+    |> Enum.map(fn
+      {:ok, result} -> result
+      {:exit, :timeout} -> {nil, {:error, Response.error(:apns, :connection_error, "timeout")}}
+    end)
   end
 
   @doc """

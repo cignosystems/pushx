@@ -34,7 +34,7 @@ defmodule PushX.FCM do
 
   require Logger
 
-  alias PushX.{Config, Message, Response, Retry, Telemetry}
+  alias PushX.{Config, Message, RateLimiter, Response, Retry, Telemetry}
 
   @fcm_base_url "https://fcm.googleapis.com/v1/projects"
 
@@ -79,6 +79,17 @@ defmodule PushX.FCM do
   """
   @spec send_once(token(), payload(), [option()]) :: {:ok, Response.t()} | {:error, Response.t()}
   def send_once(device_token, payload, opts \\ []) do
+    # Check rate limit first
+    case RateLimiter.check_and_increment(:fcm) do
+      {:error, :rate_limited} ->
+        {:error, Response.error(:fcm, :rate_limited, "Client-side rate limit exceeded")}
+
+      :ok ->
+        do_send(device_token, payload, opts)
+    end
+  end
+
+  defp do_send(device_token, payload, opts) do
     project_id = Keyword.get(opts, :project_id, Config.fcm_project_id())
     url = "#{@fcm_base_url}/#{project_id}/messages:send"
 
@@ -131,6 +142,39 @@ defmodule PushX.FCM do
   end
 
   @doc """
+  Sends notifications to multiple devices concurrently.
+
+  ## Options
+
+  All standard options plus:
+    * `:concurrency` - Max concurrent requests (default: 50)
+    * `:timeout` - Timeout per request in ms (default: 30_000)
+
+  ## Returns
+
+  A list of `{token, result}` tuples.
+  """
+  @spec send_batch([token()], payload(), [option()]) ::
+          [{token(), {:ok, Response.t()} | {:error, Response.t()}}]
+  def send_batch(device_tokens, payload, opts \\ []) do
+    concurrency = Keyword.get(opts, :concurrency, 50)
+    timeout = Keyword.get(opts, :timeout, 30_000)
+    send_opts = Keyword.drop(opts, [:concurrency, :timeout])
+
+    device_tokens
+    |> Task.async_stream(
+      fn token -> {token, send(token, payload, send_opts)} end,
+      max_concurrency: concurrency,
+      timeout: timeout,
+      on_timeout: :kill_task
+    )
+    |> Enum.map(fn
+      {:ok, result} -> result
+      {:exit, :timeout} -> {nil, {:error, Response.error(:fcm, :connection_error, "timeout")}}
+    end)
+  end
+
+  @doc """
   Creates a simple notification payload.
 
   ## Examples
@@ -158,6 +202,17 @@ defmodule PushX.FCM do
   """
   @spec send_data_once(token(), map(), [option()]) :: {:ok, Response.t()} | {:error, Response.t()}
   def send_data_once(device_token, data, opts \\ []) do
+    # Check rate limit first
+    case RateLimiter.check_and_increment(:fcm) do
+      {:error, :rate_limited} ->
+        {:error, Response.error(:fcm, :rate_limited, "Client-side rate limit exceeded")}
+
+      :ok ->
+        do_send_data(device_token, data, opts)
+    end
+  end
+
+  defp do_send_data(device_token, data, opts) do
     project_id = Keyword.get(opts, :project_id, Config.fcm_project_id())
     url = "#{@fcm_base_url}/#{project_id}/messages:send"
 

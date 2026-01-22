@@ -7,6 +7,8 @@ defmodule PushX.Application do
   def start(_type, _args) do
     children =
       [
+        # Rate limiter (always started, but only tracks when enabled)
+        PushX.RateLimiter,
         # Finch HTTP client pool with HTTP/2 for APNS
         {Finch,
          name: PushX.Config.finch_name(),
