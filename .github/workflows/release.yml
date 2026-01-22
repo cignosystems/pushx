@@ -5,13 +5,12 @@ on:
     tags:
       - 'v*'
 
-env:
-  MIX_ENV: prod
-
 jobs:
   publish:
     name: Publish to Hex.pm
     runs-on: ubuntu-latest
+    env:
+      MIX_ENV: dev  # Required for ex_doc to be available
 
     steps:
       - name: Checkout
@@ -29,17 +28,17 @@ jobs:
           path: |
             deps
             _build
-          key: ${{ runner.os }}-mix-release-${{ hashFiles('**/mix.lock') }}
+          key: ${{ runner.os }}-mix-dev-${{ hashFiles('**/mix.lock') }}
 
       - name: Install dependencies
         run: mix deps.get
 
-      - name: Publish to Hex
+      - name: Publish package to Hex
         env:
           HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
         run: mix hex.publish --yes
 
-      - name: Publish docs
+      - name: Publish docs to HexDocs
         env:
           HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
         run: mix hex.publish docs --yes
