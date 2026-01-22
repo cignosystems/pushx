@@ -28,7 +28,7 @@ defmodule PushX.MixProject do
 
   defp deps do
     [
-      {:finch, "~> 0.18"},
+      {:finch, "~> 0.20"},
       {:joken, "~> 2.6"},
       {:goth, "~> 1.4"},
 

@@ -3,8 +3,11 @@ Application.put_env(:pushx, :apns_key_id, "TEST_KEY_ID")
 Application.put_env(:pushx, :apns_team_id, "TEST_TEAM_ID")
 Application.put_env(:pushx, :fcm_project_id, "test-project")
 
-# Generate a test ES256 private key for APNS JWT signing
-# This is a valid EC private key for testing only
+# INTENTIONALLY COMMITTED TEST KEY - NOT A REAL SECRET
+# This is a randomly generated EC private key for testing JWT signing only.
+# It is NOT associated with any Apple Developer account and cannot be used
+# to send real push notifications. This pattern is standard practice for
+# testing cryptographic operations in open-source libraries.
 test_private_key = """
 -----BEGIN EC PRIVATE KEY-----
 MHQCAQEEIPuV3ghp1FUfoEQ+CAz+9wy7/E9rABKM/ZOE97UfpxeNoAcGBSuBBAAK
