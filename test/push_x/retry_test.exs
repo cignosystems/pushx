@@ -49,13 +49,15 @@ defmodule PushX.RetryTest do
     test "uses retry_after for rate_limited when provided" do
       response = %Response{status: :rate_limited, retry_after: 30, provider: :apns}
       delay = Retry.calculate_delay(response, 1, 10_000, 60_000)
-      assert delay == 30_000  # 30 seconds in ms
+      # 30 seconds in ms
+      assert delay == 30_000
     end
 
     test "uses default delay for rate_limited without retry_after" do
       response = %Response{status: :rate_limited, retry_after: nil, provider: :apns}
       delay = Retry.calculate_delay(response, 1, 10_000, 60_000)
-      assert delay == 60_000  # Default 60s
+      # Default 60s
+      assert delay == 60_000
     end
 
     test "uses exponential backoff for other errors" do
@@ -89,7 +91,8 @@ defmodule PushX.RetryTest do
       original = Application.get_env(:pushx, :retry_enabled)
       Application.put_env(:pushx, :retry_enabled, true)
       Application.put_env(:pushx, :retry_max_attempts, 3)
-      Application.put_env(:pushx, :retry_base_delay_ms, 10)  # Fast for tests
+      # Fast for tests
+      Application.put_env(:pushx, :retry_base_delay_ms, 10)
       Application.put_env(:pushx, :retry_max_delay_ms, 50)
 
       on_exit(fn ->
@@ -125,7 +128,8 @@ defmodule PushX.RetryTest do
         end)
 
       assert {:error, %Response{status: :invalid_token}} = result
-      assert :counters.get(call_count, 1) == 1  # Only called once
+      # Only called once
+      assert :counters.get(call_count, 1) == 1
     end
 
     test "retries transient errors up to max_attempts" do
@@ -138,7 +142,8 @@ defmodule PushX.RetryTest do
         end)
 
       assert {:error, %Response{status: :server_error}} = result
-      assert :counters.get(call_count, 1) == 3  # Called 3 times (max_attempts)
+      # Called 3 times (max_attempts)
+      assert :counters.get(call_count, 1) == 3
     end
 
     test "succeeds if retry succeeds" do
@@ -156,7 +161,8 @@ defmodule PushX.RetryTest do
         end)
 
       assert {:ok, %Response{status: :sent}} = result
-      assert :counters.get(call_count, 1) == 2  # Succeeded on second try
+      # Succeeded on second try
+      assert :counters.get(call_count, 1) == 2
     end
 
     test "respects retry_enabled config" do
@@ -170,7 +176,8 @@ defmodule PushX.RetryTest do
         end)
 
       assert {:error, %Response{status: :server_error}} = result
-      assert :counters.get(call_count, 1) == 1  # Only called once when disabled
+      # Only called once when disabled
+      assert :counters.get(call_count, 1) == 1
     end
   end
 end
