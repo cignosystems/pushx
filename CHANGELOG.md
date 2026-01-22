@@ -5,14 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-01-22
+
+### Added
+- **Telemetry integration** with events for monitoring push notification delivery:
+  - `[:pushx, :push, :start]` - Request started
+  - `[:pushx, :push, :stop]` - Request succeeded
+  - `[:pushx, :push, :error]` - Request failed
+  - `[:pushx, :push, :exception]` - Exception raised
+  - `[:pushx, :retry, :attempt]` - Retry attempted
+- `PushX.Telemetry` module with documentation and examples
+- `telemetry ~> 1.3` dependency
+- Comprehensive retry and telemetry test suites (116 total tests)
+- Credential rotation documentation in README
+- Retry configuration documentation in README
+
+### Changed
+- Made all examples generic (removed domain-specific references)
+- Updated README with telemetry usage examples and Telemetry.Metrics integration
+
 ## [0.2.4] - 2026-01-22
 
 ### Added
 - Comprehensive API reference documentation with all functions, options, and types
 - Credential storage options guide (filesystem, env vars, Fly.io, AWS Secrets Manager)
-
-### Changed
-- Made all examples generic (removed domain-specific references)
 
 ## [0.2.3] - 2026-01-22
 
@@ -75,6 +91,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - HTTP/2 connections via Finch
 - Zero external JSON dependency (uses Elixir 1.18+ built-in JSON)
 
+[0.3.0]: https://github.com/cignosystems/pushx/compare/v0.2.4...v0.3.0
 [0.2.4]: https://github.com/cignosystems/pushx/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/cignosystems/pushx/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/cignosystems/pushx/compare/v0.2.1...v0.2.2

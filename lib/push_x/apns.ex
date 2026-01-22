@@ -33,7 +33,7 @@ defmodule PushX.APNS do
 
   require Logger
 
-  alias PushX.{Config, Message, Response, Retry}
+  alias PushX.{Config, Message, Response, Retry, Telemetry}
 
   @apns_prod_url "https://api.push.apple.com"
   @apns_sandbox_url "https://api.sandbox.push.apple.com"
@@ -94,18 +94,33 @@ defmodule PushX.APNS do
 
     Logger.debug("[PushX.APNS] Sending to #{device_token}")
 
-    case Finch.build(:post, url, headers, body)
-         |> Finch.request(Config.finch_name()) do
-      {:ok, %{status: 200, headers: response_headers}} ->
-        apns_id = get_header(response_headers, "apns-id")
-        {:ok, Response.success(:apns, apns_id)}
+    Telemetry.start(:apns, device_token)
+    start_time = System.monotonic_time()
 
-      {:ok, %{status: status, headers: response_headers, body: body}} ->
-        handle_error_response(status, body, response_headers)
+    try do
+      case Finch.build(:post, url, headers, body)
+           |> Finch.request(Config.finch_name()) do
+        {:ok, %{status: 200, headers: response_headers}} ->
+          apns_id = get_header(response_headers, "apns-id")
+          response = Response.success(:apns, apns_id)
+          Telemetry.stop(:apns, device_token, start_time, response)
+          {:ok, response}
 
-      {:error, reason} ->
-        Logger.error("[PushX.APNS] Connection error: #{inspect(reason)}")
-        {:error, Response.error(:apns, :connection_error, inspect(reason))}
+        {:ok, %{status: status, headers: response_headers, body: body}} ->
+          {:error, response} = handle_error_response(status, body, response_headers)
+          Telemetry.error(:apns, device_token, start_time, response)
+          {:error, response}
+
+        {:error, reason} ->
+          Logger.error("[PushX.APNS] Connection error: #{inspect(reason)}")
+          response = Response.error(:apns, :connection_error, inspect(reason))
+          Telemetry.error(:apns, device_token, start_time, response)
+          {:error, response}
+      end
+    rescue
+      e ->
+        Telemetry.exception(:apns, device_token, start_time, :error, e, __STACKTRACE__)
+        reraise e, __STACKTRACE__
     end
   end
 

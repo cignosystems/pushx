@@ -1,7 +1,7 @@
 defmodule PushX.MixProject do
   use Mix.Project
 
-  @version "0.2.4"
+  @version "0.3.0"
   @source_url "https://github.com/cignosystems/pushx"
 
   def project do
@@ -31,9 +31,10 @@ defmodule PushX.MixProject do
       {:finch, "~> 0.20"},
       {:joken, "~> 2.6"},
       {:goth, "~> 1.4"},
+      {:telemetry, "~> 1.3"},
 
       # Dev/Test
-      {:ex_doc, "~> 0.31", only: :dev, runtime: false},
+      {:ex_doc, "~> 0.40", only: :dev, runtime: false},
       {:bypass, "~> 2.1", only: :test}
     ]
   end

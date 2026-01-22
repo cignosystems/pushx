@@ -34,7 +34,7 @@ defmodule PushX.FCM do
 
   require Logger
 
-  alias PushX.{Config, Message, Response, Retry}
+  alias PushX.{Config, Message, Response, Retry, Telemetry}
 
   @fcm_base_url "https://fcm.googleapis.com/v1/projects"
 
@@ -93,23 +93,40 @@ defmodule PushX.FCM do
 
     Logger.debug("[PushX.FCM] Sending to #{device_token}")
 
-    case Finch.build(:post, url, headers, body)
-         |> Finch.request(Config.finch_name()) do
-      {:ok, %{status: 200, body: response_body}} ->
-        case JSON.decode(response_body) do
-          {:ok, %{"name" => message_id}} ->
-            {:ok, Response.success(:fcm, message_id)}
+    Telemetry.start(:fcm, device_token)
+    start_time = System.monotonic_time()
 
-          _ ->
-            {:ok, Response.success(:fcm)}
-        end
+    try do
+      case Finch.build(:post, url, headers, body)
+           |> Finch.request(Config.finch_name()) do
+        {:ok, %{status: 200, body: response_body}} ->
+          response =
+            case JSON.decode(response_body) do
+              {:ok, %{"name" => message_id}} ->
+                Response.success(:fcm, message_id)
 
-      {:ok, %{status: status, headers: response_headers, body: body}} ->
-        handle_error_response(status, body, response_headers)
+              _ ->
+                Response.success(:fcm)
+            end
 
-      {:error, reason} ->
-        Logger.error("[PushX.FCM] Connection error: #{inspect(reason)}")
-        {:error, Response.error(:fcm, :connection_error, inspect(reason))}
+          Telemetry.stop(:fcm, device_token, start_time, response)
+          {:ok, response}
+
+        {:ok, %{status: status, headers: response_headers, body: body}} ->
+          {:error, response} = handle_error_response(status, body, response_headers)
+          Telemetry.error(:fcm, device_token, start_time, response)
+          {:error, response}
+
+        {:error, reason} ->
+          Logger.error("[PushX.FCM] Connection error: #{inspect(reason)}")
+          response = Response.error(:fcm, :connection_error, inspect(reason))
+          Telemetry.error(:fcm, device_token, start_time, response)
+          {:error, response}
+      end
+    rescue
+      e ->
+        Telemetry.exception(:fcm, device_token, start_time, :error, e, __STACKTRACE__)
+        reraise e, __STACKTRACE__
     end
   end
 

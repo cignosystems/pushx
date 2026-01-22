@@ -12,6 +12,8 @@ Modern push notifications for Elixir. Supports Apple APNS and Google FCM with HT
 - **HTTP/2** connections via Finch (Mint-based) for optimal performance
 - **APNS** (Apple Push Notification Service) with JWT authentication
 - **FCM** (Firebase Cloud Messaging) with OAuth2 via Goth
+- **Automatic retry** — exponential backoff for rate limits and server errors
+- **Telemetry** — built-in instrumentation for metrics and monitoring
 - **Unified API** — single interface for both providers
 - **Direct access** — use provider modules when you need more control
 - **Message builder** — fluent API for constructing notifications
@@ -332,6 +334,17 @@ You'll need: **Project ID** and a **Service Account JSON file**.
 3. Click **Generate new private key**
 4. Save the JSON file securely
 
+### Credential Rotation
+
+> **TL;DR:** APNS .p8 keys and FCM service accounts **don't expire**. Rotate by updating your secrets and restarting/redeploying your app.
+
+Both APNS JWT-based keys and FCM service accounts are valid until you manually revoke them. When you need to rotate (security policy, key compromise, etc.):
+
+1. Generate new credentials in Apple/Google console
+2. Update your secrets (Fly: `fly secrets set`, AWS: update in Secrets Manager)
+3. Restart or redeploy your app
+4. Revoke old credentials after all instances are updated
+
 ---
 
 ## Usage Examples
@@ -408,6 +421,86 @@ end, max_concurrency: 50)
 
 ---
 
+## Telemetry
+
+PushX emits telemetry events for monitoring and metrics:
+
+| Event | When | Measurements | Metadata |
+|-------|------|--------------|----------|
+| `[:pushx, :push, :start]` | Request starts | `system_time` | `provider`, `token` |
+| `[:pushx, :push, :stop]` | Request succeeds | `duration` | `provider`, `token`, `status`, `id` |
+| `[:pushx, :push, :error]` | Request fails | `duration` | `provider`, `token`, `status`, `reason` |
+| `[:pushx, :push, :exception]` | Exception raised | `duration` | `provider`, `token`, `kind`, `reason` |
+| `[:pushx, :retry, :attempt]` | Retry attempted | `delay_ms`, `attempt` | `provider`, `status` |
+
+### Example: Attach a Logger
+
+```elixir
+# In your Application.start/2
+:telemetry.attach_many(
+  "pushx-logger",
+  [
+    [:pushx, :push, :stop],
+    [:pushx, :push, :error]
+  ],
+  fn
+    [:pushx, :push, :stop], %{duration: d}, %{provider: p}, _ ->
+      ms = System.convert_time_unit(d, :native, :millisecond)
+      Logger.info("PushX #{p} sent in #{ms}ms")
+
+    [:pushx, :push, :error], _, %{provider: p, status: s, reason: r}, _ ->
+      Logger.warning("PushX #{p} failed: #{s} - #{r}")
+  end,
+  nil
+)
+```
+
+### Example: With Telemetry.Metrics
+
+```elixir
+defmodule MyApp.Telemetry do
+  import Telemetry.Metrics
+
+  def metrics do
+    [
+      counter("pushx.push.stop.count", tags: [:provider]),
+      counter("pushx.push.error.count", tags: [:provider, :status]),
+      distribution("pushx.push.stop.duration",
+        unit: {:native, :millisecond},
+        tags: [:provider]
+      )
+    ]
+  end
+end
+```
+
+---
+
+## Retry Configuration
+
+PushX automatically retries transient failures (rate limits, server errors) with exponential backoff:
+
+```elixir
+config :pushx,
+  retry_enabled: true,           # default: true
+  retry_max_attempts: 3,         # default: 3
+  retry_base_delay_ms: 10_000,   # default: 10s (Google's recommended minimum)
+  retry_max_delay_ms: 60_000     # default: 60s
+```
+
+**Retried errors:** `:connection_error`, `:rate_limited`, `:server_error`
+
+**Not retried:** `:invalid_token`, `:expired_token`, `:unregistered`, `:payload_too_large`
+
+To disable retry for a specific call, use `send_once`:
+
+```elixir
+PushX.APNS.send_once(token, payload, topic: "com.example.app")
+PushX.FCM.send_once(token, payload)
+```
+
+---
+
 ## Requirements
 
 - Elixir 1.18+ (for built-in JSON module)
@@ -417,9 +510,9 @@ Tested on Elixir 1.18/1.19 with OTP 26, 27, and 28.
 
 ## Roadmap
 
+- [x] **Automatic retry** — exponential backoff for rate limits and server errors
+- [x] **Telemetry integration** — metrics and tracing support
 - [ ] **Batch sending** — send to multiple tokens in one call
-- [ ] **Automatic retry** — exponential backoff for rate limits and server errors
-- [ ] **Telemetry integration** — metrics and tracing support
 - [ ] **Token validation** — validate token format before sending
 - [ ] **Connection pooling options** — configurable pool strategies
 - [ ] **Rate limiting** — client-side rate limiting to avoid provider throttling

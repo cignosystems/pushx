@@ -27,7 +27,7 @@ defmodule PushX.Retry do
 
   require Logger
 
-  alias PushX.{Config, Response}
+  alias PushX.{Config, Response, Telemetry}
 
   @default_rate_limit_delay_ms 60_000
 
@@ -90,6 +90,7 @@ defmodule PushX.Retry do
                 "(#{response.status}), retrying in #{delay}ms"
             )
 
+            Telemetry.retry_attempt(response.provider, response.status, attempt, delay)
             Process.sleep(delay)
             do_retry(fun, attempt + 1, max_attempts, base_delay, max_delay)
         end
