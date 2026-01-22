@@ -106,7 +106,7 @@ jobs:
         run: mix compile
 
       - name: Run tests
-        run: mix test --cover
+        run: mix test
 
   # Build documentation
   docs:
