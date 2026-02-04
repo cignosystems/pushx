@@ -9,16 +9,24 @@ defmodule PushX.Application do
       [
         # Rate limiter (always started, but only tracks when enabled)
         PushX.RateLimiter,
-        # Finch HTTP client pool with HTTP/2 for APNS
+        # Finch HTTP client pool with HTTP/2 for APNS and FCM
         {Finch,
          name: PushX.Config.finch_name(),
          pools: %{
+           # APNS Production
            "https://api.push.apple.com" => [
              size: PushX.Config.finch_pool_size(),
              count: PushX.Config.finch_pool_count(),
              protocols: [:http2]
            ],
+           # APNS Sandbox
            "https://api.sandbox.push.apple.com" => [
+             size: PushX.Config.finch_pool_size(),
+             count: PushX.Config.finch_pool_count(),
+             protocols: [:http2]
+           ],
+           # FCM (Firebase Cloud Messaging)
+           "https://fcm.googleapis.com" => [
              size: PushX.Config.finch_pool_size(),
              count: PushX.Config.finch_pool_count(),
              protocols: [:http2]

@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-02-04
+
+### Changed
+- **Increased default pool size** from 10 to 25 connections per pool
+- **Increased default pool count** from 1 to 2 pools
+- **Faster retry for connection errors** — connection errors now use 1s base delay (was 10s) since these are typically transient network issues, not provider throttling
+- **Added explicit FCM HTTP/2 pool** — FCM endpoint now has dedicated HTTP/2 pool configuration (was using default pool)
+
+### Added
+- **Troubleshooting section** in README with solutions for common errors:
+  - `too_many_concurrent_requests` — HTTP/2 stream limit exceeded
+  - `request_timeout` — connection timeout issues
+- **Pool sizing guide** in README with recommendations by traffic level
+- Updated documentation for pool configuration options
+
+### Fixed
+- Connection errors (`request_timeout`, `too_many_concurrent_requests`) now retry faster with 1s/2s/4s delays instead of 10s/20s/40s
+
 ## [0.5.0] - 2026-01-22
 
 ### Added
@@ -153,6 +171,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - HTTP/2 connections via Finch
 - Zero external JSON dependency (uses Elixir 1.18+ built-in JSON)
 
+[0.6.0]: https://github.com/cignosystems/pushx/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/cignosystems/pushx/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/cignosystems/pushx/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/cignosystems/pushx/compare/v0.3.3...v0.4.0

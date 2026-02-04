@@ -197,7 +197,8 @@ defmodule PushX.ConfigTest do
 
   describe "finch_pool_size/0" do
     test "returns default size when not configured" do
-      assert Config.finch_pool_size() == 10
+      # Default increased to 25 in v0.6.0 for better handling of traffic bursts
+      assert Config.finch_pool_size() == 25
     end
 
     test "returns configured size" do
@@ -209,7 +210,8 @@ defmodule PushX.ConfigTest do
 
   describe "finch_pool_count/0" do
     test "returns default count when not configured" do
-      assert Config.finch_pool_count() == 1
+      # Default increased to 2 in v0.6.0 for better handling of traffic bursts
+      assert Config.finch_pool_count() == 2
     end
 
     test "returns configured count" do

@@ -117,11 +117,15 @@ defmodule PushX.Retry do
     status in [:connection_error, :rate_limited, :server_error]
   end
 
+  # Base delay for connection errors (faster than rate limits)
+  @connection_error_base_delay_ms 1_000
+
   @doc """
   Calculates the delay before the next retry attempt.
 
   - For rate limiting: Uses retry_after value or 60 seconds default
-  - For other errors: Exponential backoff with jitter
+  - For connection errors: Faster retry (1s base) since these are transient
+  - For server errors: Standard exponential backoff from config
 
   ## Exponential Backoff Formula
 
@@ -146,8 +150,16 @@ defmodule PushX.Retry do
     @default_rate_limit_delay_ms
   end
 
+  def calculate_delay(%Response{status: :connection_error}, attempt, _base, max_delay) do
+    # Connection errors get faster retry (1s base instead of 10s)
+    # These are typically transient network issues, not provider throttling
+    exponential = (@connection_error_base_delay_ms * :math.pow(2, attempt - 1)) |> round()
+    jitter = round(exponential * 0.1 * (:rand.uniform() * 2 - 1))
+    min(exponential + jitter, max_delay)
+  end
+
   def calculate_delay(_response, attempt, base_delay, max_delay) do
-    # Exponential backoff: base * 2^(attempt-1)
+    # Standard exponential backoff: base * 2^(attempt-1)
     exponential = (base_delay * :math.pow(2, attempt - 1)) |> round()
 
     # Add jitter (±10%) to prevent thundering herd

@@ -30,7 +30,7 @@ Add `pushx` to your dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:pushx, "~> 0.5.0"}
+    {:pushx, "~> 0.6.0"}
   ]
 end
 ```
@@ -276,13 +276,23 @@ config :pushx,
 | `:fcm_project_id` | `String.t()` | Firebase project ID |
 | `:fcm_credentials` | `map()` \| `{:file, path}` | Service account JSON or file path |
 
-### Pool Configuration (Optional)
+### Pool Configuration
+
+Configure the HTTP/2 connection pool for high-traffic scenarios:
 
 ```elixir
 config :pushx,
-  finch_pool_size: 10,   # connections per pool (default: 10)
-  finch_pool_count: 1    # number of pools (default: 1)
+  finch_pool_size: 25,   # connections per pool (default: 25)
+  finch_pool_count: 2    # number of pools (default: 2)
 ```
+
+| Traffic Level | `pool_size` | `pool_count` | Max Concurrent |
+|---------------|-------------|--------------|----------------|
+| Low (<100/min) | 10 | 1 | ~1,000 |
+| Medium | 25 | 2 | ~5,000 |
+| High (>1000/min) | 50 | 4 | ~20,000 |
+
+> **Note:** Each HTTP/2 connection supports ~100 concurrent streams. Pool capacity ≈ `pool_size × pool_count × 100`.
 
 ---
 
@@ -584,6 +594,67 @@ To disable retry for a specific call, use `send_once`:
 ```elixir
 PushX.APNS.send_once(token, payload, topic: "com.example.app")
 PushX.FCM.send_once(token, payload)
+```
+
+---
+
+## Troubleshooting
+
+### `too_many_concurrent_requests` Error
+
+This HTTP/2 error occurs when the connection pool is overwhelmed by too many simultaneous requests.
+
+**Symptoms:**
+```
+[error] [PushX.APNS] Connection error: %Mint.HTTPError{reason: :too_many_concurrent_requests}
+```
+
+**Solutions:**
+
+1. **Increase pool size** (recommended):
+   ```elixir
+   config :pushx,
+     finch_pool_size: 50,
+     finch_pool_count: 4
+   ```
+
+2. **Enable rate limiting** to smooth traffic bursts:
+   ```elixir
+   config :pushx,
+     rate_limit_enabled: true,
+     rate_limit_apns: 1000,
+     rate_limit_fcm: 1000,
+     rate_limit_window_ms: 1000
+   ```
+
+3. **Use batch sending** with controlled concurrency:
+   ```elixir
+   PushX.push_batch(:apns, tokens, message, concurrency: 50)
+   ```
+
+### `request_timeout` Error
+
+This occurs when APNS/FCM doesn't respond within the timeout period.
+
+**Symptoms:**
+```
+[error] [PushX.APNS] Connection error: %Finch.Error{reason: :request_timeout}
+```
+
+**Solutions:**
+
+1. PushX automatically retries connection errors with exponential backoff (1s, 2s, 4s)
+2. Check network connectivity to Apple/Google servers
+3. Increase pool size if timeouts occur during traffic spikes
+
+### Debugging Tips
+
+Enable telemetry logging to monitor push performance:
+
+```elixir
+:telemetry.attach("pushx-debug", [:pushx, :push, :error], fn _, _, meta, _ ->
+  Logger.warning("Push failed: #{meta.provider} - #{meta.status} - #{meta.reason}")
+end, nil)
 ```
 
 ---

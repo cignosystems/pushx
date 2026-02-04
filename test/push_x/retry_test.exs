@@ -151,7 +151,7 @@ defmodule PushX.RetryTest do
 
       result =
         Retry.with_retry(fn ->
-          count = :counters.add(call_count, 1, 1)
+          :counters.add(call_count, 1, 1)
 
           if :counters.get(call_count, 1) < 2 do
             {:error, Response.error(:apns, :server_error)}

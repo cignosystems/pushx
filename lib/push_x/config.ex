@@ -25,8 +25,8 @@ defmodule PushX.Config do
   ### Finch Pool
 
     * `:finch_name` - Name of the Finch pool (default: `PushX.Finch`)
-    * `:finch_pool_size` - Pool size per connection (default: 10)
-    * `:finch_pool_count` - Number of pools (default: 1)
+    * `:finch_pool_size` - Connections per pool (default: 25)
+    * `:finch_pool_count` - Number of pools (default: 2)
 
   ### Retry Settings
 
@@ -141,16 +141,20 @@ defmodule PushX.Config do
   def finch_name, do: get(:finch_name, PushX.Finch)
 
   @doc """
-  Gets the Finch pool size.
+  Gets the Finch pool size (connections per pool).
+
+  Default: 25 (increased from 10 in v0.6.0 to handle traffic bursts better)
   """
   @spec finch_pool_size() :: pos_integer()
-  def finch_pool_size, do: get(:finch_pool_size, 10)
+  def finch_pool_size, do: get(:finch_pool_size, 25)
 
   @doc """
-  Gets the Finch pool count.
+  Gets the Finch pool count (number of connection pools).
+
+  Default: 2 (increased from 1 in v0.6.0 to handle traffic bursts better)
   """
   @spec finch_pool_count() :: pos_integer()
-  def finch_pool_count, do: get(:finch_pool_count, 1)
+  def finch_pool_count, do: get(:finch_pool_count, 2)
 
   @doc """
   Checks if APNS is configured.
