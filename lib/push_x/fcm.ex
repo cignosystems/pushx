@@ -125,7 +125,7 @@ defmodule PushX.FCM do
 
     try do
       case Finch.build(:post, url, headers, body)
-           |> Finch.request(Config.finch_name()) do
+           |> Finch.request(Config.finch_name(), Config.finch_request_opts()) do
         {:ok, %{status: 200, body: response_body}} ->
           response =
             case JSON.decode(response_body) do

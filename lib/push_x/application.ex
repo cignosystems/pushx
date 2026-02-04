@@ -17,19 +17,22 @@ defmodule PushX.Application do
            "https://api.push.apple.com" => [
              size: PushX.Config.finch_pool_size(),
              count: PushX.Config.finch_pool_count(),
-             protocols: [:http2]
+             protocols: [:http2],
+             conn_opts: [transport_opts: [timeout: PushX.Config.connect_timeout()]]
            ],
            # APNS Sandbox
            "https://api.sandbox.push.apple.com" => [
              size: PushX.Config.finch_pool_size(),
              count: PushX.Config.finch_pool_count(),
-             protocols: [:http2]
+             protocols: [:http2],
+             conn_opts: [transport_opts: [timeout: PushX.Config.connect_timeout()]]
            ],
            # FCM (Firebase Cloud Messaging)
            "https://fcm.googleapis.com" => [
              size: PushX.Config.finch_pool_size(),
              count: PushX.Config.finch_pool_count(),
-             protocols: [:http2]
+             protocols: [:http2],
+             conn_opts: [transport_opts: [timeout: PushX.Config.connect_timeout()]]
            ],
            :default => [
              size: PushX.Config.finch_pool_size(),

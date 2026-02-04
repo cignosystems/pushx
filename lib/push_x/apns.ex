@@ -122,7 +122,7 @@ defmodule PushX.APNS do
 
     try do
       case Finch.build(:post, url, headers, body)
-           |> Finch.request(Config.finch_name()) do
+           |> Finch.request(Config.finch_name(), Config.finch_request_opts()) do
         {:ok, %{status: 200, headers: response_headers}} ->
           apns_id = get_header(response_headers, "apns-id")
           response = Response.success(:apns, apns_id)

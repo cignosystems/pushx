@@ -28,6 +28,13 @@ defmodule PushX.Config do
     * `:finch_pool_size` - Connections per pool (default: 25)
     * `:finch_pool_count` - Number of pools (default: 2)
 
+  ### Request Timeouts
+
+    * `:request_timeout` - Overall request timeout in ms (default: `30_000`)
+    * `:receive_timeout` - Timeout for receiving response in ms (default: `15_000`)
+    * `:pool_timeout` - Timeout for acquiring connection from pool in ms (default: `5_000`)
+    * `:connect_timeout` - TCP connection timeout in ms (default: `10_000`)
+
   ### Retry Settings
 
     * `:retry_enabled` - Enable automatic retry (default: `true`)
@@ -202,4 +209,45 @@ defmodule PushX.Config do
   """
   @spec retry_max_delay_ms() :: pos_integer()
   def retry_max_delay_ms, do: get(:retry_max_delay_ms, 60_000)
+
+  # Request timeout configuration
+
+  @doc """
+  Gets the overall request timeout in milliseconds.
+  Default: 30 seconds.
+  """
+  @spec request_timeout() :: pos_integer()
+  def request_timeout, do: get(:request_timeout, 30_000)
+
+  @doc """
+  Gets the receive timeout (time to wait for response data) in milliseconds.
+  Default: 15 seconds.
+  """
+  @spec receive_timeout() :: pos_integer()
+  def receive_timeout, do: get(:receive_timeout, 15_000)
+
+  @doc """
+  Gets the pool timeout (time to wait for a connection from pool) in milliseconds.
+  Default: 5 seconds.
+  """
+  @spec pool_timeout() :: pos_integer()
+  def pool_timeout, do: get(:pool_timeout, 5_000)
+
+  @doc """
+  Gets the TCP connection timeout in milliseconds.
+  Default: 10 seconds.
+  """
+  @spec connect_timeout() :: pos_integer()
+  def connect_timeout, do: get(:connect_timeout, 10_000)
+
+  @doc """
+  Returns the Finch request options with configured timeouts.
+  """
+  @spec finch_request_opts() :: keyword()
+  def finch_request_opts do
+    [
+      receive_timeout: receive_timeout(),
+      pool_timeout: pool_timeout()
+    ]
+  end
 end

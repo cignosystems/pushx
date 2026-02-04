@@ -270,4 +270,93 @@ defmodule PushX.ConfigTest do
       if original, do: Application.put_env(:pushx, :retry_max_delay_ms, original)
     end
   end
+
+  describe "request_timeout/0" do
+    test "returns default of 30_000" do
+      original = Application.get_env(:pushx, :request_timeout)
+      Application.delete_env(:pushx, :request_timeout)
+
+      assert Config.request_timeout() == 30_000
+
+      if original, do: Application.put_env(:pushx, :request_timeout, original)
+    end
+
+    test "returns configured value" do
+      Application.put_env(:pushx, :request_timeout, 60_000)
+      assert Config.request_timeout() == 60_000
+      Application.delete_env(:pushx, :request_timeout)
+    end
+  end
+
+  describe "receive_timeout/0" do
+    test "returns default of 15_000" do
+      original = Application.get_env(:pushx, :receive_timeout)
+      Application.delete_env(:pushx, :receive_timeout)
+
+      assert Config.receive_timeout() == 15_000
+
+      if original, do: Application.put_env(:pushx, :receive_timeout, original)
+    end
+
+    test "returns configured value" do
+      Application.put_env(:pushx, :receive_timeout, 30_000)
+      assert Config.receive_timeout() == 30_000
+      Application.delete_env(:pushx, :receive_timeout)
+    end
+  end
+
+  describe "pool_timeout/0" do
+    test "returns default of 5_000" do
+      original = Application.get_env(:pushx, :pool_timeout)
+      Application.delete_env(:pushx, :pool_timeout)
+
+      assert Config.pool_timeout() == 5_000
+
+      if original, do: Application.put_env(:pushx, :pool_timeout, original)
+    end
+
+    test "returns configured value" do
+      Application.put_env(:pushx, :pool_timeout, 10_000)
+      assert Config.pool_timeout() == 10_000
+      Application.delete_env(:pushx, :pool_timeout)
+    end
+  end
+
+  describe "connect_timeout/0" do
+    test "returns default of 10_000" do
+      original = Application.get_env(:pushx, :connect_timeout)
+      Application.delete_env(:pushx, :connect_timeout)
+
+      assert Config.connect_timeout() == 10_000
+
+      if original, do: Application.put_env(:pushx, :connect_timeout, original)
+    end
+
+    test "returns configured value" do
+      Application.put_env(:pushx, :connect_timeout, 20_000)
+      assert Config.connect_timeout() == 20_000
+      Application.delete_env(:pushx, :connect_timeout)
+    end
+  end
+
+  describe "finch_request_opts/0" do
+    test "returns keyword list with timeouts" do
+      opts = Config.finch_request_opts()
+
+      assert Keyword.has_key?(opts, :receive_timeout)
+      assert Keyword.has_key?(opts, :pool_timeout)
+    end
+
+    test "uses configured values" do
+      Application.put_env(:pushx, :receive_timeout, 25_000)
+      Application.put_env(:pushx, :pool_timeout, 8_000)
+
+      opts = Config.finch_request_opts()
+      assert opts[:receive_timeout] == 25_000
+      assert opts[:pool_timeout] == 8_000
+
+      Application.delete_env(:pushx, :receive_timeout)
+      Application.delete_env(:pushx, :pool_timeout)
+    end
+  end
 end

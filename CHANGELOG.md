@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-02-04
+
+### Added
+- **Configurable request timeouts** — New configuration options to handle slow connections:
+  - `:request_timeout` — Overall request timeout (default: 30s)
+  - `:receive_timeout` — Timeout for receiving response data (default: 15s)
+  - `:pool_timeout` — Timeout for acquiring connection from pool (default: 5s)
+  - `:connect_timeout` — TCP connection timeout (default: 10s)
+- Timeouts are now passed to Finch for both APNS and FCM requests
+- Connection timeout configured at Finch pool level for better TCP handling
+- **New logo** — Modern purple bell/arrow logo added to README and HexDocs
+- 10 new config tests for timeout options
+- Total test count: 215 tests
+
+### Fixed
+- `request_timeout` errors when connecting to APNS from distant regions (e.g., EU to Apple's US servers)
+
 ## [0.6.0] - 2026-02-04
 
 ### Changed

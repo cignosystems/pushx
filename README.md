@@ -1,11 +1,20 @@
-# PushX
+<p align="center">
+  <img src="pushx_logo.png" alt="PushX Logo" width="400">
+</p>
 
-[![CI](https://github.com/cignosystems/pushx/actions/workflows/ci.yml/badge.svg)](https://github.com/cignosystems/pushx/actions/workflows/ci.yml)
-[![Hex.pm](https://img.shields.io/hexpm/v/pushx.svg)](https://hex.pm/packages/pushx)
-[![Hex Docs](https://img.shields.io/badge/hex-docs-purple.svg)](https://hexdocs.pm/pushx)
-[![License](https://img.shields.io/hexpm/l/pushx.svg)](https://github.com/cignosystems/pushx/blob/main/LICENSE)
+<p align="center">
+  <strong>Modern push notifications for Elixir</strong><br>
+  Supports Apple APNS and Google FCM with HTTP/2, JWT authentication, and a clean unified API.
+</p>
 
-Modern push notifications for Elixir. Supports Apple APNS and Google FCM with HTTP/2, JWT authentication, and a clean unified API.
+<p align="center">
+  <a href="https://github.com/cignosystems/pushx/actions/workflows/ci.yml"><img src="https://github.com/cignosystems/pushx/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://hex.pm/packages/pushx"><img src="https://img.shields.io/hexpm/v/pushx.svg" alt="Hex.pm"></a>
+  <a href="https://hexdocs.pm/pushx"><img src="https://img.shields.io/badge/hex-docs-purple.svg" alt="Hex Docs"></a>
+  <a href="https://github.com/cignosystems/pushx/blob/main/LICENSE"><img src="https://img.shields.io/hexpm/l/pushx.svg" alt="License"></a>
+</p>
+
+---
 
 ## Features
 
@@ -293,6 +302,27 @@ config :pushx,
 | High (>1000/min) | 50 | 4 | ~20,000 |
 
 > **Note:** Each HTTP/2 connection supports ~100 concurrent streams. Pool capacity ≈ `pool_size × pool_count × 100`.
+
+### Timeout Configuration
+
+Configure request timeouts for slow or distant network connections:
+
+```elixir
+config :pushx,
+  request_timeout: 30_000,   # overall request timeout (default: 30s)
+  receive_timeout: 15_000,   # timeout for receiving response (default: 15s)
+  pool_timeout: 5_000,       # timeout for acquiring connection from pool (default: 5s)
+  connect_timeout: 10_000    # TCP connection timeout (default: 10s)
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `:request_timeout` | 30s | Overall request timeout |
+| `:receive_timeout` | 15s | How long to wait for response data |
+| `:pool_timeout` | 5s | How long to wait for a connection from the pool |
+| `:connect_timeout` | 10s | TCP connection establishment timeout |
+
+> **Tip:** Increase timeouts if connecting from distant regions (e.g., EU to Apple's US servers).
 
 ---
 
@@ -643,9 +673,23 @@ This occurs when APNS/FCM doesn't respond within the timeout period.
 
 **Solutions:**
 
-1. PushX automatically retries connection errors with exponential backoff (1s, 2s, 4s)
-2. Check network connectivity to Apple/Google servers
-3. Increase pool size if timeouts occur during traffic spikes
+1. **Increase timeouts** if connecting from distant regions (e.g., EU to US):
+   ```elixir
+   config :pushx,
+     receive_timeout: 30_000,   # increase from 15s to 30s
+     connect_timeout: 20_000    # increase from 10s to 20s
+   ```
+
+2. PushX automatically retries connection errors with exponential backoff (1s, 2s, 4s)
+
+3. Check network connectivity to Apple/Google servers
+
+4. Increase pool size if timeouts occur during traffic spikes:
+   ```elixir
+   config :pushx,
+     finch_pool_size: 50,
+     finch_pool_count: 4
+   ```
 
 ### Debugging Tips
 
