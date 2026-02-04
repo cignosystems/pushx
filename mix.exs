@@ -1,7 +1,7 @@
 defmodule PushX.MixProject do
   use Mix.Project
 
-  @version "0.6.1"
+  @version "0.6.2"
   @source_url "https://github.com/cignosystems/pushx"
 
   def project do
@@ -65,8 +65,7 @@ defmodule PushX.MixProject do
       extras: ["README.md", "CHANGELOG.md", "LICENSE"],
       source_ref: "v#{@version}",
       source_url: @source_url,
-      logo: "pushx_logo.png",
-      assets: %{"pushx_logo.png" => "pushx_logo.png"}
+      logo: "pushx_logo.png"
     ]
   end
 end

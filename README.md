@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="pushx_logo.png" alt="PushX Logo" width="400">
+  <img src="https://raw.githubusercontent.com/cignosystems/pushx/main/pushx_logo.png" alt="PushX Logo" width="400">
 </p>
 
 <p align="center">
