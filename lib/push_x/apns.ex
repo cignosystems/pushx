@@ -174,9 +174,13 @@ defmodule PushX.APNS do
       timeout: timeout,
       on_timeout: :kill_task
     )
+    |> Enum.zip(device_tokens)
     |> Enum.map(fn
-      {:ok, result} -> result
-      {:exit, :timeout} -> {nil, {:error, Response.error(:apns, :connection_error, "timeout")}}
+      {{:ok, result}, _token} ->
+        result
+
+      {{:exit, :timeout}, token} ->
+        {token, {:error, Response.error(:apns, :connection_error, "timeout")}}
     end)
   end
 
@@ -368,30 +372,59 @@ defmodule PushX.APNS do
 
   defp parse_retry_after_value(_), do: nil
 
-  # JWT Token Management with caching
+  # JWT Token Management with caching and atomic refresh lock
 
   defp get_jwt do
     cache_key = :apns_jwt_cache
     now = System.system_time(:millisecond)
 
     case :persistent_term.get(cache_key, nil) do
-      {token, expires_at} when is_integer(expires_at) ->
-        if expires_at > now do
-          token
-        else
-          refresh_jwt(cache_key)
-        end
+      {token, expires_at} when is_integer(expires_at) and expires_at > now ->
+        token
 
       _ ->
-        refresh_jwt(cache_key)
+        refresh_jwt_atomically(cache_key)
     end
   end
 
-  defp refresh_jwt(cache_key) do
-    token = generate_jwt()
-    expires_at = System.system_time(:millisecond) + @jwt_cache_ttl_ms
-    :persistent_term.put(cache_key, {token, expires_at})
-    token
+  defp refresh_jwt_atomically(cache_key) do
+    lock = :persistent_term.get(:apns_jwt_lock)
+
+    case :atomics.compare_exchange(lock, 1, 0, 1) do
+      :ok ->
+        # We acquired the lock - refresh the JWT
+        try do
+          # Double-check: another process may have refreshed while we waited
+          now = System.system_time(:millisecond)
+
+          case :persistent_term.get(cache_key, nil) do
+            {token, expires_at} when is_integer(expires_at) and expires_at > now ->
+              token
+
+            _ ->
+              token = generate_jwt()
+              expires_at = now + @jwt_cache_ttl_ms
+              :persistent_term.put(cache_key, {token, expires_at})
+              token
+          end
+        after
+          :atomics.put(lock, 1, 0)
+        end
+
+      _current ->
+        # Another process is refreshing - wait briefly and read from cache
+        Process.sleep(50)
+        now = System.system_time(:millisecond)
+
+        case :persistent_term.get(cache_key, nil) do
+          {token, expires_at} when is_integer(expires_at) and expires_at > now ->
+            token
+
+          _ ->
+            # Still not refreshed, try again
+            refresh_jwt_atomically(cache_key)
+        end
+    end
   end
 
   defp generate_jwt do

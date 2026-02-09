@@ -5,6 +5,9 @@ defmodule PushX.Application do
 
   @impl true
   def start(_type, _args) do
+    # Initialize atomic lock for JWT refresh (prevents thundering herd)
+    :persistent_term.put(:apns_jwt_lock, :atomics.new(1, signed: false))
+
     children =
       [
         # Rate limiter (always started, but only tracks when enabled)

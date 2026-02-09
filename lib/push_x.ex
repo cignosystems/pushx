@@ -244,9 +244,13 @@ defmodule PushX do
       timeout: timeout,
       on_timeout: :kill_task
     )
+    |> Enum.zip(tokens_to_send)
     |> Enum.map(fn
-      {:ok, result} -> result
-      {:exit, :timeout} -> {nil, {:error, Response.error(provider, :connection_error, "timeout")}}
+      {{:ok, result}, _token} ->
+        result
+
+      {{:exit, :timeout}, token} ->
+        {token, {:error, Response.error(provider, :connection_error, "timeout")}}
     end)
   end
 

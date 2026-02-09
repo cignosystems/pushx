@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-02-09
+
+### Fixed
+- **FCM OAuth error handling** — `get_access_token/0` no longer raises on Goth failure, returns `{:ok, token} | {:error, reason}` instead
+- **FCM data-only messages missing timeouts** — `send_data` now uses configured `receive_timeout` and `pool_timeout`
+- **JWT cache thundering herd** — Added atomic compare-and-swap lock to prevent concurrent JWT refresh
+- **Rate limiter O(n) scaling** — Replaced timestamp list with O(1) fixed-window counter in ETS
+- **Batch timeout loses token identity** — Timed-out tokens now correctly reported via `Enum.zip`
+
+### Changed
+- **Rewritten README** — New structure with Quick Start, complete Usage Guide, and consolidated Configuration section
+- Deprecated `request_timeout/0` (was never passed to Finch; use `receive_timeout` and `pool_timeout`)
+- Fixed CHANGELOG FCM token validation range (was 100-500, actually 20-500)
+
 ## [0.6.2] - 2026-02-04
 
 ### Fixed
@@ -82,7 +96,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Token validation** — validate token format before sending
   - `PushX.validate_token/2` - Returns `:ok` or `{:error, reason}`
   - `PushX.valid_token?/2` - Returns boolean
-  - `PushX.Token` module with validation for APNS (64 hex chars) and FCM (100-500 chars) tokens
+  - `PushX.Token` module with validation for APNS (64 hex chars) and FCM (20-500 chars) tokens
   - `:validate_tokens` option for batch sending to filter invalid tokens
 - **Rate limiting** — optional client-side rate limiting
   - `PushX.check_rate_limit/1` - Check if under rate limit
@@ -195,6 +209,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - HTTP/2 connections via Finch
 - Zero external JSON dependency (uses Elixir 1.18+ built-in JSON)
 
+[0.7.0]: https://github.com/cignosystems/pushx/compare/v0.6.2...v0.7.0
+[0.6.2]: https://github.com/cignosystems/pushx/compare/v0.6.1...v0.6.2
+[0.6.1]: https://github.com/cignosystems/pushx/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/cignosystems/pushx/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/cignosystems/pushx/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/cignosystems/pushx/compare/v0.4.0...v0.4.1

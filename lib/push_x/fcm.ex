@@ -106,13 +106,24 @@ defmodule PushX.FCM do
   end
 
   defp do_send(device_token, payload, opts) do
+    case get_access_token() do
+      {:ok, access_token} ->
+        do_send_with_token(device_token, payload, opts, access_token)
+
+      {:error, reason} ->
+        Logger.error("[PushX.FCM] Failed to get OAuth token: #{inspect(reason)}")
+        {:error, Response.error(:fcm, :connection_error, "OAuth token error: #{inspect(reason)}")}
+    end
+  end
+
+  defp do_send_with_token(device_token, payload, opts, access_token) do
     project_id = Keyword.get(opts, :project_id, Config.fcm_project_id())
     url = "#{@fcm_base_url}/#{project_id}/messages:send"
 
     message = build_message(device_token, payload, opts)
 
     headers = [
-      {"authorization", "Bearer #{get_access_token()}"},
+      {"authorization", "Bearer #{access_token}"},
       {"content-type", "application/json"}
     ]
 
@@ -184,9 +195,13 @@ defmodule PushX.FCM do
       timeout: timeout,
       on_timeout: :kill_task
     )
+    |> Enum.zip(device_tokens)
     |> Enum.map(fn
-      {:ok, result} -> result
-      {:exit, :timeout} -> {nil, {:error, Response.error(:fcm, :connection_error, "timeout")}}
+      {{:ok, result}, _token} ->
+        result
+
+      {{:exit, :timeout}, token} ->
+        {token, {:error, Response.error(:fcm, :connection_error, "timeout")}}
     end)
   end
 
@@ -314,6 +329,17 @@ defmodule PushX.FCM do
   end
 
   defp do_send_data(device_token, data, opts) do
+    case get_access_token() do
+      {:ok, access_token} ->
+        do_send_data_with_token(device_token, data, opts, access_token)
+
+      {:error, reason} ->
+        Logger.error("[PushX.FCM] Failed to get OAuth token: #{inspect(reason)}")
+        {:error, Response.error(:fcm, :connection_error, "OAuth token error: #{inspect(reason)}")}
+    end
+  end
+
+  defp do_send_data_with_token(device_token, data, opts, access_token) do
     project_id = Keyword.get(opts, :project_id, Config.fcm_project_id())
     url = "#{@fcm_base_url}/#{project_id}/messages:send"
 
@@ -325,14 +351,14 @@ defmodule PushX.FCM do
     }
 
     headers = [
-      {"authorization", "Bearer #{get_access_token()}"},
+      {"authorization", "Bearer #{access_token}"},
       {"content-type", "application/json"}
     ]
 
     body = JSON.encode!(message)
 
     case Finch.build(:post, url, headers, body)
-         |> Finch.request(Config.finch_name()) do
+         |> Finch.request(Config.finch_name(), Config.finch_request_opts()) do
       {:ok, %{status: 200, body: response_body}} ->
         case JSON.decode(response_body) do
           {:ok, %{"name" => message_id}} ->
@@ -444,11 +470,10 @@ defmodule PushX.FCM do
   defp get_access_token do
     case Goth.fetch(PushX.Goth) do
       {:ok, %{token: token}} ->
-        token
+        {:ok, token}
 
       {:error, reason} ->
-        Logger.error("[PushX.FCM] Failed to get OAuth token: #{inspect(reason)}")
-        raise "Failed to get FCM OAuth token: #{inspect(reason)}"
+        {:error, reason}
     end
   end
 end

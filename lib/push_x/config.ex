@@ -30,7 +30,6 @@ defmodule PushX.Config do
 
   ### Request Timeouts
 
-    * `:request_timeout` - Overall request timeout in ms (default: `30_000`)
     * `:receive_timeout` - Timeout for receiving response in ms (default: `15_000`)
     * `:pool_timeout` - Timeout for acquiring connection from pool in ms (default: `5_000`)
     * `:connect_timeout` - TCP connection timeout in ms (default: `10_000`)
@@ -215,7 +214,11 @@ defmodule PushX.Config do
   @doc """
   Gets the overall request timeout in milliseconds.
   Default: 30 seconds.
+
+  > Note: This value is not currently passed to Finch requests.
+  > Use `:receive_timeout` and `:pool_timeout` instead.
   """
+  @deprecated "Not used by Finch. Use receive_timeout/0 and pool_timeout/0 instead."
   @spec request_timeout() :: pos_integer()
   def request_timeout, do: get(:request_timeout, 30_000)
 

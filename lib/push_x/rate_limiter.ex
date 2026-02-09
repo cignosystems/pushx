@@ -86,15 +86,13 @@ defmodule PushX.RateLimiter do
   def current_count(provider) do
     now = System.monotonic_time(:millisecond)
     window = window_ms()
-    window_start = now - window
 
     case :ets.lookup(@table_name, provider) do
-      [{^provider, requests}] ->
-        requests
-        |> Enum.filter(fn ts -> ts > window_start end)
-        |> length()
+      [{^provider, window_start, count}]
+      when is_integer(window_start) and now - window_start <= window ->
+        count
 
-      [] ->
+      _ ->
         0
     end
   end
@@ -119,7 +117,7 @@ defmodule PushX.RateLimiter do
   """
   @spec reset(provider()) :: :ok
   def reset(provider) do
-    :ets.insert(@table_name, {provider, []})
+    :ets.insert(@table_name, {provider, nil, 0})
     :ok
   end
 
@@ -138,8 +136,9 @@ defmodule PushX.RateLimiter do
   @impl true
   def init(_opts) do
     table = :ets.new(@table_name, [:named_table, :public, :set])
-    :ets.insert(table, {:apns, []})
-    :ets.insert(table, {:fcm, []})
+    # Store {provider, window_start, count} tuples — :nil sentinel means "no active window"
+    :ets.insert(table, {:apns, nil, 0})
+    :ets.insert(table, {:fcm, nil, 0})
 
     # Schedule periodic cleanup
     schedule_cleanup()
@@ -167,25 +166,22 @@ defmodule PushX.RateLimiter do
   defp do_check_and_increment(provider) do
     now = System.monotonic_time(:millisecond)
     window = window_ms()
-    window_start = now - window
     max_requests = limit(provider)
 
     case :ets.lookup(@table_name, provider) do
-      [{^provider, requests}] ->
-        # Filter to only requests in current window
-        current_requests = Enum.filter(requests, fn ts -> ts > window_start end)
-
-        if length(current_requests) < max_requests do
-          # Add new request timestamp
-          :ets.insert(@table_name, {provider, [now | current_requests]})
+      [{^provider, window_start, count}]
+      when is_integer(window_start) and now - window_start <= window ->
+        if count < max_requests do
+          :ets.update_counter(@table_name, provider, {3, 1})
           :ok
         else
           Logger.warning("[PushX.RateLimiter] Rate limit exceeded for #{provider}")
           {:error, :rate_limited}
         end
 
-      [] ->
-        :ets.insert(@table_name, {provider, [now]})
+      _ ->
+        # Window expired or no entry — start a new window
+        :ets.insert(@table_name, {provider, now, 1})
         :ok
     end
   end
@@ -193,20 +189,18 @@ defmodule PushX.RateLimiter do
   defp do_check(provider) do
     now = System.monotonic_time(:millisecond)
     window = window_ms()
-    window_start = now - window
     max_requests = limit(provider)
 
     case :ets.lookup(@table_name, provider) do
-      [{^provider, requests}] ->
-        current_requests = Enum.filter(requests, fn ts -> ts > window_start end)
-
-        if length(current_requests) < max_requests do
+      [{^provider, window_start, count}]
+      when is_integer(window_start) and now - window_start <= window ->
+        if count < max_requests do
           :ok
         else
           {:error, :rate_limited}
         end
 
-      [] ->
+      _ ->
         :ok
     end
   end
@@ -214,15 +208,14 @@ defmodule PushX.RateLimiter do
   defp cleanup_old_entries do
     now = System.monotonic_time(:millisecond)
     window = window_ms()
-    window_start = now - window
 
     for provider <- [:apns, :fcm] do
       case :ets.lookup(@table_name, provider) do
-        [{^provider, requests}] ->
-          cleaned = Enum.filter(requests, fn ts -> ts > window_start end)
-          :ets.insert(@table_name, {provider, cleaned})
+        [{^provider, window_start, _count}]
+        when is_integer(window_start) and now - window_start > window ->
+          :ets.insert(@table_name, {provider, nil, 0})
 
-        [] ->
+        _ ->
           :ok
       end
     end
