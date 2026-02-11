@@ -165,6 +165,32 @@ defmodule PushX.RetryTest do
       assert :counters.get(call_count, 1) == 2
     end
 
+    test "reconnects Finch pool on first connection error" do
+      old_pid = Process.whereis(PushX.Config.finch_name())
+      call_count = :counters.new(1, [:atomics])
+
+      Retry.with_retry(fn ->
+        :counters.add(call_count, 1, 1)
+        {:error, Response.error(:apns, :connection_error, "stale")}
+      end)
+
+      # Finch should have been restarted (new pid)
+      new_pid = Process.whereis(PushX.Config.finch_name())
+      assert new_pid != nil
+      assert new_pid != old_pid
+    end
+
+    test "does not reconnect for non-connection errors" do
+      old_pid = Process.whereis(PushX.Config.finch_name())
+
+      Retry.with_retry(fn ->
+        {:error, Response.error(:apns, :server_error, "500")}
+      end)
+
+      # Finch should NOT have been restarted
+      assert Process.whereis(PushX.Config.finch_name()) == old_pid
+    end
+
     test "respects retry_enabled config" do
       Application.put_env(:pushx, :retry_enabled, false)
       call_count = :counters.new(1, [:atomics])

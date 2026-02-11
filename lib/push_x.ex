@@ -63,6 +63,8 @@ defmodule PushX do
 
   """
 
+  require Logger
+
   alias PushX.{APNS, FCM, Message, Response, Token, RateLimiter}
 
   @type provider :: :apns | :fcm
@@ -314,6 +316,45 @@ defmodule PushX do
   """
   @spec check_rate_limit(provider()) :: :ok | {:error, :rate_limited}
   defdelegate check_rate_limit(provider), to: RateLimiter, as: :check
+
+  # Connection management
+
+  @doc """
+  Restarts the Finch HTTP pool, forcing fresh connections.
+
+  Call this when connections become stale (e.g., after persistent
+  `too_many_concurrent_requests` or `request_timeout` errors). On cloud
+  infrastructure like Fly.io, idle HTTP/2 connections can be silently
+  dropped, and Finch cannot detect these zombie connections. Restarting
+  the pool forces new TCP/TLS handshakes.
+
+  This is called automatically by the retry logic on connection errors.
+  You can also call it manually if needed.
+
+  ## Examples
+
+      PushX.reconnect()
+      #=> :ok
+
+  """
+  @spec reconnect() :: :ok | {:error, term()}
+  def reconnect do
+    name = PushX.Config.finch_name()
+
+    with :ok <- Supervisor.terminate_child(PushX.Supervisor, name),
+         {:ok, _pid} <- Supervisor.restart_child(PushX.Supervisor, name) do
+      Logger.info("[PushX] Reconnected HTTP pools (stale connections discarded)")
+      :ok
+    else
+      {:error, :running} ->
+        # Already restarted by another process — that's fine
+        :ok
+
+      {:error, reason} ->
+        Logger.error("[PushX] Failed to reconnect: #{inspect(reason)}")
+        {:error, reason}
+    end
+  end
 
   # Private functions
 

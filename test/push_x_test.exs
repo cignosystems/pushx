@@ -224,6 +224,34 @@ defmodule PushXTest do
     defp maybe_set(message, :data, value), do: Message.data(message, value)
   end
 
+  describe "reconnect/0" do
+    test "restarts Finch pool and returns :ok" do
+      # Finch should be running
+      assert Process.whereis(PushX.Config.finch_name()) != nil
+
+      old_pid = Process.whereis(PushX.Config.finch_name())
+      assert :ok = PushX.reconnect()
+
+      # Finch should be running again with a new pid
+      new_pid = Process.whereis(PushX.Config.finch_name())
+      assert new_pid != nil
+      assert new_pid != old_pid
+    end
+
+    test "is safe to call concurrently" do
+      tasks =
+        for _ <- 1..5 do
+          Task.async(fn -> PushX.reconnect() end)
+        end
+
+      results = Task.await_many(tasks, 5000)
+      assert Enum.all?(results, &(&1 == :ok))
+
+      # Finch should still be running after concurrent reconnects
+      assert Process.whereis(PushX.Config.finch_name()) != nil
+    end
+  end
+
   describe "push!/4" do
     setup do
       bypass = Bypass.open()

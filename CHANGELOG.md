@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-02-11
+
+### Added
+- **Automatic pool reconnect on connection errors** — When the first retry attempt fails with a connection error (stale HTTP/2 connections), PushX now restarts the Finch pool to force fresh connections before retrying. This fixes the issue where retries on stale connections always fail with `too_many_concurrent_requests`.
+- **`PushX.reconnect/0`** — Public function to manually restart the HTTP connection pool. Useful for recovering from persistent connection issues without restarting the app.
+- **TCP keepalive on all connections** — Enables OS-level dead connection detection on APNS and FCM pools, helping prevent zombie HTTP/2 connections on cloud infrastructure.
+- 4 new tests (reconnect, concurrent reconnect, retry-triggered reconnect, no reconnect on non-connection errors)
+- Total test count: 219 tests
+
+### Fixed
+- Retries on stale HTTP/2 connections no longer fail repeatedly with `too_many_concurrent_requests` — the pool is recycled on first connection error
+
 ## [0.7.0] - 2026-02-09
 
 ### Fixed
@@ -209,6 +221,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - HTTP/2 connections via Finch
 - Zero external JSON dependency (uses Elixir 1.18+ built-in JSON)
 
+[0.7.1]: https://github.com/cignosystems/pushx/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/cignosystems/pushx/compare/v0.6.2...v0.7.0
 [0.6.2]: https://github.com/cignosystems/pushx/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/cignosystems/pushx/compare/v0.6.0...v0.6.1

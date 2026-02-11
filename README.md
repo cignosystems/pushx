@@ -49,7 +49,7 @@ Add `pushx` to your dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:pushx, "~> 0.6"}
+    {:pushx, "~> 0.7"}
   ]
 end
 ```
@@ -390,7 +390,7 @@ Each HTTP/2 connection supports ~100 concurrent streams. Pool capacity = `pool_s
 
 PushX automatically retries transient failures with exponential backoff:
 
-- **Connection errors** — 1s base delay (1s, 2s, 4s) since these are typically transient
+- **Connection errors** — reconnects the HTTP pool, then retries with 1s base delay (1s, 2s, 4s)
 - **Server errors (5xx)** — 10s base delay (10s, 20s, 40s) per Google's recommendation
 - **Rate limited (429)** — uses `retry-after` header, or 60s default
 - **Permanent failures** — never retried (invalid token, payload too large, etc.)
@@ -621,13 +621,18 @@ This Mint HTTP/2 error means all streams on a connection are in use. It has two 
 
 **Cause 1: Stale connections (low-traffic apps)**
 
-On cloud infrastructure (Fly.io, AWS, GCP), idle HTTP/2 connections can be silently dropped by load balancers or firewalls. The client doesn't know the connection is dead, so new requests on it hang or fail. The default pool of 25 connections x 2 pools creates many idle connections that are prone to going stale.
+On cloud infrastructure (Fly.io, AWS, GCP), idle HTTP/2 connections can be silently dropped by load balancers or firewalls. The client doesn't know the connection is dead, so new requests on it hang or fail. PushX enables TCP keepalive to detect dead connections at the OS level, and automatically reconnects on connection errors during retry.
 
 **Fix:** Reduce pool size to minimize idle connections:
 ```elixir
 config :pushx,
   finch_pool_size: 2,
   finch_pool_count: 1
+```
+
+You can also force a reconnect manually:
+```elixir
+PushX.reconnect()
 ```
 
 **Cause 2: Actual overload (high-traffic apps)**
@@ -643,8 +648,6 @@ config :pushx,
   rate_limit_apns: 2000,
   rate_limit_fcm: 2000
 ```
-
-In both cases, **restarting your app** clears stale connections and often resolves the issue immediately.
 
 ### `request_timeout` Error
 
