@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-02-13
+
+### Added
+- **Circuit breaker** — Opt-in circuit breaker tracks consecutive failures per provider and temporarily blocks requests when a provider is consistently failing. Configurable threshold and cooldown. See [Circuit Breaker](README.md#circuit-breaker) in the README.
+- **`PushX.health_check/0`** — Returns configuration status and circuit breaker state for each provider
+- **Per-request timeout overrides** — Pass `:receive_timeout` and `:pool_timeout` as opts to individual `send` calls to override global config
+- **Token cleanup callback** — Configure `on_invalid_token: {Mod, :fun, args}` to automatically clean up invalid tokens from your database
+- `PushX.Telemetry.truncate_token/1` is now a public function for use in custom logging
+- 23 doctests across 7 modules (Token, Telemetry, APNS, FCM, Message, Response, PushX)
+- Circuit breaker test suite (13 tests)
+- Integration tests for batch sending with mixed success/failure responses
+- Total test count: 241 tests, 23 doctests
+
+### Fixed
+- **APNS payload injection** — Custom data containing an `"aps"` key can no longer overwrite the notification payload in `Message.to_apns_payload/1`, `notification_with_data/4`, `silent_notification/1`, and `web_notification_with_data/5`
+- **FCM `send_data` parity** — `send_data/3` and `send_data_once/3` now have circuit breaker, telemetry, per-request timeouts, debug logging, and exception handling matching the regular `send/3` path
+- **Reconnect error logging** — Retry logic now logs a warning if `PushX.reconnect/0` fails instead of silently ignoring the error
+- **Device tokens redacted in debug logs** — APNS and FCM debug log messages now truncate tokens (first 8 + last 4 chars) matching the telemetry module's privacy behavior
+- Fixed incorrect doctest for `Token.validate/2` (was `:invalid_format`, actually `:invalid_length`)
+
 ## [0.7.1] - 2026-02-11
 
 ### Added
@@ -221,6 +241,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - HTTP/2 connections via Finch
 - Zero external JSON dependency (uses Elixir 1.18+ built-in JSON)
 
+[0.8.0]: https://github.com/cignosystems/pushx/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/cignosystems/pushx/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/cignosystems/pushx/compare/v0.6.2...v0.7.0
 [0.6.2]: https://github.com/cignosystems/pushx/compare/v0.6.1...v0.6.2

@@ -4,6 +4,8 @@ defmodule PushX.APNSTest do
   alias PushX.APNS
   alias PushX.Response
 
+  doctest PushX.APNS
+
   describe "notification/2" do
     test "creates a basic notification payload" do
       payload = APNS.notification("Hello", "World")
@@ -44,6 +46,17 @@ defmodule PushX.APNSTest do
 
       assert payload["aps"]["badge"] == 3
     end
+
+    test "data with 'aps' key does not overwrite notification" do
+      payload =
+        APNS.notification_with_data("Hello", "World", %{
+          "aps" => %{"alert" => "HACKED"},
+          "safe_key" => "value"
+        })
+
+      assert payload["aps"]["alert"]["title"] == "Hello"
+      assert payload["safe_key"] == "value"
+    end
   end
 
   describe "silent_notification/1" do
@@ -55,6 +68,13 @@ defmodule PushX.APNSTest do
 
     test "includes custom data" do
       payload = APNS.silent_notification(%{"action" => "sync"})
+
+      assert payload["aps"]["content-available"] == 1
+      assert payload["action"] == "sync"
+    end
+
+    test "data with 'aps' key does not overwrite content-available" do
+      payload = APNS.silent_notification(%{"aps" => "HACKED", "action" => "sync"})
 
       assert payload["aps"]["content-available"] == 1
       assert payload["action"] == "sync"

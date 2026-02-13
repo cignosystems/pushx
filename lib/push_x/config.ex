@@ -253,4 +253,47 @@ defmodule PushX.Config do
       pool_timeout: pool_timeout()
     ]
   end
+
+  # Circuit breaker configuration
+
+  @doc """
+  Checks if the circuit breaker is enabled.
+  Default: `false` (opt-in feature).
+  """
+  @spec circuit_breaker_enabled?() :: boolean()
+  def circuit_breaker_enabled?, do: get(:circuit_breaker_enabled, false)
+
+  @doc """
+  Gets the number of consecutive failures before the circuit opens.
+  Default: 5.
+  """
+  @spec circuit_breaker_threshold() :: pos_integer()
+  def circuit_breaker_threshold, do: get(:circuit_breaker_threshold, 5)
+
+  @doc """
+  Gets the cooldown time in milliseconds before the circuit transitions
+  from `:open` to `:half_open`.
+  Default: 30 seconds.
+  """
+  @spec circuit_breaker_cooldown_ms() :: pos_integer()
+  def circuit_breaker_cooldown_ms, do: get(:circuit_breaker_cooldown_ms, 30_000)
+
+  # Token cleanup callback
+
+  @doc """
+  Gets the callback for invalid token cleanup.
+
+  When set, this MFA tuple is called asynchronously whenever a push
+  returns `:invalid_token`, `:expired_token`, or `:unregistered`.
+
+  The callback receives `(provider, token, ...extra_args)`.
+
+  ## Example
+
+      config :pushx,
+        on_invalid_token: {MyApp.Push, :handle_invalid_token, []}
+
+  """
+  @spec on_invalid_token() :: {module(), atom(), list()} | nil
+  def on_invalid_token, do: get(:on_invalid_token, nil)
 end

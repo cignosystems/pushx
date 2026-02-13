@@ -86,7 +86,15 @@ defmodule PushX.Retry do
             # On first connection error, restart Finch pool to discard stale HTTP/2 connections.
             # Retrying on the same dead connection is futile — the pool must be recycled.
             if response.status == :connection_error and attempt == 1 do
-              PushX.reconnect()
+              case PushX.reconnect() do
+                :ok ->
+                  :ok
+
+                {:error, reason} ->
+                  Logger.warning(
+                    "[PushX.Retry] Failed to reconnect HTTP pool: #{inspect(reason)}"
+                  )
+              end
             end
 
             delay = calculate_delay(response, attempt, base_delay, max_delay)

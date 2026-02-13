@@ -3,6 +3,8 @@ defmodule PushX.TokenTest do
 
   alias PushX.Token
 
+  doctest PushX.Token
+
   describe "APNS token validation" do
     test "valid 64-character hex token" do
       token = String.duplicate("a", 64)

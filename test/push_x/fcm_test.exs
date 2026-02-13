@@ -4,6 +4,8 @@ defmodule PushX.FCMTest do
   alias PushX.FCM
   alias PushX.Response
 
+  doctest PushX.FCM
+
   describe "notification/2" do
     test "creates a basic notification payload" do
       payload = FCM.notification("Hello", "World")

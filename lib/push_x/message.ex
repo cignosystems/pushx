@@ -189,7 +189,7 @@ defmodule PushX.Message do
       |> maybe_put("thread-id", message.thread_id)
 
     %{"aps" => aps}
-    |> Map.merge(message.data)
+    |> Map.merge(Map.delete(message.data, "aps"))
   end
 
   @doc """

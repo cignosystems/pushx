@@ -12,6 +12,8 @@ defmodule PushX.Application do
       [
         # Rate limiter (always started, but only tracks when enabled)
         PushX.RateLimiter,
+        # Circuit breaker (always started, but only tracks when enabled)
+        PushX.CircuitBreaker,
         # Finch HTTP client pool with HTTP/2 for APNS and FCM
         {Finch,
          name: PushX.Config.finch_name(),

@@ -50,7 +50,7 @@ defmodule PushX.FCM do
 
   require Logger
 
-  alias PushX.{Config, Message, RateLimiter, Response, Retry, Telemetry}
+  alias PushX.{CircuitBreaker, Config, Message, RateLimiter, Response, Retry, Telemetry}
 
   @fcm_base_url "https://fcm.googleapis.com/v1/projects"
 
@@ -95,13 +95,17 @@ defmodule PushX.FCM do
   """
   @spec send_once(token(), payload(), [option()]) :: {:ok, Response.t()} | {:error, Response.t()}
   def send_once(device_token, payload, opts \\ []) do
-    # Check rate limit first
-    case RateLimiter.check_and_increment(:fcm) do
+    with :ok <- CircuitBreaker.allow?(:fcm),
+         :ok <- RateLimiter.check_and_increment(:fcm) do
+      result = do_send(device_token, payload, opts)
+      record_circuit_breaker_result(result)
+      result
+    else
+      {:error, :circuit_open} ->
+        {:error, Response.error(:fcm, :circuit_open, "Circuit breaker is open")}
+
       {:error, :rate_limited} ->
         {:error, Response.error(:fcm, :rate_limited, "Client-side rate limit exceeded")}
-
-      :ok ->
-        do_send(device_token, payload, opts)
     end
   end
 
@@ -129,14 +133,20 @@ defmodule PushX.FCM do
 
     body = JSON.encode!(message)
 
-    Logger.debug("[PushX.FCM] Sending to #{device_token}")
+    Logger.debug("[PushX.FCM] Sending to #{Telemetry.truncate_token(device_token)}")
 
     Telemetry.start(:fcm, device_token)
     start_time = System.monotonic_time()
 
     try do
+      request_opts =
+        Keyword.merge(
+          Config.finch_request_opts(),
+          Keyword.take(opts, [:receive_timeout, :pool_timeout])
+        )
+
       case Finch.build(:post, url, headers, body)
-           |> Finch.request(Config.finch_name(), Config.finch_request_opts()) do
+           |> Finch.request(Config.finch_name(), request_opts) do
         {:ok, %{status: 200, body: response_body}} ->
           response =
             case JSON.decode(response_body) do
@@ -318,13 +328,17 @@ defmodule PushX.FCM do
   """
   @spec send_data_once(token(), map(), [option()]) :: {:ok, Response.t()} | {:error, Response.t()}
   def send_data_once(device_token, data, opts \\ []) do
-    # Check rate limit first
-    case RateLimiter.check_and_increment(:fcm) do
+    with :ok <- CircuitBreaker.allow?(:fcm),
+         :ok <- RateLimiter.check_and_increment(:fcm) do
+      result = do_send_data(device_token, data, opts)
+      record_circuit_breaker_result(result)
+      result
+    else
+      {:error, :circuit_open} ->
+        {:error, Response.error(:fcm, :circuit_open, "Circuit breaker is open")}
+
       {:error, :rate_limited} ->
         {:error, Response.error(:fcm, :rate_limited, "Client-side rate limit exceeded")}
-
-      :ok ->
-        do_send_data(device_token, data, opts)
     end
   end
 
@@ -357,26 +371,63 @@ defmodule PushX.FCM do
 
     body = JSON.encode!(message)
 
-    case Finch.build(:post, url, headers, body)
-         |> Finch.request(Config.finch_name(), Config.finch_request_opts()) do
-      {:ok, %{status: 200, body: response_body}} ->
-        case JSON.decode(response_body) do
-          {:ok, %{"name" => message_id}} ->
-            {:ok, Response.success(:fcm, message_id)}
+    Logger.debug("[PushX.FCM] Sending data to #{Telemetry.truncate_token(device_token)}")
 
-          _ ->
-            {:ok, Response.success(:fcm)}
-        end
+    Telemetry.start(:fcm, device_token)
+    start_time = System.monotonic_time()
 
-      {:ok, %{status: status, headers: response_headers, body: body}} ->
-        handle_error_response(status, body, response_headers)
+    try do
+      request_opts =
+        Keyword.merge(
+          Config.finch_request_opts(),
+          Keyword.take(opts, [:receive_timeout, :pool_timeout])
+        )
 
-      {:error, reason} ->
-        {:error, Response.error(:fcm, :connection_error, inspect(reason))}
+      case Finch.build(:post, url, headers, body)
+           |> Finch.request(Config.finch_name(), request_opts) do
+        {:ok, %{status: 200, body: response_body}} ->
+          response =
+            case JSON.decode(response_body) do
+              {:ok, %{"name" => message_id}} ->
+                Response.success(:fcm, message_id)
+
+              _ ->
+                Response.success(:fcm)
+            end
+
+          Telemetry.stop(:fcm, device_token, start_time, response)
+          {:ok, response}
+
+        {:ok, %{status: status, headers: response_headers, body: body}} ->
+          {:error, response} = handle_error_response(status, body, response_headers)
+          Telemetry.error(:fcm, device_token, start_time, response)
+          {:error, response}
+
+        {:error, reason} ->
+          Logger.error("[PushX.FCM] Connection error: #{inspect(reason)}")
+          response = Response.error(:fcm, :connection_error, inspect(reason))
+          Telemetry.error(:fcm, device_token, start_time, response)
+          {:error, response}
+      end
+    rescue
+      e ->
+        Telemetry.exception(:fcm, device_token, start_time, :error, e, __STACKTRACE__)
+        reraise e, __STACKTRACE__
     end
   end
 
   # Private functions
+
+  defp record_circuit_breaker_result({:error, %Response{status: status}})
+       when status in [:connection_error, :server_error] do
+    CircuitBreaker.record_failure(:fcm)
+  end
+
+  defp record_circuit_breaker_result({:ok, _response}) do
+    CircuitBreaker.record_success(:fcm)
+  end
+
+  defp record_circuit_breaker_result(_), do: :ok
 
   defp build_message(token, %Message{} = message, opts) do
     base = %{

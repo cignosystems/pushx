@@ -149,6 +149,19 @@ defmodule PushX.MessageTest do
 
       assert payload["aps"]["thread-id"] == "thread-123"
     end
+
+    test "data with 'aps' key does not overwrite notification" do
+      message =
+        Message.new("Hello", "World")
+        |> Message.data(%{"aps" => %{"alert" => "HACKED"}, "safe_key" => "safe_value"})
+
+      payload = Message.to_apns_payload(message)
+
+      assert payload["aps"]["alert"]["title"] == "Hello"
+      assert payload["aps"]["alert"]["body"] == "World"
+      assert payload["safe_key"] == "safe_value"
+      refute payload["aps"]["alert"] == "HACKED"
+    end
   end
 
   describe "to_fcm_payload/1" do

@@ -3,6 +3,8 @@ defmodule PushX.TelemetryTest do
 
   alias PushX.{Response, Telemetry}
 
+  doctest PushX.Telemetry
+
   setup do
     # Attach telemetry handlers for testing
     test_pid = self()
@@ -101,6 +103,27 @@ defmodule PushX.TelemetryTest do
       assert metadata.kind == :error
       assert metadata.reason == error
       assert metadata.stacktrace == stacktrace
+    end
+  end
+
+  describe "truncate_token/1" do
+    test "truncates long tokens" do
+      token = String.duplicate("a", 64)
+      assert Telemetry.truncate_token(token) == "aaaaaaaa...aaaa"
+    end
+
+    test "returns short tokens unchanged" do
+      assert Telemetry.truncate_token("short") == "short"
+    end
+
+    test "returns 16-char tokens unchanged" do
+      token = String.duplicate("a", 16)
+      assert Telemetry.truncate_token(token) == token
+    end
+
+    test "truncates 17-char tokens" do
+      token = "abcdefghijklmnopq"
+      assert Telemetry.truncate_token(token) == "abcdefgh...nopq"
     end
   end
 

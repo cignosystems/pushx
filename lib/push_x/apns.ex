@@ -45,7 +45,7 @@ defmodule PushX.APNS do
 
   require Logger
 
-  alias PushX.{Config, Message, RateLimiter, Response, Retry, Telemetry}
+  alias PushX.{CircuitBreaker, Config, Message, RateLimiter, Response, Retry, Telemetry}
 
   @apns_prod_url "https://api.push.apple.com"
   @apns_sandbox_url "https://api.sandbox.push.apple.com"
@@ -97,13 +97,17 @@ defmodule PushX.APNS do
   """
   @spec send_once(token(), payload(), [option()]) :: {:ok, Response.t()} | {:error, Response.t()}
   def send_once(device_token, payload, opts \\ []) do
-    # Check rate limit first
-    case RateLimiter.check_and_increment(:apns) do
+    with :ok <- CircuitBreaker.allow?(:apns),
+         :ok <- RateLimiter.check_and_increment(:apns) do
+      result = do_send(device_token, payload, opts)
+      record_circuit_breaker_result(result)
+      result
+    else
+      {:error, :circuit_open} ->
+        {:error, Response.error(:apns, :circuit_open, "Circuit breaker is open")}
+
       {:error, :rate_limited} ->
         {:error, Response.error(:apns, :rate_limited, "Client-side rate limit exceeded")}
-
-      :ok ->
-        do_send(device_token, payload, opts)
     end
   end
 
@@ -115,14 +119,20 @@ defmodule PushX.APNS do
     headers = build_headers(topic, opts)
     body = encode_payload(payload)
 
-    Logger.debug("[PushX.APNS] Sending to #{device_token}")
+    Logger.debug("[PushX.APNS] Sending to #{Telemetry.truncate_token(device_token)}")
 
     Telemetry.start(:apns, device_token)
     start_time = System.monotonic_time()
 
     try do
+      request_opts =
+        Keyword.merge(
+          Config.finch_request_opts(),
+          Keyword.take(opts, [:receive_timeout, :pool_timeout])
+        )
+
       case Finch.build(:post, url, headers, body)
-           |> Finch.request(Config.finch_name(), Config.finch_request_opts()) do
+           |> Finch.request(Config.finch_name(), request_opts) do
         {:ok, %{status: 200, headers: response_headers}} ->
           apns_id = get_header(response_headers, "apns-id")
           response = Response.success(:apns, apns_id)
@@ -210,7 +220,7 @@ defmodule PushX.APNS do
   @spec notification_with_data(String.t(), String.t(), map(), non_neg_integer() | nil) :: map()
   def notification_with_data(title, body, data, badge \\ nil) do
     notification(title, body, badge)
-    |> Map.merge(data)
+    |> Map.merge(Map.delete(data, "aps"))
   end
 
   @doc """
@@ -219,7 +229,7 @@ defmodule PushX.APNS do
   @spec silent_notification(map()) :: map()
   def silent_notification(data \\ %{}) do
     %{"aps" => %{"content-available" => 1}}
-    |> Map.merge(data)
+    |> Map.merge(Map.delete(data, "aps"))
   end
 
   # Safari Web Push helpers
@@ -291,7 +301,7 @@ defmodule PushX.APNS do
           map()
   def web_notification_with_data(title, body, url, data, opts \\ []) do
     web_notification(title, body, url, opts)
-    |> Map.merge(data)
+    |> Map.merge(Map.delete(data, "aps"))
   end
 
   defp parse_url_args(url) when is_binary(url) do
@@ -314,6 +324,17 @@ defmodule PushX.APNS do
   end
 
   # Private functions
+
+  defp record_circuit_breaker_result({:error, %Response{status: status}})
+       when status in [:connection_error, :server_error] do
+    CircuitBreaker.record_failure(:apns)
+  end
+
+  defp record_circuit_breaker_result({:ok, _response}) do
+    CircuitBreaker.record_success(:apns)
+  end
+
+  defp record_circuit_breaker_result(_), do: :ok
 
   defp base_url(:prod), do: @apns_prod_url
   defp base_url(:sandbox), do: @apns_sandbox_url

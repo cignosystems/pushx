@@ -177,12 +177,27 @@ defmodule PushX.Telemetry do
     )
   end
 
-  # Truncate token for privacy (show first 8 and last 4 chars)
-  defp truncate_token(token) when is_binary(token) and byte_size(token) > 16 do
+  @doc """
+  Truncates a device token for privacy-safe logging.
+
+  Shows first 8 and last 4 characters, replacing the middle with `...`.
+  Returns the token unchanged if it is 16 characters or shorter.
+
+  ## Examples
+
+      iex> PushX.Telemetry.truncate_token("abcdefgh12345678ijklmnop")
+      "abcdefgh...mnop"
+
+      iex> PushX.Telemetry.truncate_token("short")
+      "short"
+
+  """
+  @spec truncate_token(String.t()) :: String.t()
+  def truncate_token(token) when is_binary(token) and byte_size(token) > 16 do
     first = binary_part(token, 0, 8)
     last = binary_part(token, byte_size(token) - 4, 4)
     "#{first}...#{last}"
   end
 
-  defp truncate_token(token), do: token
+  def truncate_token(token), do: token
 end

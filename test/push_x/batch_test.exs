@@ -114,6 +114,106 @@ defmodule PushX.BatchTest do
     end
   end
 
+  describe "batch with mixed results via HTTP" do
+    setup do
+      bypass = Bypass.open()
+      {:ok, bypass: bypass}
+    end
+
+    test "returns mix of success and failure results", %{bypass: bypass} do
+      Bypass.expect(bypass, "POST", "/3/device/good-token-1", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_header("apns-id", "id-1")
+        |> Plug.Conn.resp(200, "")
+      end)
+
+      Bypass.expect(bypass, "POST", "/3/device/bad-token", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(400, ~s({"reason": "BadDeviceToken"}))
+      end)
+
+      Bypass.expect(bypass, "POST", "/3/device/good-token-2", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_header("apns-id", "id-2")
+        |> Plug.Conn.resp(200, "")
+      end)
+
+      tokens = ["good-token-1", "bad-token", "good-token-2"]
+      results = batch_send_via_bypass(bypass, tokens)
+
+      assert length(results) == 3
+
+      result_map = Map.new(results)
+      assert {:ok, %PushX.Response{status: :sent, id: "id-1"}} = result_map["good-token-1"]
+      assert {:error, %PushX.Response{status: :invalid_token}} = result_map["bad-token"]
+      assert {:ok, %PushX.Response{status: :sent, id: "id-2"}} = result_map["good-token-2"]
+    end
+
+    test "handles all failures gracefully", %{bypass: bypass} do
+      Bypass.expect(bypass, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(500, ~s({"reason": "InternalServerError"}))
+      end)
+
+      tokens = ["token-1", "token-2"]
+      results = batch_send_via_bypass(bypass, tokens)
+
+      assert length(results) == 2
+      assert Enum.all?(results, fn {_token, result} -> match?({:error, _}, result) end)
+    end
+
+    defp batch_send_via_bypass(bypass, tokens) do
+      tokens
+      |> Task.async_stream(
+        fn token ->
+          url = "http://localhost:#{bypass.port}/3/device/#{token}"
+
+          headers = [
+            {"authorization", "bearer test-jwt"},
+            {"apns-topic", "com.test.app"},
+            {"apns-push-type", "alert"},
+            {"apns-priority", "10"}
+          ]
+
+          body = JSON.encode!(%{"aps" => %{"alert" => "Hello"}})
+
+          result =
+            case Finch.build(:post, url, headers, body)
+                 |> Finch.request(PushX.Config.finch_name()) do
+              {:ok, %{status: 200, headers: response_headers}} ->
+                apns_id =
+                  case List.keyfind(response_headers, "apns-id", 0) do
+                    {_, value} -> value
+                    nil -> nil
+                  end
+
+                {:ok, PushX.Response.success(:apns, apns_id)}
+
+              {:ok, %{status: _status, body: resp_body}} ->
+                reason =
+                  case JSON.decode(resp_body) do
+                    {:ok, %{"reason" => r}} -> r
+                    _ -> "Unknown"
+                  end
+
+                status = PushX.Response.apns_reason_to_status(reason)
+                {:error, PushX.Response.error(:apns, status, reason, resp_body)}
+
+              {:error, _reason} ->
+                {:error, PushX.Response.error(:apns, :connection_error, "Connection failed")}
+            end
+
+          {token, result}
+        end,
+        max_concurrency: 50,
+        timeout: 5000
+      )
+      |> Enum.map(fn {:ok, result} -> result end)
+    end
+  end
+
   describe "PushX.check_rate_limit/1" do
     setup do
       # Disable rate limiting for most tests

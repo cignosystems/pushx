@@ -28,7 +28,7 @@ defmodule PushX.Token do
       false
 
       iex> PushX.Token.validate(:apns, "invalid")
-      {:error, :invalid_format}
+      {:error, :invalid_length}
 
   """
 

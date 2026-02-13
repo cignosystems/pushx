@@ -20,6 +20,7 @@ defmodule PushX.Response do
     * `:rate_limited` - Too many requests, try again later
     * `:server_error` - Provider server error
     * `:connection_error` - Network/connection failure
+    * `:circuit_open` - Circuit breaker is open, provider temporarily blocked
     * `:unknown_error` - Unrecognized error
 
   """
@@ -33,6 +34,7 @@ defmodule PushX.Response do
           | :rate_limited
           | :server_error
           | :connection_error
+          | :circuit_open
           | :unknown_error
 
   @type t :: %__MODULE__{
@@ -155,6 +157,15 @@ defmodule PushX.Response do
 
   @doc """
   Returns true if the response indicates success.
+
+  ## Examples
+
+      iex> PushX.Response.success(:apns, "id-123") |> PushX.Response.success?()
+      true
+
+      iex> PushX.Response.error(:fcm, :invalid_token, "bad") |> PushX.Response.success?()
+      false
+
   """
   @spec success?(t()) :: boolean()
   def success?(%__MODULE__{status: :sent}), do: true
@@ -162,6 +173,15 @@ defmodule PushX.Response do
 
   @doc """
   Returns true if the token should be removed from the database.
+
+  ## Examples
+
+      iex> PushX.Response.error(:apns, :invalid_token, "BadDeviceToken") |> PushX.Response.should_remove_token?()
+      true
+
+      iex> PushX.Response.error(:fcm, :server_error, "Internal") |> PushX.Response.should_remove_token?()
+      false
+
   """
   @spec should_remove_token?(t()) :: boolean()
   def should_remove_token?(%__MODULE__{status: status}) do
@@ -175,6 +195,15 @@ defmodule PushX.Response do
   - `:connection_error` - Network/connection failure
   - `:rate_limited` - Too many requests (with backoff)
   - `:server_error` - Provider server error (5xx)
+
+  ## Examples
+
+      iex> PushX.Response.error(:fcm, :server_error, "Internal") |> PushX.Response.retryable?()
+      true
+
+      iex> PushX.Response.error(:apns, :invalid_token, "bad") |> PushX.Response.retryable?()
+      false
+
   """
   @spec retryable?(t()) :: boolean()
   def retryable?(%__MODULE__{status: status}) do

@@ -16,6 +16,24 @@
 
 ---
 
+## Table of Contents
+
+- [Features](#features)
+- [Quick Start](#quick-start)
+- [Usage Guide](#usage-guide)
+- [Configuration](#configuration)
+- [Credential Storage](#credential-storage)
+- [Getting Your Credentials](#getting-your-credentials)
+- [Telemetry](#telemetry)
+- [Circuit Breaker](#circuit-breaker)
+- [Health Check](#health-check)
+- [Token Cleanup Callback](#token-cleanup-callback)
+- [Troubleshooting](#troubleshooting)
+- [Contributing](#contributing)
+- [License](#license)
+
+---
+
 ## Features
 
 - **HTTP/2** connections via Finch (Mint-based) for optimal performance
@@ -49,7 +67,7 @@ Add `pushx` to your dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:pushx, "~> 0.7"}
+    {:pushx, "~> 0.8"}
   ]
 end
 ```
@@ -412,6 +430,16 @@ PushX.FCM.send_once(token, payload)
 
 > **Tip:** Increase timeouts if connecting from distant regions (e.g., EU to Apple's US servers).
 
+You can also override timeouts per-request:
+
+```elixir
+PushX.APNS.send(token, payload,
+  topic: "com.example.app",
+  receive_timeout: 30_000,
+  pool_timeout: 10_000
+)
+```
+
 ### Rate Limiting
 
 Optional client-side rate limiting prevents exceeding provider limits. Disabled by default.
@@ -603,6 +631,71 @@ defmodule MyApp.Telemetry do
         tags: [:provider]
       )
     ]
+  end
+end
+```
+
+---
+
+## Circuit Breaker
+
+PushX includes an optional circuit breaker that temporarily blocks requests to a provider after consecutive failures. This prevents wasting resources on dead connections.
+
+```elixir
+config :pushx,
+  circuit_breaker_enabled: true,
+  circuit_breaker_threshold: 5,        # consecutive failures to trip
+  circuit_breaker_cooldown_ms: 30_000  # ms before retrying
+```
+
+**States:**
+- **Closed** — Normal operation, all requests flow through
+- **Open** — Provider is failing, requests are immediately rejected with `{:error, %Response{status: :circuit_open}}`
+- **Half-open** — After cooldown, one probe request is allowed. Success closes the circuit; failure re-opens it
+
+Only `:connection_error` and `:server_error` responses count as failures. Invalid tokens and rate limits do not trip the circuit.
+
+```elixir
+# Check circuit breaker state
+PushX.CircuitBreaker.state(:apns)
+#=> :closed
+
+# Manual reset
+PushX.CircuitBreaker.reset(:apns)
+```
+
+---
+
+## Health Check
+
+Check provider configuration and circuit breaker status:
+
+```elixir
+PushX.health_check()
+#=> %{
+#=>   apns: %{configured: true, circuit: :closed},
+#=>   fcm: %{configured: true, circuit: :closed}
+#=> }
+```
+
+---
+
+## Token Cleanup Callback
+
+Automatically clean up invalid tokens from your database when a push fails with `:invalid_token`, `:expired_token`, or `:unregistered`:
+
+```elixir
+config :pushx,
+  on_invalid_token: {MyApp.Push, :handle_invalid_token, []}
+```
+
+The callback receives `(provider, device_token, ...extra_args)` and runs asynchronously:
+
+```elixir
+defmodule MyApp.Push do
+  def handle_invalid_token(provider, device_token) do
+    MyApp.Tokens.delete_by_token(device_token)
+    Logger.info("Removed invalid #{provider} token")
   end
 end
 ```

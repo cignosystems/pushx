@@ -65,7 +65,7 @@ defmodule PushX do
 
   require Logger
 
-  alias PushX.{APNS, FCM, Message, Response, Token, RateLimiter}
+  alias PushX.{APNS, CircuitBreaker, Config, FCM, Message, Response, Token, RateLimiter}
 
   @type provider :: :apns | :fcm
   @type token :: String.t()
@@ -122,14 +122,17 @@ defmodule PushX do
           {:ok, Response.t()} | {:error, Response.t()}
   def push(provider, device_token, message, opts \\ [])
 
-  def push(:apns, device_token, message, opts) do
-    payload = normalize_payload(message, :apns)
-    APNS.send(device_token, payload, opts)
-  end
+  def push(provider, device_token, message, opts) when provider in [:apns, :fcm] do
+    payload = normalize_payload(message, provider)
 
-  def push(:fcm, device_token, message, opts) do
-    payload = normalize_payload(message, :fcm)
-    FCM.send(device_token, payload, opts)
+    result =
+      case provider do
+        :apns -> APNS.send(device_token, payload, opts)
+        :fcm -> FCM.send(device_token, payload, opts)
+      end
+
+    maybe_notify_invalid_token(provider, device_token, result)
+    result
   end
 
   @doc """
@@ -317,6 +320,30 @@ defmodule PushX do
   @spec check_rate_limit(provider()) :: :ok | {:error, :rate_limited}
   defdelegate check_rate_limit(provider), to: RateLimiter, as: :check
 
+  # Health check
+
+  @doc """
+  Returns health status for each configured provider.
+
+  Includes configuration status and circuit breaker state.
+
+  ## Examples
+
+      PushX.health_check()
+      #=> %{
+      #=>   apns: %{configured: true, circuit: :closed},
+      #=>   fcm: %{configured: true, circuit: :closed}
+      #=> }
+
+  """
+  @spec health_check() :: %{apns: map(), fcm: map()}
+  def health_check do
+    %{
+      apns: %{configured: Config.apns_configured?(), circuit: CircuitBreaker.state(:apns)},
+      fcm: %{configured: Config.fcm_configured?(), circuit: CircuitBreaker.state(:fcm)}
+    }
+  end
+
   # Connection management
 
   @doc """
@@ -357,6 +384,20 @@ defmodule PushX do
   end
 
   # Private functions
+
+  defp maybe_notify_invalid_token(provider, token, {:error, %Response{} = response}) do
+    if Response.should_remove_token?(response) do
+      case Config.on_invalid_token() do
+        {mod, fun, args} ->
+          Task.start(fn -> apply(mod, fun, [provider, token | args]) end)
+
+        nil ->
+          :ok
+      end
+    end
+  end
+
+  defp maybe_notify_invalid_token(_provider, _token, _result), do: :ok
 
   defp batch_concurrency do
     PushX.Config.get(:batch_concurrency, 50)
