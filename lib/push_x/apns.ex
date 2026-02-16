@@ -112,11 +112,26 @@ defmodule PushX.APNS do
   end
 
   defp do_send(device_token, payload, opts) do
-    topic = Keyword.get(opts, :topic) || raise ArgumentError, ":topic option is required"
+    case Keyword.get(opts, :topic) do
+      nil ->
+        {:error, Response.error(:apns, :invalid_request, ":topic option is required")}
+
+      topic ->
+        case get_jwt() do
+          {:ok, jwt} ->
+            do_send_with_jwt(device_token, payload, opts, topic, jwt)
+
+          {:error, reason} ->
+            {:error, Response.error(:apns, :auth_error, reason)}
+        end
+    end
+  end
+
+  defp do_send_with_jwt(device_token, payload, opts, topic, jwt) do
     mode = Keyword.get(opts, :mode, Config.apns_mode())
 
     url = "#{base_url(mode)}/3/device/#{device_token}"
-    headers = build_headers(topic, opts)
+    headers = build_headers(jwt, topic, opts)
     body = encode_payload(payload)
 
     Logger.debug("[PushX.APNS] Sending to #{Telemetry.truncate_token(device_token)}")
@@ -339,9 +354,9 @@ defmodule PushX.APNS do
   defp base_url(:prod), do: @apns_prod_url
   defp base_url(:sandbox), do: @apns_sandbox_url
 
-  defp build_headers(topic, opts) do
+  defp build_headers(jwt, topic, opts) do
     [
-      {"authorization", "bearer #{get_jwt()}"},
+      {"authorization", "bearer #{jwt}"},
       {"apns-topic", topic},
       {"apns-push-type", Keyword.get(opts, :push_type, "alert")},
       {"apns-priority", to_string(Keyword.get(opts, :priority, 10))}
@@ -401,14 +416,22 @@ defmodule PushX.APNS do
 
     case :persistent_term.get(cache_key, nil) do
       {token, expires_at} when is_integer(expires_at) and expires_at > now ->
-        token
+        {:ok, token}
 
       _ ->
         refresh_jwt_atomically(cache_key)
     end
   end
 
-  defp refresh_jwt_atomically(cache_key) do
+  @max_jwt_refresh_retries 10
+
+  defp refresh_jwt_atomically(cache_key, retries \\ 0)
+
+  defp refresh_jwt_atomically(_cache_key, retries) when retries >= @max_jwt_refresh_retries do
+    {:error, "JWT refresh timeout after #{retries} attempts"}
+  end
+
+  defp refresh_jwt_atomically(cache_key, retries) do
     lock = :persistent_term.get(:apns_jwt_lock)
 
     case :atomics.compare_exchange(lock, 1, 0, 1) do
@@ -420,13 +443,18 @@ defmodule PushX.APNS do
 
           case :persistent_term.get(cache_key, nil) do
             {token, expires_at} when is_integer(expires_at) and expires_at > now ->
-              token
+              {:ok, token}
 
             _ ->
-              token = generate_jwt()
-              expires_at = now + @jwt_cache_ttl_ms
-              :persistent_term.put(cache_key, {token, expires_at})
-              token
+              case generate_jwt() do
+                {:ok, token} ->
+                  expires_at = now + @jwt_cache_ttl_ms
+                  :persistent_term.put(cache_key, {token, expires_at})
+                  {:ok, token}
+
+                {:error, _} = error ->
+                  error
+              end
           end
         after
           :atomics.put(lock, 1, 0)
@@ -439,11 +467,11 @@ defmodule PushX.APNS do
 
         case :persistent_term.get(cache_key, nil) do
           {token, expires_at} when is_integer(expires_at) and expires_at > now ->
-            token
+            {:ok, token}
 
           _ ->
             # Still not refreshed, try again
-            refresh_jwt_atomically(cache_key)
+            refresh_jwt_atomically(cache_key, retries + 1)
         end
     end
   end
@@ -462,11 +490,11 @@ defmodule PushX.APNS do
 
     case Joken.encode_and_sign(claims, signer) do
       {:ok, token, _claims} ->
-        token
+        {:ok, token}
 
       {:error, reason} ->
         Logger.error("[PushX.APNS] JWT generation failed: #{inspect(reason)}")
-        raise "Failed to generate APNS JWT: #{inspect(reason)}"
+        {:error, "JWT generation failed: #{inspect(reason)}"}
     end
   end
 end

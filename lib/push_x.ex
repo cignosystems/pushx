@@ -68,6 +68,7 @@ defmodule PushX do
   alias PushX.{APNS, CircuitBreaker, Config, FCM, Message, Response, Token, RateLimiter}
 
   @type provider :: :apns | :fcm
+  @type instance_name :: atom()
   @type token :: String.t()
   @type message :: String.t() | map() | Message.t()
   @type option :: APNS.option() | FCM.option()
@@ -118,7 +119,7 @@ defmodule PushX do
       {:error, %PushX.Response{provider: :apns, status: :invalid_token, reason: "BadDeviceToken"}}
 
   """
-  @spec push(provider(), token(), message(), [option()]) ::
+  @spec push(provider() | instance_name(), token(), message(), [option()]) ::
           {:ok, Response.t()} | {:error, Response.t()}
   def push(provider, device_token, message, opts \\ [])
 
@@ -133,6 +134,27 @@ defmodule PushX do
 
     maybe_notify_invalid_token(provider, device_token, result)
     result
+  end
+
+  def push(instance_name, device_token, message, opts) when is_atom(instance_name) do
+    case PushX.Instance.resolve(instance_name) do
+      {:ok, instance_info} ->
+        payload = normalize_payload(message, instance_info.provider)
+        result = PushX.Instance.send(instance_info, device_token, payload, opts)
+        maybe_notify_invalid_token(instance_info.provider, device_token, result)
+        result
+
+      {:error, :not_found} ->
+        {:error, Response.error(:unknown, :unknown_error, "Instance #{instance_name} not found")}
+
+      {:error, :disabled} ->
+        {:error,
+         Response.error(
+           :unknown,
+           :provider_disabled,
+           "Instance #{instance_name} is disabled"
+         )}
+    end
   end
 
   @doc """
@@ -234,9 +256,9 @@ defmodule PushX do
     validate = Keyword.get(opts, :validate_tokens, false)
     send_opts = Keyword.drop(opts, [:concurrency, :timeout, :validate_tokens])
 
-    # Optionally validate tokens first
+    # Optionally validate tokens first (skip for named instances)
     tokens_to_send =
-      if validate do
+      if validate and provider in [:apns, :fcm] do
         Enum.filter(device_tokens, &Token.valid?(provider, &1))
       else
         device_tokens

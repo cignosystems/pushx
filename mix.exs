@@ -1,7 +1,7 @@
 defmodule PushX.MixProject do
   use Mix.Project
 
-  @version "0.8.0"
+  @version "0.9.0"
   @source_url "https://github.com/cignosystems/pushx"
 
   def project do
@@ -65,7 +65,14 @@ defmodule PushX.MixProject do
       extras: ["README.md", "CHANGELOG.md", "LICENSE"],
       source_ref: "v#{@version}",
       source_url: @source_url,
-      logo: "pushx_logo.png"
+      logo: "pushx_logo.png",
+      groups_for_modules: [
+        "Core API": [PushX, PushX.Message, PushX.Response],
+        Providers: [PushX.APNS, PushX.FCM],
+        "Runtime Instances": [PushX.Instance],
+        Infrastructure: [PushX.Config, PushX.Retry, PushX.Token],
+        Observability: [PushX.Telemetry, PushX.CircuitBreaker, PushX.RateLimiter]
+      ]
     ]
   end
 end

@@ -8,8 +8,13 @@ defmodule PushX.Application do
     # Initialize atomic lock for JWT refresh (prevents thundering herd)
     :persistent_term.put(:apns_jwt_lock, :atomics.new(1, signed: false))
 
+    # Initialize ETS table for named instances (fast reads on push path)
+    :ets.new(:pushx_instances, [:named_table, :public, :set])
+
     children =
       [
+        # Dynamic supervisor for named instances
+        {DynamicSupervisor, name: PushX.Instance.DynamicSupervisor, strategy: :one_for_one},
         # Rate limiter (always started, but only tracks when enabled)
         PushX.RateLimiter,
         # Circuit breaker (always started, but only tracks when enabled)

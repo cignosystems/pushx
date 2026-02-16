@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-02-16
+
+### Added
+- **Dynamic instances (runtime config)** — Start, stop, reconfigure, enable/disable APNS and FCM instances at runtime without application restart. Each instance gets its own HTTP/2 pool, JWT cache, and OAuth process. Enables database-backed admin panels for multi-provider setups. See [Dynamic Instances](README.md#dynamic-instances-runtime-config) in the README.
+  - `PushX.Instance.start/3` — Start a named APNS or FCM instance
+  - `PushX.Instance.stop/1` — Stop and clean up an instance
+  - `PushX.Instance.reconfigure/2` — Hot-swap credentials or config without restart
+  - `PushX.Instance.enable/1` / `disable/1` — Toggle instances without tearing down pools
+  - `PushX.Instance.list/0` / `status/1` / `resolve/1` — Query running instances
+  - `PushX.Instance.reconnect/1` — Restart an instance's HTTP/2 pool
+  - `PushX.push/4` accepts instance names (e.g., `PushX.push(:apns_prod, token, msg, opts)`)
+- **New response statuses** — `:invalid_request` (missing required options like `:topic`) and `:auth_error` (JWT/credential failure). Both are non-retryable and don't trip the circuit breaker.
+- **Credential rotation docs** — README now documents how to hot-swap APNS/FCM credentials without restart for both static config and dynamic instances
+- **HexDocs module groups** — Modules are now organized into Core API, Providers, Runtime Instances, Infrastructure, and Observability groups
+- 45 new tests (Instance lifecycle, pool management, concurrent instances, error paths)
+- Total test count: 286 tests, 23 doctests
+
+### Fixed
+- **APNS missing `:topic` no longer raises** — Returns `{:error, %Response{status: :invalid_request}}` instead of raising `ArgumentError`, consistent with the error-tuple API contract
+- **JWT generation failure no longer crashes** — Returns `{:error, %Response{status: :auth_error}}` instead of raising, preventing process crashes from invalid private keys
+- **JWT refresh no longer recurses infinitely** — Added depth limit (10 retries, 500ms max wait) to prevent stack overflow if the atomic lock holder crashes
+
+### Changed
+- `PushX.Response` provider type now includes `:unknown` for instance-not-found/disabled errors
+
 ## [0.8.0] - 2026-02-13
 
 ### Added
@@ -241,6 +266,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - HTTP/2 connections via Finch
 - Zero external JSON dependency (uses Elixir 1.18+ built-in JSON)
 
+[0.9.0]: https://github.com/cignosystems/pushx/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/cignosystems/pushx/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/cignosystems/pushx/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/cignosystems/pushx/compare/v0.6.2...v0.7.0

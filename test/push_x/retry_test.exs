@@ -43,6 +43,16 @@ defmodule PushX.RetryTest do
       response = Response.error(:fcm, :unknown_error)
       assert Retry.retryable?(response) == false
     end
+
+    test "returns false for auth_error" do
+      response = Response.error(:apns, :auth_error)
+      assert Retry.retryable?(response) == false
+    end
+
+    test "returns false for invalid_request" do
+      response = Response.error(:apns, :invalid_request)
+      assert Retry.retryable?(response) == false
+    end
   end
 
   describe "calculate_delay/4" do
@@ -129,6 +139,32 @@ defmodule PushX.RetryTest do
 
       assert {:error, %Response{status: :invalid_token}} = result
       # Only called once
+      assert :counters.get(call_count, 1) == 1
+    end
+
+    test "does not retry auth_error" do
+      call_count = :counters.new(1, [:atomics])
+
+      result =
+        Retry.with_retry(fn ->
+          :counters.add(call_count, 1, 1)
+          {:error, Response.error(:apns, :auth_error, "JWT generation failed")}
+        end)
+
+      assert {:error, %Response{status: :auth_error}} = result
+      assert :counters.get(call_count, 1) == 1
+    end
+
+    test "does not retry invalid_request" do
+      call_count = :counters.new(1, [:atomics])
+
+      result =
+        Retry.with_retry(fn ->
+          :counters.add(call_count, 1, 1)
+          {:error, Response.error(:apns, :invalid_request, ":topic required")}
+        end)
+
+      assert {:error, %Response{status: :invalid_request}} = result
       assert :counters.get(call_count, 1) == 1
     end
 

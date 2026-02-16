@@ -55,14 +55,15 @@ defmodule PushX.Retry do
       max_attempts = Keyword.get(opts, :max_attempts, config_max_attempts())
       base_delay = Keyword.get(opts, :base_delay_ms, config_base_delay())
       max_delay = Keyword.get(opts, :max_delay_ms, config_max_delay())
+      reconnect_fn = Keyword.get(opts, :reconnect_fn, &PushX.reconnect/0)
 
-      do_retry(fun, 1, max_attempts, base_delay, max_delay)
+      do_retry(fun, 1, max_attempts, base_delay, max_delay, reconnect_fn)
     else
       fun.()
     end
   end
 
-  defp do_retry(fun, attempt, max_attempts, base_delay, max_delay) do
+  defp do_retry(fun, attempt, max_attempts, base_delay, max_delay, reconnect_fn) do
     case fun.() do
       {:ok, response} ->
         {:ok, response}
@@ -86,7 +87,7 @@ defmodule PushX.Retry do
             # On first connection error, restart Finch pool to discard stale HTTP/2 connections.
             # Retrying on the same dead connection is futile — the pool must be recycled.
             if response.status == :connection_error and attempt == 1 do
-              case PushX.reconnect() do
+              case reconnect_fn.() do
                 :ok ->
                   :ok
 
@@ -106,7 +107,7 @@ defmodule PushX.Retry do
 
             Telemetry.retry_attempt(response.provider, response.status, attempt, delay)
             Process.sleep(delay)
-            do_retry(fun, attempt + 1, max_attempts, base_delay, max_delay)
+            do_retry(fun, attempt + 1, max_attempts, base_delay, max_delay, reconnect_fn)
         end
     end
   end

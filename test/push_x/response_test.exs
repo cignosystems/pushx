@@ -82,6 +82,33 @@ defmodule PushX.ResponseTest do
       response = Response.error(:apns, :server_error)
       assert Response.should_remove_token?(response) == false
     end
+
+    test "returns false for auth_error" do
+      response = Response.error(:apns, :auth_error)
+      assert Response.should_remove_token?(response) == false
+    end
+
+    test "returns false for invalid_request" do
+      response = Response.error(:apns, :invalid_request)
+      assert Response.should_remove_token?(response) == false
+    end
+  end
+
+  describe "retryable?/1" do
+    test "returns false for auth_error" do
+      response = Response.error(:apns, :auth_error, "JWT failed")
+      assert Response.retryable?(response) == false
+    end
+
+    test "returns false for invalid_request" do
+      response = Response.error(:apns, :invalid_request, ":topic required")
+      assert Response.retryable?(response) == false
+    end
+
+    test "returns true for connection_error" do
+      response = Response.error(:apns, :connection_error)
+      assert Response.retryable?(response) == true
+    end
   end
 
   describe "apns_reason_to_status/1" do

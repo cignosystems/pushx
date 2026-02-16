@@ -22,6 +22,7 @@
 - [Quick Start](#quick-start)
 - [Usage Guide](#usage-guide)
 - [Configuration](#configuration)
+- [Dynamic Instances (Runtime Config)](#dynamic-instances-runtime-config)
 - [Credential Storage](#credential-storage)
 - [Getting Your Credentials](#getting-your-credentials)
 - [Telemetry](#telemetry)
@@ -67,7 +68,7 @@ Add `pushx` to your dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:pushx, "~> 0.8"}
+    {:pushx, "~> 0.9"}
   ]
 end
 ```
@@ -187,6 +188,8 @@ end
 | `:rate_limited` | Too many requests | Automatic retry with backoff |
 | `:server_error` | Provider server error | Automatic retry with backoff |
 | `:connection_error` | Network failure | Automatic retry with backoff |
+| `:invalid_request` | Missing required option (e.g., no `:topic` for APNS) | Fix request parameters |
+| `:auth_error` | JWT/credential failure (e.g., invalid private key) | Check credentials |
 | `:unknown_error` | Unrecognized error | Check `reason` field |
 
 **Helper functions:**
@@ -456,6 +459,171 @@ When enabled, rate limits are checked automatically before each `send` call.
 
 ---
 
+## Dynamic Instances (Runtime Config)
+
+For applications that manage push credentials from a database or admin panel, PushX supports starting, stopping, and reconfiguring provider instances at runtime — no application restart needed.
+
+Each instance gets its own HTTP/2 connection pool, JWT cache (APNS), and OAuth process (FCM). Multiple instances can run concurrently (e.g., APNS sandbox + APNS prod + FCM).
+
+### Starting Instances
+
+```elixir
+# APNS sandbox (for development/testing)
+PushX.Instance.start(:apns_sandbox, :apns,
+  key_id: "ABC123",
+  team_id: "TEAM456",
+  private_key: apns_key_pem,
+  mode: :sandbox
+)
+
+# APNS production
+PushX.Instance.start(:apns_prod, :apns,
+  key_id: "ABC123",
+  team_id: "TEAM456",
+  private_key: apns_key_pem,
+  mode: :prod
+)
+
+# FCM
+PushX.Instance.start(:my_fcm, :fcm,
+  project_id: "my-firebase-project",
+  credentials: service_account_map
+)
+```
+
+The names `:apns` and `:fcm` are reserved for the static config path and cannot be used as instance names.
+
+### Sending via Instances
+
+Pass the instance name instead of `:apns` or `:fcm`:
+
+```elixir
+PushX.push(:apns_prod, device_token, "Hello!", topic: "com.example.app")
+PushX.push(:my_fcm, device_token, %{title: "Alert", body: "Something happened"})
+```
+
+Batch sending works the same way:
+
+```elixir
+PushX.push_batch(:apns_prod, tokens, message, topic: "com.example.app")
+```
+
+### Enable / Disable
+
+Disable an instance to reject new pushes while keeping the connection pool warm:
+
+```elixir
+PushX.Instance.disable(:apns_sandbox)
+# => PushX.push(:apns_sandbox, ...) returns {:error, %Response{status: :provider_disabled}}
+
+PushX.Instance.enable(:apns_sandbox)
+# => pushes work again
+```
+
+### Reconfigure
+
+Update config without restarting the application. The old pool is stopped and a new one starts with the merged config:
+
+```elixir
+# Switch environment
+PushX.Instance.reconfigure(:apns_sandbox, mode: :prod)
+
+# Rotate credentials
+PushX.Instance.reconfigure(:apns_prod,
+  key_id: "NEW_KEY_ID",
+  private_key: new_pem_string
+)
+```
+
+### List and Status
+
+```elixir
+PushX.Instance.list()
+#=> [
+#=>   %{name: :apns_prod, provider: :apns, enabled: true},
+#=>   %{name: :apns_sandbox, provider: :apns, enabled: false},
+#=>   %{name: :my_fcm, provider: :fcm, enabled: true}
+#=> ]
+
+PushX.Instance.status(:apns_prod)
+#=> {:ok, %{provider: :apns, enabled: true}}
+```
+
+### Stop
+
+```elixir
+PushX.Instance.stop(:apns_sandbox)
+```
+
+Cleans up the Finch pool, JWT cache, Goth process (FCM), and ETS entry.
+
+### Example: Database-Backed Admin Panel
+
+```elixir
+defmodule MyApp.PushAdmin do
+  @doc "Boot all saved instances on application start."
+  def boot do
+    MyApp.Repo.all(MyApp.PushConfig)
+    |> Enum.each(fn config ->
+      PushX.Instance.start(
+        String.to_atom(config.name),
+        String.to_atom(config.provider),
+        build_opts(config)
+      )
+    end)
+  end
+
+  @doc "Called from admin panel when config is updated."
+  def update(config) do
+    name = String.to_atom(config.name)
+    PushX.Instance.reconfigure(name, build_opts(config))
+  end
+
+  @doc "Called from admin panel toggle."
+  def toggle(name, enabled?) do
+    if enabled?,
+      do: PushX.Instance.enable(name),
+      else: PushX.Instance.disable(name)
+  end
+
+  defp build_opts(%{provider: "apns"} = c) do
+    [
+      key_id: c.key_id,
+      team_id: c.team_id,
+      private_key: c.private_key,
+      mode: String.to_atom(c.mode)
+    ]
+  end
+
+  defp build_opts(%{provider: "fcm"} = c) do
+    [
+      project_id: c.project_id,
+      credentials: JSON.decode!(c.credentials_json)
+    ]
+  end
+end
+```
+
+Call `MyApp.PushAdmin.boot()` from your `Application.start/2` after PushX starts.
+
+### Instance Config Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `:key_id` | `String.t()` | required (APNS) | Apple Key ID |
+| `:team_id` | `String.t()` | required (APNS) | Apple Team ID |
+| `:private_key` | `String.t()` \| `{:file, path}` \| `{:system, env}` | required (APNS) | PEM private key |
+| `:mode` | `:prod` \| `:sandbox` | `:prod` | APNS environment |
+| `:project_id` | `String.t()` | required (FCM) | Firebase project ID |
+| `:credentials` | `map()` \| `String.t()` | required (FCM) | Service account (map or JSON string) |
+| `:pool_size` | `integer()` | `2` | Finch connections per pool |
+| `:pool_count` | `integer()` | `1` | Number of Finch pools |
+| `:receive_timeout` | `integer()` | `15_000` | Response timeout (ms) |
+| `:pool_timeout` | `integer()` | `5_000` | Pool checkout timeout (ms) |
+| `:connect_timeout` | `integer()` | `10_000` | TCP connect timeout (ms) |
+
+---
+
 ## Credential Storage
 
 ### File System (Development)
@@ -571,12 +739,45 @@ You need: **Project ID** and a **Service Account JSON file**.
 
 ### Credential Rotation
 
-APNS .p8 keys and FCM service accounts **don't expire**. When you need to rotate:
+APNS .p8 keys and FCM service accounts **don't expire**. You only need to rotate them if you revoke a key or want to follow a rotation policy.
+
+#### With restart (simplest)
 
 1. Generate new credentials in Apple/Google console
 2. Update your secrets (Fly: `fly secrets set`, AWS: update in Secrets Manager)
-3. Restart or redeploy your app
+3. Redeploy your app
 4. Revoke old credentials after all instances are updated
+
+#### Without restart (static config)
+
+The static config path reads credentials from `Application` env on each JWT generation, so you can hot-swap them at runtime:
+
+```elixir
+# 1. Update application env with new credentials
+Application.put_env(:pushx, :apns_key_id, "NEW_KEY_ID")
+Application.put_env(:pushx, :apns_private_key, new_pem_string)
+
+# 2. Clear the cached JWT (otherwise the old token is used for up to 50 min)
+:persistent_term.erase(:pushx_apns_jwt_cache)
+
+# 3. Reconnect to discard connections authenticated with the old token
+PushX.reconnect()
+```
+
+For FCM, Goth manages OAuth2 tokens automatically. To rotate service account credentials without restart, use the dynamic instance API below.
+
+#### Without restart (dynamic instances)
+
+If you use `PushX.Instance`, call `reconfigure/2` — it stops the old pool and starts a fresh one with the new credentials:
+
+```elixir
+PushX.Instance.reconfigure(:apns_prod,
+  key_id: "NEW_KEY_ID",
+  private_key: new_pem_string
+)
+```
+
+In-flight requests on the old pool get connection errors, which the retry logic handles automatically.
 
 ---
 

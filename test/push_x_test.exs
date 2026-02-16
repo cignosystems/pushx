@@ -22,10 +22,9 @@ defmodule PushXTest do
   end
 
   describe "push/4 argument validation" do
-    test "raises for unknown provider" do
-      assert_raise FunctionClauseError, fn ->
-        PushX.push(:unknown, "token", "message")
-      end
+    test "returns error for unknown instance name" do
+      assert {:error, %PushX.Response{status: :unknown_error}} =
+               PushX.push(:unknown, "token", "message")
     end
   end
 

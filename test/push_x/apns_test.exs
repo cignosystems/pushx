@@ -82,10 +82,10 @@ defmodule PushX.APNSTest do
   end
 
   describe "send/3 validation" do
-    test "raises when topic is missing" do
-      assert_raise ArgumentError, ~r/:topic option is required/, fn ->
-        APNS.send("token", %{"aps" => %{}}, [])
-      end
+    test "returns error when topic is missing" do
+      assert {:error,
+              %PushX.Response{status: :invalid_request, reason: ":topic option is required"}} =
+               APNS.send("token", %{"aps" => %{}}, [])
     end
   end
 

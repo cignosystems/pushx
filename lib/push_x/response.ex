@@ -21,6 +21,8 @@ defmodule PushX.Response do
     * `:server_error` - Provider server error
     * `:connection_error` - Network/connection failure
     * `:circuit_open` - Circuit breaker is open, provider temporarily blocked
+    * `:invalid_request` - Missing or invalid request parameters (e.g., no `:topic` for APNS)
+    * `:auth_error` - Authentication failure (e.g., invalid private key, JWT generation failed)
     * `:unknown_error` - Unrecognized error
 
   """
@@ -35,10 +37,13 @@ defmodule PushX.Response do
           | :server_error
           | :connection_error
           | :circuit_open
+          | :provider_disabled
+          | :invalid_request
+          | :auth_error
           | :unknown_error
 
   @type t :: %__MODULE__{
-          provider: :apns | :fcm,
+          provider: :apns | :fcm | :unknown,
           status: status(),
           id: String.t() | nil,
           reason: String.t() | nil,
@@ -58,7 +63,7 @@ defmodule PushX.Response do
   @doc """
   Creates a successful response.
   """
-  @spec success(provider :: :apns | :fcm, id :: String.t() | nil) :: t()
+  @spec success(provider :: :apns | :fcm | :unknown, id :: String.t() | nil) :: t()
   def success(provider, id \\ nil) do
     %__MODULE__{
       provider: provider,
@@ -70,7 +75,8 @@ defmodule PushX.Response do
   @doc """
   Creates an error response.
   """
-  @spec error(provider :: :apns | :fcm, status :: status(), reason :: String.t() | nil) :: t()
+  @spec error(provider :: :apns | :fcm | :unknown, status :: status(), reason :: String.t() | nil) ::
+          t()
   def error(provider, status, reason \\ nil) do
     %__MODULE__{
       provider: provider,
@@ -83,7 +89,7 @@ defmodule PushX.Response do
   Creates an error response with raw data.
   """
   @spec error(
-          provider :: :apns | :fcm,
+          provider :: :apns | :fcm | :unknown,
           status :: status(),
           reason :: String.t() | nil,
           raw :: any()
@@ -101,7 +107,7 @@ defmodule PushX.Response do
   Creates an error response with raw data and retry_after value.
   """
   @spec error(
-          provider :: :apns | :fcm,
+          provider :: :apns | :fcm | :unknown,
           status :: status(),
           reason :: String.t() | nil,
           raw :: any(),
