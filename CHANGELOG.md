@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-02-19
+
+### Added
+- **`PushX.push_data/3,4`** — Send data-only (silent) push notifications via both `:fcm` and named instances. Returns a clear error for `:apns` with guidance to use `push/4` with `push_type: "background"`.
+- **`PushX.Response.extract_fcm_error_code/1`** — Public function to extract FCM-specific error codes from the `details` array in FCM v1 API responses. Eliminates duplicated parsing logic across modules.
+- 16 new tests (8 for `extract_fcm_error_code`, 4 for FCM data-only/structured payloads, 3 for `push_data`, 1 for NOT_FOUND mapping)
+- Total test count: 302 tests, 25 doctests
+
+### Fixed
+- **FCM UNREGISTERED errors parsed as unknown_error** — FCM v1 API wraps the real error code (e.g., `UNREGISTERED`) in a `details` array with `NOT_FOUND` as the top-level gRPC status. The parser only read the top-level status, so `on_invalid_token` callbacks never fired for unregistered tokens. Now extracts the FCM-specific `errorCode` from the details array. (Fixes #3)
+- **FCM `build_message` always added notification key** — `build_message` hardcoded a `"notification"` key in the base map, making data-only messages impossible and sending `"notification": null` for empty Message structs. Now uses conditional logic to only include notification when content exists. (Fixes #2)
+- **FCM structured payloads treated as notifications** — Raw maps with `"notification"` and/or `"data"` keys were wrapped in another `"notification"` key instead of being passed through. Now detects structured payloads and preserves their structure.
+
 ## [0.9.0] - 2026-02-16
 
 ### Added
@@ -266,6 +279,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - HTTP/2 connections via Finch
 - Zero external JSON dependency (uses Elixir 1.18+ built-in JSON)
 
+[0.10.0]: https://github.com/cignosystems/pushx/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/cignosystems/pushx/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/cignosystems/pushx/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/cignosystems/pushx/compare/v0.7.0...v0.7.1
