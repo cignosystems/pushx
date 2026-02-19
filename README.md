@@ -247,7 +247,30 @@ PushX.APNS.send(token, payload,
 Send data without a visible notification. All values are automatically converted to strings (FCM requirement):
 
 ```elixir
+# Via unified API (supports named instances)
+PushX.push_data(:fcm, token, %{action: "sync", id: 123})
+PushX.push_data(:my_fcm, token, %{action: "sync", id: 123})
+
+# Via provider module directly
 PushX.FCM.send_data(token, %{action: "sync", id: 123})
+```
+
+### Notification with Custom Data (FCM)
+
+Send a visible notification with a custom data payload attached:
+
+```elixir
+# Structured payload — notification + data
+PushX.push(:fcm, token, %{
+  "notification" => %{"title" => "Alert", "body" => "Something happened"},
+  "data" => %{"event_id" => "1", "action" => "open_event"}
+})
+
+# Works with named instances too
+PushX.push(:my_fcm, token, %{
+  "notification" => %{"title" => "Alert", "body" => "Something happened"},
+  "data" => %{"event_id" => "1"}
+})
 ```
 
 ### Web Push
@@ -500,6 +523,9 @@ Pass the instance name instead of `:apns` or `:fcm`:
 ```elixir
 PushX.push(:apns_prod, device_token, "Hello!", topic: "com.example.app")
 PushX.push(:my_fcm, device_token, %{title: "Alert", body: "Something happened"})
+
+# Data-only (silent) message via instance
+PushX.push_data(:my_fcm, device_token, %{action: "sync", id: 123})
 ```
 
 Batch sending works the same way:

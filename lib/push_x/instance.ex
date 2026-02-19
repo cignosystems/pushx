@@ -482,11 +482,11 @@ defmodule PushX.Instance do
   defp handle_fcm_error(status, body, response_headers) do
     {error_code, error_message} =
       case JSON.decode(body) do
-        {:ok, %{"error" => %{"status" => code, "message" => msg}}} ->
-          {code, msg}
+        {:ok, %{"error" => %{"status" => code, "message" => msg}} = decoded} ->
+          {Response.extract_fcm_error_code(decoded) || code, msg}
 
-        {:ok, %{"error" => %{"code" => code, "message" => msg}}} ->
-          {to_string(code), msg}
+        {:ok, %{"error" => %{"code" => code, "message" => msg}} = decoded} ->
+          {Response.extract_fcm_error_code(decoded) || to_string(code), msg}
 
         _ ->
           {"UNKNOWN", "HTTP #{status}"}
@@ -608,32 +608,34 @@ defmodule PushX.Instance do
   # -- FCM message builder --
 
   defp build_fcm_message(token, %Message{} = message, opts) do
-    base = %{
-      "token" => token,
-      "notification" => Message.to_fcm_payload(message)["notification"]
-    }
+    base =
+      %{"token" => token}
+      |> maybe_put("notification", Message.to_fcm_payload(message)["notification"])
+      |> maybe_put("data", stringify_map(Keyword.get(opts, :data) || message.data))
+      |> maybe_put("android", Keyword.get(opts, :android))
+      |> maybe_put("webpush", Keyword.get(opts, :webpush))
 
-    base
-    |> maybe_put("data", stringify_map(Keyword.get(opts, :data) || message.data))
-    |> maybe_put("android", Keyword.get(opts, :android))
-    |> maybe_put("webpush", Keyword.get(opts, :webpush))
-    |> then(&%{"message" => &1})
+    %{"message" => base}
   end
 
   defp build_fcm_message(token, payload, opts) when is_map(payload) do
     base = %{"token" => token}
 
     base =
-      if Map.has_key?(payload, "notification") do
-        Map.put(base, "notification", payload["notification"])
-      else
-        Map.put(base, "notification", payload)
+      cond do
+        Map.has_key?(payload, "notification") or Map.has_key?(payload, "data") ->
+          base
+          |> maybe_put("notification", payload["notification"])
+          |> maybe_put("data", stringify_map(Keyword.get(opts, :data) || payload["data"]))
+
+        true ->
+          Map.put(base, "notification", payload)
+          |> maybe_put("data", stringify_map(Keyword.get(opts, :data)))
       end
 
     base
-    |> maybe_put("data", stringify_map(Keyword.get(opts, :data)))
-    |> maybe_put("android", Keyword.get(opts, :android))
-    |> maybe_put("webpush", Keyword.get(opts, :webpush))
+    |> maybe_put("android", Keyword.get(opts, :android) || payload["android"])
+    |> maybe_put("webpush", Keyword.get(opts, :webpush) || payload["webpush"])
     |> then(&%{"message" => &1})
   end
 

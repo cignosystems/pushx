@@ -223,6 +223,41 @@ defmodule PushXTest do
     defp maybe_set(message, :data, value), do: Message.data(message, value)
   end
 
+  describe "push_data/4" do
+    test "returns clear error for :apns provider" do
+      result = PushX.push_data(:apns, "token", %{action: "sync"})
+
+      assert {:error, %PushX.Response{status: :invalid_request, provider: :apns}} = result
+      assert {:error, %PushX.Response{reason: reason}} = result
+      assert reason =~ "only supported for FCM"
+    end
+
+    test "returns error for unknown instance" do
+      result = PushX.push_data(:nonexistent_instance, "token", %{action: "sync"})
+
+      assert {:error, %PushX.Response{status: :unknown_error}} = result
+      assert {:error, %PushX.Response{reason: reason}} = result
+      assert reason =~ "nonexistent_instance"
+    end
+
+    test "returns error for disabled instance" do
+      {:ok, _} =
+        PushX.Instance.start(:push_data_disabled, :apns,
+          key_id: "KEY",
+          team_id: "TEAM",
+          private_key: Application.get_env(:pushx, :apns_private_key),
+          mode: :sandbox
+        )
+
+      on_exit(fn -> PushX.Instance.stop(:push_data_disabled) end)
+      PushX.Instance.disable(:push_data_disabled)
+
+      result = PushX.push_data(:push_data_disabled, "token", %{action: "sync"})
+
+      assert {:error, %PushX.Response{status: :provider_disabled}} = result
+    end
+  end
+
   describe "reconnect/0" do
     test "restarts Finch pool and returns :ok" do
       # Finch should be running

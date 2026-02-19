@@ -27,8 +27,17 @@ defmodule PushX.FCM do
       message = PushX.Message.new("Hello", "World")
       PushX.FCM.send(device_token, message)
 
-      # With custom data
-      PushX.FCM.send(device_token, notification, data: %{"key" => "value"})
+      # Notification with custom data
+      PushX.FCM.send(device_token, %{
+        "notification" => %{"title" => "Alert", "body" => "Something happened"},
+        "data" => %{"event_id" => "1"}
+      })
+
+      # Data-only (silent) message — no visible notification
+      PushX.FCM.send_data(device_token, %{action: "sync", id: 123})
+
+      # Data-only via structured payload
+      PushX.FCM.send(device_token, %{"data" => %{"action" => "sync"}})
 
   ## Web Push (Chrome, Firefox, Edge)
 
@@ -430,36 +439,38 @@ defmodule PushX.FCM do
   defp record_circuit_breaker_result(_), do: :ok
 
   defp build_message(token, %Message{} = message, opts) do
-    base = %{
-      "token" => token,
-      "notification" => Message.to_fcm_payload(message)["notification"]
-    }
+    base =
+      %{"token" => token}
+      |> maybe_put("notification", Message.to_fcm_payload(message)["notification"])
+      |> maybe_put("data", stringify_map(Keyword.get(opts, :data) || message.data))
+      |> maybe_put("android", Keyword.get(opts, :android))
+      |> maybe_put("apns", Keyword.get(opts, :apns))
+      |> maybe_put("webpush", Keyword.get(opts, :webpush))
 
-    base
-    |> maybe_put("data", stringify_map(Keyword.get(opts, :data) || message.data))
-    |> maybe_put("android", Keyword.get(opts, :android))
-    |> maybe_put("apns", Keyword.get(opts, :apns))
-    |> maybe_put("webpush", Keyword.get(opts, :webpush))
-    |> then(&%{"message" => &1})
+    %{"message" => base}
   end
 
   defp build_message(token, payload, opts) when is_map(payload) do
     base = %{"token" => token}
 
-    # If payload has "notification" key, use it directly
-    # Otherwise treat the whole payload as notification
+    # Structured payload: has "notification" and/or "data" keys
+    # Simple payload: treat entire map as notification (backwards compatible)
     base =
-      if Map.has_key?(payload, "notification") do
-        Map.put(base, "notification", payload["notification"])
-      else
-        Map.put(base, "notification", payload)
+      cond do
+        Map.has_key?(payload, "notification") or Map.has_key?(payload, "data") ->
+          base
+          |> maybe_put("notification", payload["notification"])
+          |> maybe_put("data", stringify_map(Keyword.get(opts, :data) || payload["data"]))
+
+        true ->
+          Map.put(base, "notification", payload)
+          |> maybe_put("data", stringify_map(Keyword.get(opts, :data)))
       end
 
     base
-    |> maybe_put("data", stringify_map(Keyword.get(opts, :data)))
-    |> maybe_put("android", Keyword.get(opts, :android))
-    |> maybe_put("apns", Keyword.get(opts, :apns))
-    |> maybe_put("webpush", Keyword.get(opts, :webpush))
+    |> maybe_put("android", Keyword.get(opts, :android) || payload["android"])
+    |> maybe_put("apns", Keyword.get(opts, :apns) || payload["apns"])
+    |> maybe_put("webpush", Keyword.get(opts, :webpush) || payload["webpush"])
     |> then(&%{"message" => &1})
   end
 
@@ -478,11 +489,12 @@ defmodule PushX.FCM do
   defp handle_error_response(status, body, response_headers) do
     {error_code, error_message} =
       case JSON.decode(body) do
-        {:ok, %{"error" => %{"status" => code, "message" => msg}}} ->
-          {code, msg}
+        {:ok, %{"error" => %{"status" => code, "message" => msg}} = decoded} ->
+          # Prefer FCM-specific errorCode from details over generic gRPC status
+          {Response.extract_fcm_error_code(decoded) || code, msg}
 
-        {:ok, %{"error" => %{"code" => code, "message" => msg}}} ->
-          {to_string(code), msg}
+        {:ok, %{"error" => %{"code" => code, "message" => msg}} = decoded} ->
+          {Response.extract_fcm_error_code(decoded) || to_string(code), msg}
 
         _ ->
           {"UNKNOWN", "HTTP #{status}"}

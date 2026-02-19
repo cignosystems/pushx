@@ -27,6 +27,15 @@ defmodule PushX do
       # With title and body
       PushX.push(:apns, token, %{title: "New Message", body: "You have a notification"}, topic: "...")
 
+      # Notification with custom data (FCM)
+      PushX.push(:fcm, token, %{
+        "notification" => %{"title" => "Alert", "body" => "Event triggered"},
+        "data" => %{"event_id" => "123"}
+      })
+
+      # Data-only (silent) message (FCM)
+      PushX.push_data(:fcm, token, %{action: "sync", id: 123})
+
       # Batch send to multiple devices
       results = PushX.push_batch(:fcm, tokens, "Hello Everyone!")
 
@@ -155,6 +164,51 @@ defmodule PushX do
            "Instance #{instance_name} is disabled"
          )}
     end
+  end
+
+  @doc """
+  Sends a data-only (silent) push notification to a device.
+
+  The message contains only a `data` payload with no visible notification.
+  Useful for triggering background syncs or delivering structured data.
+
+  ## Arguments
+
+    * `provider` - `:fcm` or a named instance atom
+    * `device_token` - The device's push token
+    * `data` - A map of key-value data (values will be stringified)
+    * `opts` - Provider-specific options
+
+  ## Examples
+
+      # Via default FCM config
+      PushX.push_data(:fcm, token, %{action: "sync", id: 123})
+
+      # Via named instance
+      PushX.push_data(:my_fcm, token, %{action: "sync", id: 123})
+
+  """
+  @spec push_data(provider() | instance_name(), token(), map(), [option()]) ::
+          {:ok, Response.t()} | {:error, Response.t()}
+  def push_data(provider_or_instance, device_token, data, opts \\ [])
+
+  def push_data(:apns, _device_token, _data, _opts) do
+    {:error,
+     Response.error(
+       :apns,
+       :invalid_request,
+       "push_data is only supported for FCM. For APNS silent push, use push/4 with push_type: \"background\""
+     )}
+  end
+
+  def push_data(:fcm, device_token, data, opts) do
+    result = FCM.send_data(device_token, data, opts)
+    maybe_notify_invalid_token(:fcm, device_token, result)
+    result
+  end
+
+  def push_data(instance_name, device_token, data, opts) when is_atom(instance_name) do
+    push(instance_name, device_token, %{"data" => data}, opts)
   end
 
   @doc """

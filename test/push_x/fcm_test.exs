@@ -106,6 +106,36 @@ defmodule PushX.FCMTest do
       assert {:error, %Response{status: :unregistered, reason: "Token not registered"}} = result
     end
 
+    test "returns unregistered when UNREGISTERED is in details array (NOT_FOUND wrapper)",
+         %{bypass: bypass} do
+      # FCM often returns UNREGISTERED wrapped in details with NOT_FOUND as top-level status
+      error_body =
+        JSON.encode!(%{
+          "error" => %{
+            "code" => 404,
+            "message" => "Requested entity was not found.",
+            "status" => "NOT_FOUND",
+            "details" => [
+              %{
+                "@type" => "type.googleapis.com/google.firebase.fcm.v1.FcmError",
+                "errorCode" => "UNREGISTERED"
+              }
+            ]
+          }
+        })
+
+      Bypass.expect_once(bypass, "POST", "/v1/projects/test-project/messages:send", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(404, error_body)
+      end)
+
+      result = send_via_bypass(bypass, "old-token", %{"title" => "Hi", "body" => "There"})
+
+      assert {:error, %Response{status: :unregistered, reason: "Requested entity was not found."}} =
+               result
+    end
+
     test "returns rate_limited error on QUOTA_EXCEEDED", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/v1/projects/test-project/messages:send", fn conn ->
         conn
@@ -176,6 +206,69 @@ defmodule PushX.FCMTest do
       assert {:ok, %Response{status: :sent}} = result
     end
 
+    test "sends data-only message when payload has data key but no notification", %{
+      bypass: bypass
+    } do
+      Bypass.expect_once(bypass, "POST", "/v1/projects/test-project/messages:send", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        payload = JSON.decode!(body)
+
+        assert payload["message"]["token"] == "token"
+        assert payload["message"]["data"]["action"] == "sync"
+        refute Map.has_key?(payload["message"], "notification")
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, ~s({"name": "msg-id"}))
+      end)
+
+      result =
+        send_via_bypass(bypass, "token", %{"data" => %{action: "sync"}})
+
+      assert {:ok, %Response{status: :sent}} = result
+    end
+
+    test "sends notification with data when payload has both keys", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/v1/projects/test-project/messages:send", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        payload = JSON.decode!(body)
+
+        assert payload["message"]["notification"]["title"] == "Alert"
+        assert payload["message"]["data"]["event_id"] == "1"
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, ~s({"name": "msg-id"}))
+      end)
+
+      result =
+        send_via_bypass(bypass, "token", %{
+          "notification" => %{"title" => "Alert", "body" => "Something happened"},
+          "data" => %{"event_id" => "1"}
+        })
+
+      assert {:ok, %Response{status: :sent}} = result
+    end
+
+    test "sends data-only message with Message struct when no title/body", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/v1/projects/test-project/messages:send", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        payload = JSON.decode!(body)
+
+        assert payload["message"]["data"]["action"] == "sync"
+        refute Map.has_key?(payload["message"], "notification")
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, ~s({"name": "msg-id"}))
+      end)
+
+      message = PushX.Message.new() |> PushX.Message.data(%{action: "sync"})
+      result = send_via_bypass(bypass, "token", message)
+
+      assert {:ok, %Response{status: :sent}} = result
+    end
+
     test "includes data payload when provided", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/v1/projects/test-project/messages:send", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
@@ -240,11 +333,11 @@ defmodule PushX.FCMTest do
         {:ok, %{status: _status, body: body}} ->
           {error_code, error_message} =
             case JSON.decode(body) do
-              {:ok, %{"error" => %{"status" => code, "message" => msg}}} ->
-                {code, msg}
+              {:ok, %{"error" => %{"status" => code, "message" => msg}} = decoded} ->
+                {Response.extract_fcm_error_code(decoded) || code, msg}
 
-              {:ok, %{"error" => %{"code" => code, "message" => msg}}} ->
-                {to_string(code), msg}
+              {:ok, %{"error" => %{"code" => code, "message" => msg}} = decoded} ->
+                {Response.extract_fcm_error_code(decoded) || to_string(code), msg}
 
               _ ->
                 {"UNKNOWN", "Unknown error"}
@@ -259,22 +352,30 @@ defmodule PushX.FCMTest do
     end
 
     defp build_message(token, %PushX.Message{} = message, opts) do
-      base = %{
-        "token" => token,
-        "notification" => PushX.Message.to_fcm_payload(message)["notification"]
-      }
+      base =
+        %{"token" => token}
+        |> maybe_put("notification", PushX.Message.to_fcm_payload(message)["notification"])
+        |> maybe_put("data", stringify_map(Keyword.get(opts, :data) || message.data))
 
-      base
-      |> maybe_put("data", stringify_map(Keyword.get(opts, :data) || message.data))
-      |> then(&%{"message" => &1})
+      %{"message" => base}
     end
 
     defp build_message(token, payload, opts) when is_map(payload) do
-      base = %{"token" => token, "notification" => payload}
+      base = %{"token" => token}
 
-      base
-      |> maybe_put("data", stringify_map(Keyword.get(opts, :data)))
-      |> then(&%{"message" => &1})
+      base =
+        cond do
+          Map.has_key?(payload, "notification") or Map.has_key?(payload, "data") ->
+            base
+            |> maybe_put("notification", payload["notification"])
+            |> maybe_put("data", stringify_map(Keyword.get(opts, :data) || payload["data"]))
+
+          true ->
+            Map.put(base, "notification", payload)
+            |> maybe_put("data", stringify_map(Keyword.get(opts, :data)))
+        end
+
+      %{"message" => base}
     end
 
     defp maybe_put(map, _key, nil), do: map

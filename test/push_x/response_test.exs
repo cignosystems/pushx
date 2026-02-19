@@ -141,5 +141,99 @@ defmodule PushX.ResponseTest do
     test "returns unknown_error for unrecognized codes" do
       assert Response.fcm_error_to_status("NEW_ERROR_CODE") == :unknown_error
     end
+
+    test "NOT_FOUND maps to unknown_error (real error code is in details)" do
+      assert Response.fcm_error_to_status("NOT_FOUND") == :unknown_error
+    end
+  end
+
+  describe "extract_fcm_error_code/1" do
+    test "extracts UNREGISTERED from details array" do
+      body = %{
+        "error" => %{
+          "code" => 404,
+          "message" => "Requested entity was not found.",
+          "status" => "NOT_FOUND",
+          "details" => [
+            %{
+              "@type" => "type.googleapis.com/google.firebase.fcm.v1.FcmError",
+              "errorCode" => "UNREGISTERED"
+            }
+          ]
+        }
+      }
+
+      assert Response.extract_fcm_error_code(body) == "UNREGISTERED"
+    end
+
+    test "extracts INVALID_ARGUMENT from details array" do
+      body = %{
+        "error" => %{
+          "status" => "INVALID_ARGUMENT",
+          "details" => [
+            %{
+              "@type" => "type.googleapis.com/google.firebase.fcm.v1.FcmError",
+              "errorCode" => "INVALID_ARGUMENT"
+            }
+          ]
+        }
+      }
+
+      assert Response.extract_fcm_error_code(body) == "INVALID_ARGUMENT"
+    end
+
+    test "extracts error code when details has multiple entries" do
+      body = %{
+        "error" => %{
+          "status" => "NOT_FOUND",
+          "details" => [
+            %{
+              "@type" => "type.googleapis.com/google.rpc.BadRequest",
+              "fieldViolations" => []
+            },
+            %{
+              "@type" => "type.googleapis.com/google.firebase.fcm.v1.FcmError",
+              "errorCode" => "UNREGISTERED"
+            }
+          ]
+        }
+      }
+
+      assert Response.extract_fcm_error_code(body) == "UNREGISTERED"
+    end
+
+    test "returns nil when details has no FcmError entry" do
+      body = %{
+        "error" => %{
+          "status" => "INVALID_ARGUMENT",
+          "details" => [
+            %{
+              "@type" => "type.googleapis.com/google.rpc.BadRequest",
+              "fieldViolations" => []
+            }
+          ]
+        }
+      }
+
+      assert Response.extract_fcm_error_code(body) == nil
+    end
+
+    test "returns nil when details is empty" do
+      body = %{"error" => %{"status" => "INTERNAL", "details" => []}}
+      assert Response.extract_fcm_error_code(body) == nil
+    end
+
+    test "returns nil when no details key" do
+      body = %{"error" => %{"status" => "INTERNAL", "message" => "Server error"}}
+      assert Response.extract_fcm_error_code(body) == nil
+    end
+
+    test "returns nil for empty map" do
+      assert Response.extract_fcm_error_code(%{}) == nil
+    end
+
+    test "returns nil for non-map input" do
+      assert Response.extract_fcm_error_code(nil) == nil
+    end
   end
 end

@@ -144,6 +144,38 @@ defmodule PushX.Response do
   end
 
   @doc """
+  Extracts the FCM-specific error code from a decoded error response body.
+
+  The FCM v1 API wraps the real error code (e.g., `"UNREGISTERED"`) inside the
+  `details` array with `@type` `"type.googleapis.com/google.firebase.fcm.v1.FcmError"`,
+  while the top-level `"status"` contains a generic gRPC code (e.g., `"NOT_FOUND"`).
+
+  Returns `nil` if no FCM-specific error code is found in the details.
+
+  ## Examples
+
+      iex> body = %{"error" => %{"status" => "NOT_FOUND", "details" => [%{"@type" => "type.googleapis.com/google.firebase.fcm.v1.FcmError", "errorCode" => "UNREGISTERED"}]}}
+      iex> PushX.Response.extract_fcm_error_code(body)
+      "UNREGISTERED"
+
+      iex> PushX.Response.extract_fcm_error_code(%{"error" => %{"status" => "INTERNAL"}})
+      nil
+
+  """
+  @spec extract_fcm_error_code(map()) :: String.t() | nil
+  def extract_fcm_error_code(%{"error" => %{"details" => details}}) when is_list(details) do
+    Enum.find_value(details, fn
+      %{"@type" => "type.googleapis.com/google.firebase.fcm.v1.FcmError", "errorCode" => code} ->
+        code
+
+      _ ->
+        nil
+    end)
+  end
+
+  def extract_fcm_error_code(_), do: nil
+
+  @doc """
   Maps an FCM error code to a status atom.
 
   See: https://firebase.google.com/docs/reference/fcm/rest/v1/ErrorCode
