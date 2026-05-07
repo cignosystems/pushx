@@ -23,11 +23,6 @@ defmodule PushX.Instance.Server do
     finch_name = Keyword.fetch!(opts, :finch_name)
     goth_name = Keyword.get(opts, :goth_name)
 
-    # Initialize JWT cache lock for APNS instances
-    if provider == :apns do
-      :persistent_term.put({:apns_jwt_lock, name}, :atomics.new(1, signed: false))
-    end
-
     # Insert instance info into ETS for fast reads on push path
     :ets.insert(
       @table,
@@ -49,16 +44,9 @@ defmodule PushX.Instance.Server do
     :ets.delete(@table, name)
 
     if provider == :apns do
-      safe_erase({:apns_jwt_cache, name})
-      safe_erase({:apns_jwt_lock, name})
+      PushX.JWTCache.invalidate({:apns_jwt, name})
     end
 
     :ok
-  end
-
-  defp safe_erase(key) do
-    :persistent_term.erase(key)
-  rescue
-    ArgumentError -> :ok
   end
 end

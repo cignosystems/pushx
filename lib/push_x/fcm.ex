@@ -59,9 +59,17 @@ defmodule PushX.FCM do
 
   require Logger
 
-  alias PushX.{CircuitBreaker, Config, Message, RateLimiter, Response, Retry, Telemetry}
-
-  @fcm_base_url "https://fcm.googleapis.com/v1/projects"
+  alias PushX.{
+    CircuitBreaker,
+    Config,
+    HTTP,
+    Message,
+    RateLimiter,
+    Response,
+    Retry,
+    Telemetry,
+    URLs
+  }
 
   @type token :: String.t()
   @type payload :: map() | Message.t()
@@ -119,9 +127,33 @@ defmodule PushX.FCM do
   end
 
   defp do_send(device_token, payload, opts) do
+    message = build_message(device_token, payload, opts)
+
+    # Validate the payload (encode + size) before requesting an OAuth token.
+    with {:ok, body} <- HTTP.safe_encode(message),
+         :ok <- check_payload_size(body) do
+      do_send_authenticated(device_token, body, opts)
+    else
+      {:error, reason} when is_binary(reason) ->
+        {:error, Response.error(:fcm, :invalid_request, "Failed to encode payload: #{reason}")}
+
+      {:error, %Response{} = response} ->
+        {:error, response}
+    end
+  end
+
+  defp do_send_authenticated(device_token, body, opts) do
     case get_access_token() do
       {:ok, access_token} ->
-        do_send_with_token(device_token, payload, opts, access_token)
+        project_id = Keyword.get(opts, :project_id, Config.fcm_project_id())
+        url = URLs.fcm_send_url(project_id)
+
+        headers = [
+          {"authorization", "Bearer #{access_token}"},
+          {"content-type", "application/json"}
+        ]
+
+        send_fcm_request(device_token, url, headers, body, opts)
 
       {:error, reason} ->
         Logger.error("[PushX.FCM] Failed to get OAuth token: #{inspect(reason)}")
@@ -129,20 +161,8 @@ defmodule PushX.FCM do
     end
   end
 
-  defp do_send_with_token(device_token, payload, opts, access_token) do
-    project_id = Keyword.get(opts, :project_id, Config.fcm_project_id())
-    url = "#{@fcm_base_url}/#{project_id}/messages:send"
-
-    message = build_message(device_token, payload, opts)
-
-    headers = [
-      {"authorization", "Bearer #{access_token}"},
-      {"content-type", "application/json"}
-    ]
-
-    body = JSON.encode!(message)
-
-    Logger.debug("[PushX.FCM] Sending to #{Telemetry.truncate_token(device_token)}")
+  defp send_fcm_request(device_token, url, headers, body, opts) do
+    Logger.debug(fn -> "[PushX.FCM] Sending to #{Telemetry.truncate_token(device_token)}" end)
 
     Telemetry.start(:fcm, device_token)
     start_time = System.monotonic_time()
@@ -181,6 +201,26 @@ defmodule PushX.FCM do
           {:error, response}
       end
     rescue
+      e in CaseClauseError ->
+        # See PushX.APNS for context — Finch's outer case raises on 2-tuple
+        # error returns from NimblePool. Treat any 2-tuple atom-reason as a
+        # retryable connection error so PushX.Retry recovers; reraise
+        # anything else so real programming bugs still surface.
+        case e do
+          %CaseClauseError{term: {:error, reason}} when is_atom(reason) ->
+            Logger.error(
+              "[PushX.FCM] Finch connection error (#{inspect(reason)}) — likely concurrent request limit / pool process death"
+            )
+
+            response = Response.error(:fcm, :connection_error, Atom.to_string(reason))
+            Telemetry.error(:fcm, device_token, start_time, response)
+            {:error, response}
+
+          _other ->
+            Telemetry.exception(:fcm, device_token, start_time, :error, e, __STACKTRACE__)
+            reraise e, __STACKTRACE__
+        end
+
       e ->
         Telemetry.exception(:fcm, device_token, start_time, :error, e, __STACKTRACE__)
         reraise e, __STACKTRACE__
@@ -195,6 +235,9 @@ defmodule PushX.FCM do
   All standard options plus:
     * `:concurrency` - Max concurrent requests (default: 50)
     * `:timeout` - Timeout per request in ms (default: 30_000)
+    * `:validate_tokens` - Validate token format before sending (default: false).
+      Invalid tokens get `{:error, %Response{status: :invalid_token}}` without
+      hitting the network.
 
   ## Returns
 
@@ -205,11 +248,18 @@ defmodule PushX.FCM do
   def send_batch(device_tokens, payload, opts \\ []) do
     concurrency = Keyword.get(opts, :concurrency, 50)
     timeout = Keyword.get(opts, :timeout, 30_000)
-    send_opts = Keyword.drop(opts, [:concurrency, :timeout])
+    validate = Keyword.get(opts, :validate_tokens, false)
+    send_opts = Keyword.drop(opts, [:concurrency, :timeout, :validate_tokens])
 
     device_tokens
     |> Task.async_stream(
-      fn token -> {token, send(token, payload, send_opts)} end,
+      fn token ->
+        if validate and not PushX.Token.valid?(:fcm, token) do
+          {token, {:error, Response.error(:fcm, :invalid_token, "Invalid token format")}}
+        else
+          {token, send(token, payload, send_opts)}
+        end
+      end,
       max_concurrency: concurrency,
       timeout: timeout,
       on_timeout: :kill_task
@@ -236,7 +286,7 @@ defmodule PushX.FCM do
   @spec notification(String.t(), String.t(), keyword()) :: map()
   def notification(title, body, opts \\ []) do
     %{"title" => title, "body" => body}
-    |> maybe_put("image", Keyword.get(opts, :image))
+    |> HTTP.maybe_put("image", Keyword.get(opts, :image))
   end
 
   # Web Push helpers
@@ -277,15 +327,15 @@ defmodule PushX.FCM do
   def web_notification(title, body, link, opts \\ []) do
     notification_payload =
       %{"title" => title, "body" => body}
-      |> maybe_put("icon", Keyword.get(opts, :icon))
-      |> maybe_put("image", Keyword.get(opts, :image))
+      |> HTTP.maybe_put("icon", Keyword.get(opts, :icon))
+      |> HTTP.maybe_put("image", Keyword.get(opts, :image))
 
     webpush_notification =
       %{}
-      |> maybe_put("badge", Keyword.get(opts, :badge))
-      |> maybe_put("tag", Keyword.get(opts, :tag))
-      |> maybe_put("renotify", Keyword.get(opts, :renotify))
-      |> maybe_put("requireInteraction", Keyword.get(opts, :require_interaction))
+      |> HTTP.maybe_put("badge", Keyword.get(opts, :badge))
+      |> HTTP.maybe_put("tag", Keyword.get(opts, :tag))
+      |> HTTP.maybe_put("renotify", Keyword.get(opts, :renotify))
+      |> HTTP.maybe_put("requireInteraction", Keyword.get(opts, :require_interaction))
 
     %{
       "notification" => notification_payload,
@@ -352,9 +402,37 @@ defmodule PushX.FCM do
   end
 
   defp do_send_data(device_token, data, opts) do
+    message = %{
+      "message" => %{
+        "token" => device_token,
+        "data" => HTTP.stringify_map(data)
+      }
+    }
+
+    with {:ok, body} <- HTTP.safe_encode(message),
+         :ok <- check_payload_size(body) do
+      do_send_data_authenticated(device_token, body, opts)
+    else
+      {:error, reason} when is_binary(reason) ->
+        {:error, Response.error(:fcm, :invalid_request, "Failed to encode payload: #{reason}")}
+
+      {:error, %Response{} = response} ->
+        {:error, response}
+    end
+  end
+
+  defp do_send_data_authenticated(device_token, body, opts) do
     case get_access_token() do
       {:ok, access_token} ->
-        do_send_data_with_token(device_token, data, opts, access_token)
+        project_id = Keyword.get(opts, :project_id, Config.fcm_project_id())
+        url = URLs.fcm_send_url(project_id)
+
+        headers = [
+          {"authorization", "Bearer #{access_token}"},
+          {"content-type", "application/json"}
+        ]
+
+        send_fcm_data_request(device_token, url, headers, body, opts)
 
       {:error, reason} ->
         Logger.error("[PushX.FCM] Failed to get OAuth token: #{inspect(reason)}")
@@ -362,25 +440,10 @@ defmodule PushX.FCM do
     end
   end
 
-  defp do_send_data_with_token(device_token, data, opts, access_token) do
-    project_id = Keyword.get(opts, :project_id, Config.fcm_project_id())
-    url = "#{@fcm_base_url}/#{project_id}/messages:send"
-
-    message = %{
-      "message" => %{
-        "token" => device_token,
-        "data" => stringify_map(data)
-      }
-    }
-
-    headers = [
-      {"authorization", "Bearer #{access_token}"},
-      {"content-type", "application/json"}
-    ]
-
-    body = JSON.encode!(message)
-
-    Logger.debug("[PushX.FCM] Sending data to #{Telemetry.truncate_token(device_token)}")
+  defp send_fcm_data_request(device_token, url, headers, body, opts) do
+    Logger.debug(fn ->
+      "[PushX.FCM] Sending data to #{Telemetry.truncate_token(device_token)}"
+    end)
 
     Telemetry.start(:fcm, device_token)
     start_time = System.monotonic_time()
@@ -419,6 +482,26 @@ defmodule PushX.FCM do
           {:error, response}
       end
     rescue
+      e in CaseClauseError ->
+        # See PushX.APNS for context — Finch's outer case raises on 2-tuple
+        # error returns from NimblePool. Treat any 2-tuple atom-reason as a
+        # retryable connection error so PushX.Retry recovers; reraise
+        # anything else so real programming bugs still surface.
+        case e do
+          %CaseClauseError{term: {:error, reason}} when is_atom(reason) ->
+            Logger.error(
+              "[PushX.FCM] Finch connection error (#{inspect(reason)}) — likely concurrent request limit / pool process death"
+            )
+
+            response = Response.error(:fcm, :connection_error, Atom.to_string(reason))
+            Telemetry.error(:fcm, device_token, start_time, response)
+            {:error, response}
+
+          _other ->
+            Telemetry.exception(:fcm, device_token, start_time, :error, e, __STACKTRACE__)
+            reraise e, __STACKTRACE__
+        end
+
       e ->
         Telemetry.exception(:fcm, device_token, start_time, :error, e, __STACKTRACE__)
         reraise e, __STACKTRACE__
@@ -426,6 +509,22 @@ defmodule PushX.FCM do
   end
 
   # Private functions
+
+  # FCM payload size limit per Google docs.
+  @fcm_max_bytes 4096
+
+  defp check_payload_size(body) do
+    if byte_size(body) > @fcm_max_bytes do
+      {:error,
+       Response.error(
+         :fcm,
+         :payload_too_large,
+         "Payload #{byte_size(body)} bytes exceeds FCM limit of #{@fcm_max_bytes}"
+       )}
+    else
+      :ok
+    end
+  end
 
   defp record_circuit_breaker_result({:error, %Response{status: status}})
        when status in [:connection_error, :server_error] do
@@ -441,11 +540,11 @@ defmodule PushX.FCM do
   defp build_message(token, %Message{} = message, opts) do
     base =
       %{"token" => token}
-      |> maybe_put("notification", Message.to_fcm_payload(message)["notification"])
-      |> maybe_put("data", stringify_map(Keyword.get(opts, :data) || message.data))
-      |> maybe_put("android", Keyword.get(opts, :android))
-      |> maybe_put("apns", Keyword.get(opts, :apns))
-      |> maybe_put("webpush", Keyword.get(opts, :webpush))
+      |> HTTP.maybe_put("notification", Message.to_fcm_payload(message)["notification"])
+      |> HTTP.maybe_put("data", HTTP.stringify_map(Keyword.get(opts, :data) || message.data))
+      |> HTTP.maybe_put("android", Keyword.get(opts, :android))
+      |> HTTP.maybe_put("apns", Keyword.get(opts, :apns))
+      |> HTTP.maybe_put("webpush", Keyword.get(opts, :webpush))
 
     %{"message" => base}
   end
@@ -459,31 +558,22 @@ defmodule PushX.FCM do
       cond do
         Map.has_key?(payload, "notification") or Map.has_key?(payload, "data") ->
           base
-          |> maybe_put("notification", payload["notification"])
-          |> maybe_put("data", stringify_map(Keyword.get(opts, :data) || payload["data"]))
+          |> HTTP.maybe_put("notification", payload["notification"])
+          |> HTTP.maybe_put(
+            "data",
+            HTTP.stringify_map(Keyword.get(opts, :data) || payload["data"])
+          )
 
         true ->
           Map.put(base, "notification", payload)
-          |> maybe_put("data", stringify_map(Keyword.get(opts, :data)))
+          |> HTTP.maybe_put("data", HTTP.stringify_map(Keyword.get(opts, :data)))
       end
 
     base
-    |> maybe_put("android", Keyword.get(opts, :android) || payload["android"])
-    |> maybe_put("apns", Keyword.get(opts, :apns) || payload["apns"])
-    |> maybe_put("webpush", Keyword.get(opts, :webpush) || payload["webpush"])
+    |> HTTP.maybe_put("android", Keyword.get(opts, :android) || payload["android"])
+    |> HTTP.maybe_put("apns", Keyword.get(opts, :apns) || payload["apns"])
+    |> HTTP.maybe_put("webpush", Keyword.get(opts, :webpush) || payload["webpush"])
     |> then(&%{"message" => &1})
-  end
-
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, _key, data) when data == %{}, do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, value)
-
-  # FCM data values must be strings
-  defp stringify_map(nil), do: nil
-  defp stringify_map(map) when map == %{}, do: nil
-
-  defp stringify_map(map) when is_map(map) do
-    Map.new(map, fn {k, v} -> {to_string(k), to_string(v)} end)
   end
 
   defp handle_error_response(status, body, response_headers) do
@@ -501,33 +591,10 @@ defmodule PushX.FCM do
       end
 
     error_status = Response.fcm_error_to_status(error_code)
-    retry_after = parse_retry_after(response_headers)
+    retry_after = HTTP.parse_retry_after(response_headers)
 
     Logger.warning("[PushX.FCM] Failed #{status}: #{error_code} - #{error_message}")
     {:error, Response.error(:fcm, error_status, error_message, body, retry_after)}
-  end
-
-  defp parse_retry_after(headers) do
-    case get_header(headers, "retry-after") do
-      nil -> nil
-      value -> parse_retry_after_value(value)
-    end
-  end
-
-  defp parse_retry_after_value(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {seconds, ""} -> seconds
-      _ -> nil
-    end
-  end
-
-  defp parse_retry_after_value(_), do: nil
-
-  defp get_header(headers, key) do
-    case List.keyfind(headers, key, 0) do
-      {_, value} -> value
-      nil -> nil
-    end
   end
 
   defp get_access_token do

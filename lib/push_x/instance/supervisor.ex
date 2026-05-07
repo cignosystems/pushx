@@ -38,8 +38,8 @@ defmodule PushX.Instance.Supervisor do
     {Finch,
      name: finch_name,
      pools: %{
-       "https://api.push.apple.com" => http2_pool_opts(config),
-       "https://api.sandbox.push.apple.com" => http2_pool_opts(config)
+       PushX.URLs.apns_prod() => http2_pool_opts(config),
+       PushX.URLs.apns_sandbox() => http2_pool_opts(config)
      }}
   end
 
@@ -47,7 +47,7 @@ defmodule PushX.Instance.Supervisor do
     {Finch,
      name: finch_name,
      pools: %{
-       "https://fcm.googleapis.com" => http2_pool_opts(config)
+       PushX.URLs.fcm_origin() => http2_pool_opts(config)
      }}
   end
 

@@ -162,6 +162,22 @@ defmodule PushX.MessageTest do
       assert payload["safe_key"] == "safe_value"
       refute payload["aps"]["alert"] == "HACKED"
     end
+
+    test "data with atom :aps key does not overwrite notification" do
+      message =
+        Message.new("Hello", "World")
+        |> Message.data(%{aps: %{"alert" => "HACKED"}, safe_key: "safe_value"})
+
+      payload = Message.to_apns_payload(message)
+
+      # The result must JSON-encode without producing duplicate "aps" keys
+      json = JSON.encode!(payload)
+      decoded = JSON.decode!(json)
+
+      assert decoded["aps"]["alert"]["title"] == "Hello"
+      assert decoded["aps"]["alert"]["body"] == "World"
+      refute decoded["aps"]["alert"] == "HACKED"
+    end
   end
 
   describe "to_fcm_payload/1" do

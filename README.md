@@ -14,6 +14,10 @@
   <a href="https://github.com/cignosystems/pushx/blob/main/LICENSE"><img src="https://img.shields.io/hexpm/l/pushx.svg" alt="License"></a>
 </p>
 
+> **AI coding assistants:** see [`AGENTS.md`](AGENTS.md) for the mental model,
+> idiomatic patterns, and a list of mistakes commonly made when integrating
+> PushX. Also rendered on [hexdocs](https://hexdocs.pm/pushx/agents.html).
+
 ---
 
 ## Table of Contents
@@ -68,7 +72,7 @@ Add `pushx` to your dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:pushx, "~> 0.9"}
+    {:pushx, "~> 0.11"}
   ]
 end
 ```

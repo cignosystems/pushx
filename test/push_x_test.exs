@@ -256,6 +256,24 @@ defmodule PushXTest do
 
       assert {:error, %PushX.Response{status: :provider_disabled}} = result
     end
+
+    test "rejects APNS named instance with clear error" do
+      {:ok, _} =
+        PushX.Instance.start(:push_data_apns, :apns,
+          key_id: "KEY",
+          team_id: "TEAM",
+          private_key: Application.get_env(:pushx, :apns_private_key),
+          mode: :sandbox
+        )
+
+      on_exit(fn -> PushX.Instance.stop(:push_data_apns) end)
+
+      result = PushX.push_data(:push_data_apns, "token", %{action: "sync"})
+
+      assert {:error, %PushX.Response{status: :invalid_request, provider: :apns}} = result
+      assert {:error, %PushX.Response{reason: reason}} = result
+      assert reason =~ "only supported for FCM"
+    end
   end
 
   describe "reconnect/0" do

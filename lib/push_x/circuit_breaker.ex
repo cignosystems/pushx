@@ -65,11 +65,14 @@ defmodule PushX.CircuitBreaker do
 
   @doc """
   Records a successful request, resetting the circuit to `:closed`.
+
+  The write is serialized through the GenServer so concurrent successes
+  and failures cannot lose updates via ETS read-modify-write.
   """
   @spec record_success(provider()) :: :ok
   def record_success(provider) do
     if enabled?() do
-      :ets.insert(@table_name, {provider, :closed, 0, nil})
+      GenServer.call(__MODULE__, {:record_success, provider})
     end
 
     :ok
@@ -77,11 +80,13 @@ defmodule PushX.CircuitBreaker do
 
   @doc """
   Records a failed request. Opens the circuit if the failure threshold is reached.
+
+  Serialized through the GenServer.
   """
   @spec record_failure(provider()) :: :ok
   def record_failure(provider) do
     if enabled?() do
-      do_record_failure(provider)
+      GenServer.call(__MODULE__, {:record_failure, provider})
     end
 
     :ok
@@ -120,6 +125,17 @@ defmodule PushX.CircuitBreaker do
     :ets.insert(table, {:fcm, :closed, 0, nil})
 
     {:ok, %{table: table}}
+  end
+
+  @impl true
+  def handle_call({:record_failure, provider}, _from, state) do
+    do_record_failure(provider)
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:record_success, provider}, _from, state) do
+    :ets.insert(@table_name, {provider, :closed, 0, nil})
+    {:reply, :ok, state}
   end
 
   ## Private Functions

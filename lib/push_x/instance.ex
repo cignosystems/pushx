@@ -49,14 +49,11 @@ defmodule PushX.Instance do
 
   require Logger
 
-  alias PushX.{Message, Response, Retry, Telemetry}
+  alias PushX.{HTTP, JWTCache, Message, Response, Retry, Telemetry, URLs}
 
   @table :pushx_instances
   @reserved_names [:apns, :fcm]
 
-  @apns_prod_url "https://api.push.apple.com"
-  @apns_sandbox_url "https://api.sandbox.push.apple.com"
-  @fcm_base_url "https://fcm.googleapis.com/v1/projects"
   @jwt_cache_ttl_ms 50 * 60 * 1000
 
   # -- Lifecycle API --
@@ -290,25 +287,58 @@ defmodule PushX.Instance do
   end
 
   defp apns_send_once(info, device_token, payload, opts) do
-    case Keyword.get(opts, :topic) do
-      nil ->
+    mode = Keyword.get(opts, :mode, Keyword.get(info.config, :mode, :prod))
+
+    cond do
+      mode not in [:prod, :sandbox] ->
+        {:error,
+         Response.error(
+           :apns,
+           :invalid_request,
+           "Invalid :mode #{inspect(mode)} (expected :prod or :sandbox)"
+         )}
+
+      Keyword.get(opts, :topic) in [nil, ""] ->
         {:error, Response.error(:apns, :invalid_request, ":topic option is required")}
 
-      topic ->
-        case get_instance_jwt(info) do
-          {:ok, jwt} ->
-            do_apns_send(info, device_token, payload, opts, topic, jwt)
+      not safe_token?(device_token) ->
+        {:error,
+         Response.error(:apns, :invalid_token, "Device token contains invalid characters")}
 
-          {:error, reason} ->
-            {:error, Response.error(:apns, :auth_error, reason)}
+      true ->
+        with {:ok, body} <- encode_apns_payload_safe(payload),
+             :ok <- check_apns_payload_size(body, opts) do
+          apns_send_authenticated(info, device_token, body, opts, mode)
+        else
+          {:error, reason} when is_binary(reason) ->
+            {:error,
+             Response.error(:apns, :invalid_request, "Failed to encode payload: #{reason}")}
+
+          {:error, %Response{} = response} ->
+            {:error, response}
         end
     end
   end
 
-  defp do_apns_send(info, device_token, payload, opts, topic, jwt) do
-    mode = Keyword.get(opts, :mode, Keyword.get(info.config, :mode, :prod))
+  defp apns_send_authenticated(info, device_token, body, opts, mode) do
+    topic = Keyword.fetch!(opts, :topic)
 
-    url = "#{apns_base_url(mode)}/3/device/#{device_token}"
+    case get_instance_jwt(info) do
+      {:ok, jwt} ->
+        do_apns_send(info, device_token, body, opts, topic, jwt, mode)
+
+      {:error, reason} ->
+        {:error, Response.error(:apns, :auth_error, reason)}
+    end
+  end
+
+  @safe_token_regex ~r/\A[A-Za-z0-9_\-]+\z/
+
+  defp safe_token?(token) when is_binary(token), do: Regex.match?(@safe_token_regex, token)
+  defp safe_token?(_), do: false
+
+  defp do_apns_send(info, device_token, body, opts, topic, jwt, mode) do
+    url = "#{URLs.apns(mode)}/3/device/#{device_token}"
 
     headers =
       [
@@ -317,11 +347,13 @@ defmodule PushX.Instance do
         {"apns-push-type", Keyword.get(opts, :push_type, "alert")},
         {"apns-priority", to_string(Keyword.get(opts, :priority, 10))}
       ]
-      |> maybe_add_header("apns-expiration", Keyword.get(opts, :expiration))
-      |> maybe_add_header("apns-collapse-id", Keyword.get(opts, :collapse_id))
+      |> HTTP.maybe_add_header("apns-expiration", Keyword.get(opts, :expiration))
+      |> HTTP.maybe_add_header("apns-collapse-id", Keyword.get(opts, :collapse_id))
 
-    body = encode_apns_payload(payload)
+    send_apns_instance_request(info, device_token, url, headers, body)
+  end
 
+  defp send_apns_instance_request(info, device_token, url, headers, body) do
     Telemetry.start(:apns, device_token)
     start_time = System.monotonic_time()
 
@@ -333,7 +365,7 @@ defmodule PushX.Instance do
     case Finch.build(:post, url, headers, body)
          |> Finch.request(info.finch_name, request_opts) do
       {:ok, %{status: 200, headers: resp_headers}} ->
-        apns_id = get_header(resp_headers, "apns-id")
+        apns_id = HTTP.get_header(resp_headers, "apns-id")
         response = Response.success(:apns, apns_id)
         Telemetry.stop(:apns, device_token, start_time, response)
         {:ok, response}
@@ -363,9 +395,32 @@ defmodule PushX.Instance do
   end
 
   defp fcm_send_once(info, device_token, payload, opts) do
+    message = build_fcm_message(device_token, payload, opts)
+
+    with {:ok, body} <- HTTP.safe_encode(message),
+         :ok <- check_fcm_payload_size(body) do
+      fcm_send_authenticated(info, device_token, body)
+    else
+      {:error, reason} when is_binary(reason) ->
+        {:error, Response.error(:fcm, :invalid_request, "Failed to encode payload: #{reason}")}
+
+      {:error, %Response{} = response} ->
+        {:error, response}
+    end
+  end
+
+  defp fcm_send_authenticated(info, device_token, body) do
     case Goth.fetch(info.goth_name) do
       {:ok, %{token: access_token}} ->
-        fcm_send_with_token(info, device_token, payload, opts, access_token)
+        project_id = Keyword.fetch!(info.config, :project_id)
+        url = URLs.fcm_send_url(project_id)
+
+        headers = [
+          {"authorization", "Bearer #{access_token}"},
+          {"content-type", "application/json"}
+        ]
+
+        send_fcm_instance_request(info, device_token, url, headers, body)
 
       {:error, reason} ->
         Logger.error("[PushX.Instance] FCM OAuth token error: #{inspect(reason)}")
@@ -373,19 +428,7 @@ defmodule PushX.Instance do
     end
   end
 
-  defp fcm_send_with_token(info, device_token, payload, opts, access_token) do
-    project_id = Keyword.fetch!(info.config, :project_id)
-    url = "#{@fcm_base_url}/#{project_id}/messages:send"
-
-    message = build_fcm_message(device_token, payload, opts)
-
-    headers = [
-      {"authorization", "Bearer #{access_token}"},
-      {"content-type", "application/json"}
-    ]
-
-    body = JSON.encode!(message)
-
+  defp send_fcm_instance_request(info, device_token, url, headers, body) do
     Telemetry.start(:fcm, device_token)
     start_time = System.monotonic_time()
 
@@ -448,21 +491,42 @@ defmodule PushX.Instance do
     end
   end
 
-  defp apns_base_url(:prod), do: @apns_prod_url
-  defp apns_base_url(:sandbox), do: @apns_sandbox_url
+  defp encode_apns_payload_safe(%Message{} = message),
+    do: HTTP.safe_encode(Message.to_apns_payload(message))
 
-  defp encode_apns_payload(%Message{} = message),
-    do: JSON.encode!(Message.to_apns_payload(message))
+  defp encode_apns_payload_safe(payload) when is_map(payload), do: HTTP.safe_encode(payload)
 
-  defp encode_apns_payload(payload) when is_map(payload), do: JSON.encode!(payload)
+  # APNS / FCM payload size limits per provider docs.
+  @apns_alert_max_bytes 4096
+  @apns_voip_max_bytes 5120
+  @fcm_max_bytes 4096
 
-  defp maybe_add_header(headers, _key, nil), do: headers
-  defp maybe_add_header(headers, key, value), do: [{key, to_string(value)} | headers]
+  defp check_apns_payload_size(body, opts) do
+    push_type = Keyword.get(opts, :push_type, "alert")
+    max_bytes = if push_type == "voip", do: @apns_voip_max_bytes, else: @apns_alert_max_bytes
 
-  defp get_header(headers, key) do
-    case List.keyfind(headers, key, 0) do
-      {_, value} -> value
-      nil -> nil
+    if byte_size(body) > max_bytes do
+      {:error,
+       Response.error(
+         :apns,
+         :payload_too_large,
+         "Payload #{byte_size(body)} bytes exceeds APNS limit of #{max_bytes}"
+       )}
+    else
+      :ok
+    end
+  end
+
+  defp check_fcm_payload_size(body) do
+    if byte_size(body) > @fcm_max_bytes do
+      {:error,
+       Response.error(
+         :fcm,
+         :payload_too_large,
+         "Payload #{byte_size(body)} bytes exceeds FCM limit of #{@fcm_max_bytes}"
+       )}
+    else
+      :ok
     end
   end
 
@@ -474,7 +538,7 @@ defmodule PushX.Instance do
       end
 
     error_status = Response.apns_reason_to_status(reason)
-    retry_after = parse_retry_after(response_headers)
+    retry_after = HTTP.parse_retry_after(response_headers)
 
     {:error, Response.error(:apns, error_status, reason, body, retry_after)}
   end
@@ -493,86 +557,20 @@ defmodule PushX.Instance do
       end
 
     error_status = Response.fcm_error_to_status(error_code)
-    retry_after = parse_retry_after(response_headers)
+    retry_after = HTTP.parse_retry_after(response_headers)
 
     {:error, Response.error(:fcm, error_status, error_message, body, retry_after)}
   end
 
-  defp parse_retry_after(headers) do
-    case get_header(headers, "retry-after") do
-      nil ->
-        nil
-
-      value ->
-        case Integer.parse(value) do
-          {seconds, ""} -> seconds
-          _ -> nil
-        end
-    end
-  end
-
   # -- JWT Token Management (per-instance) --
+  # Backed by PushX.JWTCache so a killed refresher can't leave a lock held.
 
   defp get_instance_jwt(info) do
-    cache_key = {:apns_jwt_cache, info.name}
-    now = System.system_time(:millisecond)
-
-    case :persistent_term.get(cache_key, nil) do
-      {token, expires_at} when is_integer(expires_at) and expires_at > now ->
-        {:ok, token}
-
-      _ ->
-        refresh_instance_jwt(info, cache_key)
-    end
-  end
-
-  @max_jwt_refresh_retries 10
-
-  defp refresh_instance_jwt(info, cache_key, retries \\ 0)
-
-  defp refresh_instance_jwt(_info, _cache_key, retries)
-       when retries >= @max_jwt_refresh_retries do
-    {:error, "JWT refresh timeout after #{retries} attempts"}
-  end
-
-  defp refresh_instance_jwt(info, cache_key, retries) do
-    lock = :persistent_term.get({:apns_jwt_lock, info.name})
-
-    case :atomics.compare_exchange(lock, 1, 0, 1) do
-      :ok ->
-        try do
-          now = System.system_time(:millisecond)
-
-          case :persistent_term.get(cache_key, nil) do
-            {token, expires_at} when is_integer(expires_at) and expires_at > now ->
-              {:ok, token}
-
-            _ ->
-              case generate_instance_jwt(info) do
-                {:ok, token} ->
-                  :persistent_term.put(cache_key, {token, now + @jwt_cache_ttl_ms})
-                  {:ok, token}
-
-                {:error, _} = error ->
-                  error
-              end
-          end
-        after
-          :atomics.put(lock, 1, 0)
-        end
-
-      _current ->
-        Process.sleep(50)
-        now = System.system_time(:millisecond)
-
-        case :persistent_term.get(cache_key, nil) do
-          {token, expires_at} when is_integer(expires_at) and expires_at > now ->
-            {:ok, token}
-
-          _ ->
-            refresh_instance_jwt(info, cache_key, retries + 1)
-        end
-    end
+    JWTCache.get_or_generate(
+      {:apns_jwt, info.name},
+      fn -> generate_instance_jwt(info) end,
+      @jwt_cache_ttl_ms
+    )
   end
 
   defp generate_instance_jwt(info) do
@@ -610,10 +608,10 @@ defmodule PushX.Instance do
   defp build_fcm_message(token, %Message{} = message, opts) do
     base =
       %{"token" => token}
-      |> maybe_put("notification", Message.to_fcm_payload(message)["notification"])
-      |> maybe_put("data", stringify_map(Keyword.get(opts, :data) || message.data))
-      |> maybe_put("android", Keyword.get(opts, :android))
-      |> maybe_put("webpush", Keyword.get(opts, :webpush))
+      |> HTTP.maybe_put("notification", Message.to_fcm_payload(message)["notification"])
+      |> HTTP.maybe_put("data", HTTP.stringify_map(Keyword.get(opts, :data) || message.data))
+      |> HTTP.maybe_put("android", Keyword.get(opts, :android))
+      |> HTTP.maybe_put("webpush", Keyword.get(opts, :webpush))
 
     %{"message" => base}
   end
@@ -625,28 +623,20 @@ defmodule PushX.Instance do
       cond do
         Map.has_key?(payload, "notification") or Map.has_key?(payload, "data") ->
           base
-          |> maybe_put("notification", payload["notification"])
-          |> maybe_put("data", stringify_map(Keyword.get(opts, :data) || payload["data"]))
+          |> HTTP.maybe_put("notification", payload["notification"])
+          |> HTTP.maybe_put(
+            "data",
+            HTTP.stringify_map(Keyword.get(opts, :data) || payload["data"])
+          )
 
         true ->
           Map.put(base, "notification", payload)
-          |> maybe_put("data", stringify_map(Keyword.get(opts, :data)))
+          |> HTTP.maybe_put("data", HTTP.stringify_map(Keyword.get(opts, :data)))
       end
 
     base
-    |> maybe_put("android", Keyword.get(opts, :android) || payload["android"])
-    |> maybe_put("webpush", Keyword.get(opts, :webpush) || payload["webpush"])
+    |> HTTP.maybe_put("android", Keyword.get(opts, :android) || payload["android"])
+    |> HTTP.maybe_put("webpush", Keyword.get(opts, :webpush) || payload["webpush"])
     |> then(&%{"message" => &1})
-  end
-
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, _key, data) when data == %{}, do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, value)
-
-  defp stringify_map(nil), do: nil
-  defp stringify_map(map) when map == %{}, do: nil
-
-  defp stringify_map(map) when is_map(map) do
-    Map.new(map, fn {k, v} -> {to_string(k), to_string(v)} end)
   end
 end

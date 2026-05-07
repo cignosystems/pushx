@@ -45,10 +45,18 @@ defmodule PushX.APNS do
 
   require Logger
 
-  alias PushX.{CircuitBreaker, Config, Message, RateLimiter, Response, Retry, Telemetry}
-
-  @apns_prod_url "https://api.push.apple.com"
-  @apns_sandbox_url "https://api.sandbox.push.apple.com"
+  alias PushX.{
+    CircuitBreaker,
+    Config,
+    HTTP,
+    JWTCache,
+    Message,
+    RateLimiter,
+    Response,
+    Retry,
+    Telemetry,
+    URLs
+  }
 
   # JWT token cache (cached for 50 minutes, Apple allows 60 min)
   @jwt_cache_ttl_ms 50 * 60 * 1000
@@ -112,29 +120,65 @@ defmodule PushX.APNS do
   end
 
   defp do_send(device_token, payload, opts) do
-    case Keyword.get(opts, :topic) do
-      nil ->
+    mode = Keyword.get(opts, :mode, Config.apns_mode())
+
+    cond do
+      mode not in [:prod, :sandbox] ->
+        {:error,
+         Response.error(
+           :apns,
+           :invalid_request,
+           "Invalid :mode #{inspect(mode)} (expected :prod or :sandbox)"
+         )}
+
+      Keyword.get(opts, :topic) in [nil, ""] ->
         {:error, Response.error(:apns, :invalid_request, ":topic option is required")}
 
-      topic ->
-        case get_jwt() do
-          {:ok, jwt} ->
-            do_send_with_jwt(device_token, payload, opts, topic, jwt)
+      not safe_token?(device_token) ->
+        {:error,
+         Response.error(:apns, :invalid_token, "Device token contains invalid characters")}
 
-          {:error, reason} ->
-            {:error, Response.error(:apns, :auth_error, reason)}
+      true ->
+        # Validate the payload (encode + size) before acquiring a JWT, so an
+        # oversized or un-encodable payload doesn't waste an ES256 signing.
+        with {:ok, body} <- encode_payload_safe(payload),
+             :ok <- check_payload_size(body, opts) do
+          do_send_authenticated(device_token, body, opts, mode)
+        else
+          {:error, reason} when is_binary(reason) ->
+            {:error,
+             Response.error(:apns, :invalid_request, "Failed to encode payload: #{reason}")}
+
+          {:error, %Response{} = response} ->
+            {:error, response}
         end
     end
   end
 
-  defp do_send_with_jwt(device_token, payload, opts, topic, jwt) do
-    mode = Keyword.get(opts, :mode, Config.apns_mode())
+  defp do_send_authenticated(device_token, body, opts, mode) do
+    topic = Keyword.fetch!(opts, :topic)
 
-    url = "#{base_url(mode)}/3/device/#{device_token}"
-    headers = build_headers(jwt, topic, opts)
-    body = encode_payload(payload)
+    case get_jwt() do
+      {:ok, jwt} ->
+        url = "#{base_url(mode)}/3/device/#{device_token}"
+        headers = build_headers(jwt, topic, opts)
+        send_apns_request(device_token, url, headers, body, opts)
 
-    Logger.debug("[PushX.APNS] Sending to #{Telemetry.truncate_token(device_token)}")
+      {:error, reason} ->
+        {:error, Response.error(:apns, :auth_error, reason)}
+    end
+  end
+
+  # Allows alphanumerics, underscore, and hyphen — covers Apple's hex tokens and
+  # safe identifiers used in tests, while rejecting URL-special characters
+  # (`/`, `?`, `#`, whitespace, etc.) that would alter request routing.
+  @safe_token_regex ~r/\A[A-Za-z0-9_\-]+\z/
+
+  defp safe_token?(token) when is_binary(token), do: Regex.match?(@safe_token_regex, token)
+  defp safe_token?(_), do: false
+
+  defp send_apns_request(device_token, url, headers, body, opts) do
+    Logger.debug(fn -> "[PushX.APNS] Sending to #{Telemetry.truncate_token(device_token)}" end)
 
     Telemetry.start(:apns, device_token)
     start_time = System.monotonic_time()
@@ -149,7 +193,7 @@ defmodule PushX.APNS do
       case Finch.build(:post, url, headers, body)
            |> Finch.request(Config.finch_name(), request_opts) do
         {:ok, %{status: 200, headers: response_headers}} ->
-          apns_id = get_header(response_headers, "apns-id")
+          apns_id = HTTP.get_header(response_headers, "apns-id")
           response = Response.success(:apns, apns_id)
           Telemetry.stop(:apns, device_token, start_time, response)
           {:ok, response}
@@ -166,6 +210,30 @@ defmodule PushX.APNS do
           {:error, response}
       end
     rescue
+      e in CaseClauseError ->
+        # Finch's outer case (lib/finch.ex:516) only matches `{:ok, …}` or
+        # the 3-tuple `{:error, err, _acc}` shape. When NimblePool returns
+        # the 2-tuple shape — `{:error, :connection_process_went_down}` is
+        # the one we've seen in the wild, but the same machinery could
+        # return other atom reasons — Finch raises CaseClauseError on
+        # itself. Treat any 2-tuple error term as a retryable connection
+        # error so PushX.Retry can recover; reraise everything else so
+        # actual programming bugs still surface.
+        case e do
+          %CaseClauseError{term: {:error, reason}} when is_atom(reason) ->
+            Logger.error(
+              "[PushX.APNS] Finch connection error (#{inspect(reason)}) — likely concurrent request limit / pool process death"
+            )
+
+            response = Response.error(:apns, :connection_error, Atom.to_string(reason))
+            Telemetry.error(:apns, device_token, start_time, response)
+            {:error, response}
+
+          _other ->
+            Telemetry.exception(:apns, device_token, start_time, :error, e, __STACKTRACE__)
+            reraise e, __STACKTRACE__
+        end
+
       e ->
         Telemetry.exception(:apns, device_token, start_time, :error, e, __STACKTRACE__)
         reraise e, __STACKTRACE__
@@ -180,6 +248,9 @@ defmodule PushX.APNS do
   All standard options plus:
     * `:concurrency` - Max concurrent requests (default: 50)
     * `:timeout` - Timeout per request in ms (default: 30_000)
+    * `:validate_tokens` - Validate token format before sending (default: false).
+      Invalid tokens get `{:error, %Response{status: :invalid_token}}` without
+      hitting the network.
 
   ## Returns
 
@@ -190,11 +261,18 @@ defmodule PushX.APNS do
   def send_batch(device_tokens, payload, opts \\ []) do
     concurrency = Keyword.get(opts, :concurrency, 50)
     timeout = Keyword.get(opts, :timeout, 30_000)
-    send_opts = Keyword.drop(opts, [:concurrency, :timeout])
+    validate = Keyword.get(opts, :validate_tokens, false)
+    send_opts = Keyword.drop(opts, [:concurrency, :timeout, :validate_tokens])
 
     device_tokens
     |> Task.async_stream(
-      fn token -> {token, send(token, payload, send_opts)} end,
+      fn token ->
+        if validate and not PushX.Token.valid?(:apns, token) do
+          {token, {:error, Response.error(:apns, :invalid_token, "Invalid token format")}}
+        else
+          {token, send(token, payload, send_opts)}
+        end
+      end,
       max_concurrency: concurrency,
       timeout: timeout,
       on_timeout: :kill_task
@@ -235,7 +313,7 @@ defmodule PushX.APNS do
   @spec notification_with_data(String.t(), String.t(), map(), non_neg_integer() | nil) :: map()
   def notification_with_data(title, body, data, badge \\ nil) do
     notification(title, body, badge)
-    |> Map.merge(Map.delete(data, "aps"))
+    |> Map.merge(Map.drop(data, ["aps", :aps]))
   end
 
   @doc """
@@ -244,7 +322,7 @@ defmodule PushX.APNS do
   @spec silent_notification(map()) :: map()
   def silent_notification(data \\ %{}) do
     %{"aps" => %{"content-available" => 1}}
-    |> Map.merge(Map.delete(data, "aps"))
+    |> Map.merge(Map.drop(data, ["aps", :aps]))
   end
 
   # Safari Web Push helpers
@@ -316,7 +394,7 @@ defmodule PushX.APNS do
           map()
   def web_notification_with_data(title, body, url, data, opts \\ []) do
     web_notification(title, body, url, opts)
-    |> Map.merge(Map.delete(data, "aps"))
+    |> Map.merge(Map.drop(data, ["aps", :aps]))
   end
 
   defp parse_url_args(url) when is_binary(url) do
@@ -351,8 +429,7 @@ defmodule PushX.APNS do
 
   defp record_circuit_breaker_result(_), do: :ok
 
-  defp base_url(:prod), do: @apns_prod_url
-  defp base_url(:sandbox), do: @apns_sandbox_url
+  defp base_url(mode), do: URLs.apns(mode)
 
   defp build_headers(jwt, topic, opts) do
     [
@@ -361,20 +438,32 @@ defmodule PushX.APNS do
       {"apns-push-type", Keyword.get(opts, :push_type, "alert")},
       {"apns-priority", to_string(Keyword.get(opts, :priority, 10))}
     ]
-    |> maybe_add_header("apns-expiration", Keyword.get(opts, :expiration))
-    |> maybe_add_header("apns-collapse-id", Keyword.get(opts, :collapse_id))
+    |> HTTP.maybe_add_header("apns-expiration", Keyword.get(opts, :expiration))
+    |> HTTP.maybe_add_header("apns-collapse-id", Keyword.get(opts, :collapse_id))
   end
 
-  defp maybe_add_header(headers, _key, nil), do: headers
-  defp maybe_add_header(headers, key, value), do: [{key, to_string(value)} | headers]
+  defp encode_payload_safe(%Message{} = message),
+    do: HTTP.safe_encode(Message.to_apns_payload(message))
 
-  defp encode_payload(%Message{} = message), do: JSON.encode!(Message.to_apns_payload(message))
-  defp encode_payload(payload) when is_map(payload), do: JSON.encode!(payload)
+  defp encode_payload_safe(payload) when is_map(payload), do: HTTP.safe_encode(payload)
 
-  defp get_header(headers, key) do
-    case List.keyfind(headers, key, 0) do
-      {_, value} -> value
-      nil -> nil
+  # APNS payload size limits per Apple docs.
+  @apns_alert_max_bytes 4096
+  @apns_voip_max_bytes 5120
+
+  defp check_payload_size(body, opts) do
+    push_type = Keyword.get(opts, :push_type, "alert")
+    max_bytes = if push_type == "voip", do: @apns_voip_max_bytes, else: @apns_alert_max_bytes
+
+    if byte_size(body) > max_bytes do
+      {:error,
+       Response.error(
+         :apns,
+         :payload_too_large,
+         "Payload #{byte_size(body)} bytes exceeds APNS limit of #{max_bytes}"
+       )}
+    else
+      :ok
     end
   end
 
@@ -386,94 +475,17 @@ defmodule PushX.APNS do
       end
 
     error_status = Response.apns_reason_to_status(reason)
-    retry_after = parse_retry_after(response_headers)
+    retry_after = HTTP.parse_retry_after(response_headers)
 
     Logger.warning("[PushX.APNS] Failed #{status}: #{reason}")
     {:error, Response.error(:apns, error_status, reason, body, retry_after)}
   end
 
-  defp parse_retry_after(headers) do
-    case get_header(headers, "retry-after") do
-      nil -> nil
-      value -> parse_retry_after_value(value)
-    end
-  end
-
-  defp parse_retry_after_value(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {seconds, ""} -> seconds
-      _ -> nil
-    end
-  end
-
-  defp parse_retry_after_value(_), do: nil
-
-  # JWT Token Management with caching and atomic refresh lock
+  # JWT Token Management — cached via PushX.JWTCache (GenServer-backed,
+  # cannot deadlock if a refresher is killed mid-generation).
 
   defp get_jwt do
-    cache_key = :apns_jwt_cache
-    now = System.system_time(:millisecond)
-
-    case :persistent_term.get(cache_key, nil) do
-      {token, expires_at} when is_integer(expires_at) and expires_at > now ->
-        {:ok, token}
-
-      _ ->
-        refresh_jwt_atomically(cache_key)
-    end
-  end
-
-  @max_jwt_refresh_retries 10
-
-  defp refresh_jwt_atomically(cache_key, retries \\ 0)
-
-  defp refresh_jwt_atomically(_cache_key, retries) when retries >= @max_jwt_refresh_retries do
-    {:error, "JWT refresh timeout after #{retries} attempts"}
-  end
-
-  defp refresh_jwt_atomically(cache_key, retries) do
-    lock = :persistent_term.get(:apns_jwt_lock)
-
-    case :atomics.compare_exchange(lock, 1, 0, 1) do
-      :ok ->
-        # We acquired the lock - refresh the JWT
-        try do
-          # Double-check: another process may have refreshed while we waited
-          now = System.system_time(:millisecond)
-
-          case :persistent_term.get(cache_key, nil) do
-            {token, expires_at} when is_integer(expires_at) and expires_at > now ->
-              {:ok, token}
-
-            _ ->
-              case generate_jwt() do
-                {:ok, token} ->
-                  expires_at = now + @jwt_cache_ttl_ms
-                  :persistent_term.put(cache_key, {token, expires_at})
-                  {:ok, token}
-
-                {:error, _} = error ->
-                  error
-              end
-          end
-        after
-          :atomics.put(lock, 1, 0)
-        end
-
-      _current ->
-        # Another process is refreshing - wait briefly and read from cache
-        Process.sleep(50)
-        now = System.system_time(:millisecond)
-
-        case :persistent_term.get(cache_key, nil) do
-          {token, expires_at} when is_integer(expires_at) and expires_at > now ->
-            {:ok, token}
-
-          _ ->
-            # Still not refreshed, try again
-            refresh_jwt_atomically(cache_key, retries + 1)
-        end
-    end
+    JWTCache.get_or_generate(:apns_jwt, &generate_jwt/0, @jwt_cache_ttl_ms)
   end
 
   defp generate_jwt do

@@ -30,7 +30,6 @@ defmodule PushX.BatchTest do
     end
 
     test "accepts validate_tokens option" do
-      # Invalid tokens should be filtered out when validate_tokens is true
       invalid_tokens = ["short", "also-short"]
 
       results =
@@ -39,8 +38,12 @@ defmodule PushX.BatchTest do
           validate_tokens: true
         )
 
-      # All tokens were invalid, so none were sent
-      assert results == []
+      # Invalid tokens get error responses; the result list matches input length.
+      assert length(results) == 2
+
+      assert Enum.all?(results, fn {_token, result} ->
+               match?({:error, %PushX.Response{status: :invalid_token}}, result)
+             end)
     end
   end
 
@@ -62,29 +65,36 @@ defmodule PushX.BatchTest do
   end
 
   describe "token validation in batch" do
-    test "validate_tokens filters invalid APNS tokens" do
-      # All invalid tokens should be filtered out
+    test "validate_tokens returns invalid_token error for bad APNS tokens" do
       invalid_tokens = ["too-short", "also-short"]
 
-      # With validation enabled, all invalid tokens are filtered
       results =
         PushX.push_batch(:apns, invalid_tokens, "Hello",
           topic: "com.test.app",
           validate_tokens: true
         )
 
-      # All tokens were invalid, so none were sent
-      assert results == []
+      # The result list matches the input length — invalid tokens get an
+      # error response instead of being silently dropped.
+      assert length(results) == 2
+
+      assert Enum.all?(results, fn {token, result} ->
+               token in invalid_tokens and
+                 match?({:error, %PushX.Response{status: :invalid_token}}, result)
+             end)
     end
 
-    test "validate_tokens filters invalid FCM tokens" do
-      # All invalid tokens
+    test "validate_tokens returns invalid_token error for bad FCM tokens" do
       invalid_tokens = ["short", "also-short"]
 
       results = PushX.push_batch(:fcm, invalid_tokens, "Hello", validate_tokens: true)
 
-      # All tokens were invalid, so none were sent
-      assert results == []
+      assert length(results) == 2
+
+      assert Enum.all?(results, fn {token, result} ->
+               token in invalid_tokens and
+                 match?({:error, %PushX.Response{status: :invalid_token}}, result)
+             end)
     end
 
     test "without validate_tokens option, all tokens are processed" do

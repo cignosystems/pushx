@@ -1,7 +1,7 @@
 defmodule PushX.MixProject do
   use Mix.Project
 
-  @version "0.10.0"
+  @version "0.11.0"
   @source_url "https://github.com/cignosystems/pushx"
 
   def project do
@@ -31,7 +31,7 @@ defmodule PushX.MixProject do
       {:finch, "~> 0.21"},
       {:joken, "~> 2.6"},
       {:goth, "~> 1.4"},
-      {:telemetry, "~> 1.3"},
+      {:telemetry, "~> 1.4"},
 
       # Dev/Test
       {:ex_doc, "~> 0.40", only: :dev, runtime: false},
@@ -55,17 +55,21 @@ defmodule PushX.MixProject do
         "Changelog" => "#{@source_url}/blob/main/CHANGELOG.md"
       },
       maintainers: ["Cigno Systems AB"],
-      files: ~w(lib .formatter.exs mix.exs README.md LICENSE CHANGELOG.md pushx_logo.png)
+      files:
+        ~w(lib .formatter.exs mix.exs README.md LICENSE CHANGELOG.md AGENTS.md pushx_logo.png)
     ]
   end
 
   defp docs do
     [
       main: "readme",
-      extras: ["README.md", "CHANGELOG.md", "LICENSE"],
+      extras: ["README.md", "AGENTS.md", "CHANGELOG.md", "LICENSE"],
       source_ref: "v#{@version}",
       source_url: @source_url,
       logo: "pushx_logo.png",
+      # CHANGELOG references internal modules (@moduledoc false) by name to
+      # describe behaviour changes — that's expected and shouldn't warn.
+      skip_undefined_reference_warnings_on: ["CHANGELOG.md"],
       groups_for_modules: [
         "Core API": [PushX, PushX.Message, PushX.Response],
         Providers: [PushX.APNS, PushX.FCM],

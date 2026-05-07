@@ -5,14 +5,13 @@ defmodule PushX.Application do
 
   @impl true
   def start(_type, _args) do
-    # Initialize atomic lock for JWT refresh (prevents thundering herd)
-    :persistent_term.put(:apns_jwt_lock, :atomics.new(1, signed: false))
-
     # Initialize ETS table for named instances (fast reads on push path)
     :ets.new(:pushx_instances, [:named_table, :public, :set])
 
     children =
       [
+        # JWT cache (must start before any APNS sends)
+        PushX.JWTCache,
         # Dynamic supervisor for named instances
         {DynamicSupervisor, name: PushX.Instance.DynamicSupervisor, strategy: :one_for_one},
         # Rate limiter (always started, but only tracks when enabled)
@@ -24,7 +23,7 @@ defmodule PushX.Application do
          name: PushX.Config.finch_name(),
          pools: %{
            # APNS Production
-           "https://api.push.apple.com" => [
+           PushX.URLs.apns_prod() => [
              size: PushX.Config.finch_pool_size(),
              count: PushX.Config.finch_pool_count(),
              protocols: [:http2],
@@ -33,7 +32,7 @@ defmodule PushX.Application do
              ]
            ],
            # APNS Sandbox
-           "https://api.sandbox.push.apple.com" => [
+           PushX.URLs.apns_sandbox() => [
              size: PushX.Config.finch_pool_size(),
              count: PushX.Config.finch_pool_count(),
              protocols: [:http2],
@@ -42,7 +41,7 @@ defmodule PushX.Application do
              ]
            ],
            # FCM (Firebase Cloud Messaging)
-           "https://fcm.googleapis.com" => [
+           PushX.URLs.fcm_origin() => [
              size: PushX.Config.finch_pool_size(),
              count: PushX.Config.finch_pool_count(),
              protocols: [:http2],

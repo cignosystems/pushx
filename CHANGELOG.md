@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-05-07
+
+### Documentation
+
+- `AGENTS.md` — usage guide for AI coding assistants integrating PushX into
+  projects: mental model (function-call API, no supervision-tree setup),
+  decision tree (`push` / `push_batch` / `push_data` / instances), idiomatic
+  patterns (token cleanup via `:on_invalid_token`, multi-tenant via
+  `PushX.Instance`, web push topic IDs), and a curated list of mistakes
+  commonly made (forgetting APNS `topic:`, `push_data` on APNS, mode
+  mismatch, `fcm_credentials` as raw string, multiline `apns_private_key`
+  via env). Shipped in the hex package and rendered on hexdocs.
+- `CONTRIBUTING.md` — repo orientation for contributors: layout, test
+  commands, conventions for error semantics and telemetry. `CLAUDE.md` is a
+  symlink to `AGENTS.md` for tool compatibility.
+- README banner pointing AI assistants at `AGENTS.md`.
+
+### Fixed
+- **APNS/FCM crash on transient Finch pool errors** — Finch's outer case in `lib/finch.ex:516` only matches `{:ok, …}` or the 3-tuple `{:error, err, _acc}` shape. When NimblePool returns a 2-tuple error — `{:error, :connection_process_went_down}` (HTTP/2 connection process death under concurrent-request-limit pressure) is the one observed in production, but the same pattern can produce other atom reasons — Finch raises `CaseClauseError` on itself. The exception escaped past `PushX.Retry`, killed the sending Task, and (in batch sends with caller-side `Enum.each`) silently skipped every recipient after the failing one. Now rescued in both `PushX.APNS` and `PushX.FCM`: any `CaseClauseError{term: {:error, reason}}` where reason is an atom is converted to a retryable `Response.error(_, :connection_error, _)`, so `PushX.Retry` handles reconnection normally. The previous narrow rescue only matched the literal `:connection_process_went_down` term and reraised any other 2-tuple shape.
+- **APNS payload corruption when custom data uses an atom `:aps` key** — `Message.to_apns_payload/1`, `APNS.notification_with_data/4`, `APNS.silent_notification/1`, and `APNS.web_notification_with_data/5` previously stripped only the string `"aps"` key from caller data. A map containing both atom `:aps` and the constructed string `"aps"` was JSON-encoded with two `aps` keys, which APNS could reject or interpret unpredictably. All four functions now drop both `"aps"` and `:aps` from custom data.
+- **APNS URL injection via unvalidated device tokens** — Device tokens were interpolated directly into the request URL (`/3/device/<token>`). A token containing `/`, `?`, `#`, or whitespace could redirect the request to an unintended path. `APNS.send/3`, `APNS.send_once/3`, and the named-instance APNS path now reject tokens that contain anything other than alphanumerics, underscore, or hyphen with `{:error, %Response{status: :invalid_token}}`.
+- **`PushX.push_data/4` silently produced an invalid APNS payload for APNS named instances** — Calling `push_data(:my_apns_instance, …)` previously routed through `push/4` with a `%{"data" => …}` map, which APNS doesn't understand. Now rejected with `{:error, %Response{status: :invalid_request, provider: :apns}}` and a message pointing at `push/4` with `push_type: "background"` for APNS silent push.
+- **JWT refresh could deadlock if the lock holder was killed** — The previous APNS JWT cache used `:atomics` as a mutex with `try/after` to release. If the holder was killed forcibly (e.g. `Process.exit(pid, :kill)`), the `after` clause did not run and every subsequent JWT request failed indefinitely with `"JWT refresh timeout after 10 attempts"`. The cache is now a supervised GenServer (`PushX.JWTCache`) with lock-free ETS reads and serialized refresh through `GenServer.call/3`. A killed refresher only delays callers until the supervisor restarts the process.
+- **APNS empty-string `:topic` was forwarded to Apple** — Treating `""` as a valid topic produced a remote `MissingTopic` error. Both static and named-instance APNS paths now treat `nil` and `""` as missing and return `:invalid_request` locally.
+- **Invalid APNS `:mode` raised `FunctionClauseError`** — A typo'd `apns_mode` (e.g. `:production`) crashed the sending Task past the `try/rescue` (which only catches `CaseClauseError`). Mode is now validated upfront and returns `{:error, %Response{status: :invalid_request}}` cleanly.
+- **`push_batch/4` with `:validate_tokens` silently dropped invalid tokens** — Callers got a result list shorter than their input list with no signal of which tokens were skipped, so iterating in lockstep (e.g. to mark tokens) misaligned. Invalid tokens now get `{:error, %Response{status: :invalid_token, reason: "Invalid token format"}}` instead, so the result list always matches the input length. Same option is now honored by `APNS.send_batch/3` and `FCM.send_batch/3`.
+- **`HTTP.stringify_map/1` raised `Protocol.UndefinedError` on nested maps/lists** — The previous `to_string(v)` worked only for binaries, atoms, and numbers. A nested map or list as an FCM `data` value crashed the calling process past the `try/rescue`. Nested maps and lists are now JSON-encoded so they survive transport as strings; PIDs and other non-stringable terms fall back to `inspect/1`.
+- **`JSON.encode!` crashed the calling process on un-encodable terms** — A payload containing a PID, ref, function, or tuple raised past the rescue block (which only catches `CaseClauseError`). Encoding now goes through `PushX.HTTP.safe_encode/1`; failures return `{:error, %Response{status: :invalid_request, reason: "Failed to encode payload: ..."}}` cleanly. Encoding also happens before JWT/OAuth acquisition so an oversized or un-encodable payload doesn't waste a credential round-trip.
+- **`push_batch/4` and `push_batch!/4` type specs missed instance names** — Both functions accept instance atoms but the spec was `provider() :: :apns | :fcm`. Dialyzer flagged legitimate calls. Specs now include `instance_name()`.
+- **`Response.error(provider, …)` could embed an instance atom in the response struct** — `push_batch/4`'s `:exit, :timeout` branch used the caller-supplied provider atom directly, violating the `Response.provider :: :apns | :fcm | :unknown` typespec. Now mapped through `response_provider/1` so instance atoms collapse to `:unknown`.
+- **`CircuitBreaker.record_failure/1` lost updates under concurrency** — `:ets.lookup` followed by `:ets.insert` is non-atomic, so concurrent failures undercounted and the real threshold was fuzzy. All circuit-breaker writes now route through the GenServer via `GenServer.call/2`, serializing them while reads stay lock-free.
+
+### Added
+- **Pre-flight payload size check** — APNS rejects payloads >4 KB (>5 KB for `push_type: "voip"`) and FCM rejects payloads >4 KB locally, returning `{:error, %Response{status: :payload_too_large}}` instead of round-tripping a guaranteed-fail request.
+- **HTTP-date `Retry-After` parsing** — `HTTP.parse_retry_after/1` now handles RFC 1123 HTTP-date format (e.g. `"Wed, 21 Oct 2015 07:28:00 GMT"`) in addition to delta-seconds, per RFC 7231 §7.1.3. Falls back to `nil` (default backoff) for malformed or past dates.
+- 25 new tests covering atom-`:aps` (3), URL-special characters (3), APNS-instance `push_data` guard (1), `JWTCache` GenServer (6), `:validate_tokens` error responses (3), empty `:topic` and unknown `:mode` (2), payload size and encode failures (2), and the `PushX.HTTP` module (5+ groups, 21 tests).
+- Total test count: 340 tests, 25 doctests.
+
+### Changed
+- **Hot-path `Logger.debug` calls deferred** — APNS and FCM debug log lines now use the function form, so `PushX.Telemetry.truncate_token/1` no longer runs when debug logging is disabled. Measurable on high-volume batch sends.
+- **Payload validation moved before credential acquisition** — APNS and FCM now encode + size-check the payload before requesting a JWT or OAuth token. Saves one ES256 signing or OAuth round-trip per rejected request and gives faster local error feedback.
+- **Internal: shared HTTP helpers extracted** — `PushX.URLs` centralizes APNS/FCM endpoint constants and `PushX.HTTP` consolidates header parsing, `Retry-After` parsing, FCM `data` stringification, and JSON encoding. Eliminates ~100 lines of duplication between `PushX.APNS`, `PushX.FCM`, `PushX.Instance`, and `PushX.Application`.
+
 ## [0.10.0] - 2026-02-19
 
 ### Added
@@ -279,6 +322,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - HTTP/2 connections via Finch
 - Zero external JSON dependency (uses Elixir 1.18+ built-in JSON)
 
+[0.11.0]: https://github.com/cignosystems/pushx/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/cignosystems/pushx/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/cignosystems/pushx/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/cignosystems/pushx/compare/v0.7.1...v0.8.0

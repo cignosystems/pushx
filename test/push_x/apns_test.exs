@@ -57,6 +57,18 @@ defmodule PushX.APNSTest do
       assert payload["aps"]["alert"]["title"] == "Hello"
       assert payload["safe_key"] == "value"
     end
+
+    test "data with atom :aps key does not overwrite notification" do
+      payload =
+        APNS.notification_with_data("Hello", "World", %{
+          aps: %{"alert" => "HACKED"},
+          safe_key: "value"
+        })
+
+      json = JSON.encode!(payload) |> JSON.decode!()
+      assert json["aps"]["alert"]["title"] == "Hello"
+      refute json["aps"]["alert"] == "HACKED"
+    end
   end
 
   describe "silent_notification/1" do
@@ -79,6 +91,13 @@ defmodule PushX.APNSTest do
       assert payload["aps"]["content-available"] == 1
       assert payload["action"] == "sync"
     end
+
+    test "data with atom :aps key does not overwrite content-available" do
+      payload = APNS.silent_notification(%{aps: "HACKED", action: "sync"})
+
+      json = JSON.encode!(payload) |> JSON.decode!()
+      assert json["aps"] == %{"content-available" => 1}
+    end
   end
 
   describe "send/3 validation" do
@@ -86,6 +105,58 @@ defmodule PushX.APNSTest do
       assert {:error,
               %PushX.Response{status: :invalid_request, reason: ":topic option is required"}} =
                APNS.send("token", %{"aps" => %{}}, [])
+    end
+
+    test "rejects token containing URL-special characters" do
+      assert {:error, %PushX.Response{status: :invalid_token, reason: reason}} =
+               APNS.send("../../etc/passwd", %{"aps" => %{}}, topic: "com.test.app")
+
+      assert reason =~ "invalid characters"
+    end
+
+    test "rejects token containing whitespace" do
+      assert {:error, %PushX.Response{status: :invalid_token}} =
+               APNS.send("token with spaces", %{"aps" => %{}}, topic: "com.test.app")
+    end
+
+    test "rejects token containing query separator" do
+      assert {:error, %PushX.Response{status: :invalid_token}} =
+               APNS.send("token?evil=1", %{"aps" => %{}}, topic: "com.test.app")
+    end
+
+    test "rejects empty :topic before any other validation" do
+      assert {:error,
+              %PushX.Response{status: :invalid_request, reason: ":topic option is required"}} =
+               APNS.send("token", %{"aps" => %{}}, topic: "")
+    end
+
+    test "rejects unknown :mode" do
+      assert {:error, %PushX.Response{status: :invalid_request, reason: reason}} =
+               APNS.send("token", %{"aps" => %{}}, topic: "com.test.app", mode: :preview)
+
+      assert reason =~ "Invalid :mode"
+    end
+
+    test "rejects payload that exceeds 4 KB" do
+      # Build a >4 KB string payload
+      huge = String.duplicate("a", 5_000)
+
+      assert {:error, %PushX.Response{status: :payload_too_large, reason: reason}} =
+               APNS.send(String.duplicate("a", 64), %{"aps" => %{"alert" => huge}},
+                 topic: "com.test.app"
+               )
+
+      assert reason =~ "exceeds APNS limit"
+    end
+
+    test "rejects un-encodable payload terms" do
+      # PIDs aren't JSON-encodable
+      payload = %{"aps" => %{}, "self" => self()}
+
+      assert {:error, %PushX.Response{status: :invalid_request, reason: reason}} =
+               APNS.send(String.duplicate("a", 64), payload, topic: "com.test.app")
+
+      assert reason =~ "Failed to encode payload"
     end
   end
 

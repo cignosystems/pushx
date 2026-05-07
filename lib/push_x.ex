@@ -208,7 +208,18 @@ defmodule PushX do
   end
 
   def push_data(instance_name, device_token, data, opts) when is_atom(instance_name) do
-    push(instance_name, device_token, %{"data" => data}, opts)
+    case PushX.Instance.resolve(instance_name) do
+      {:ok, %{provider: :apns}} ->
+        {:error,
+         Response.error(
+           :apns,
+           :invalid_request,
+           "push_data is only supported for FCM. For APNS silent push, use push/4 with push_type: \"background\""
+         )}
+
+      _ ->
+        push(instance_name, device_token, %{"data" => data}, opts)
+    end
   end
 
   @doc """
@@ -276,7 +287,10 @@ defmodule PushX do
     * `opts` - Provider-specific options plus:
       * `:concurrency` - Max concurrent requests (default: 50)
       * `:timeout` - Timeout per request in ms (default: 30_000)
-      * `:validate_tokens` - Validate tokens before sending (default: false)
+      * `:validate_tokens` - Validate tokens before sending (default: false). When
+      `true`, invalid tokens get `{:error, %Response{status: :invalid_token}}`
+      without ever leaving the local process — the result list always matches
+      the input length.
 
   ## Examples
 
@@ -302,38 +316,42 @@ defmodule PushX do
   A list of `{token, result}` tuples where result is `{:ok, Response.t()}` or `{:error, Response.t()}`.
 
   """
-  @spec push_batch(provider(), [token()], message(), [option()]) ::
+  @spec push_batch(provider() | instance_name(), [token()], message(), [option()]) ::
           [{token(), {:ok, Response.t()} | {:error, Response.t()}}]
   def push_batch(provider, device_tokens, message, opts \\ []) do
     concurrency = Keyword.get(opts, :concurrency, batch_concurrency())
     timeout = Keyword.get(opts, :timeout, 30_000)
     validate = Keyword.get(opts, :validate_tokens, false)
     send_opts = Keyword.drop(opts, [:concurrency, :timeout, :validate_tokens])
+    response_provider = response_provider(provider)
 
-    # Optionally validate tokens first (skip for named instances)
-    tokens_to_send =
-      if validate and provider in [:apns, :fcm] do
-        Enum.filter(device_tokens, &Token.valid?(provider, &1))
-      else
-        device_tokens
-      end
-
-    tokens_to_send
+    device_tokens
     |> Task.async_stream(
-      fn token -> {token, push(provider, token, message, send_opts)} end,
+      fn token ->
+        cond do
+          validate and provider in [:apns, :fcm] and not Token.valid?(provider, token) ->
+            {token, {:error, Response.error(provider, :invalid_token, "Invalid token format")}}
+
+          true ->
+            {token, push(provider, token, message, send_opts)}
+        end
+      end,
       max_concurrency: concurrency,
       timeout: timeout,
       on_timeout: :kill_task
     )
-    |> Enum.zip(tokens_to_send)
+    |> Enum.zip(device_tokens)
     |> Enum.map(fn
       {{:ok, result}, _token} ->
         result
 
       {{:exit, :timeout}, token} ->
-        {token, {:error, Response.error(provider, :connection_error, "timeout")}}
+        {token, {:error, Response.error(response_provider, :connection_error, "timeout")}}
     end)
   end
+
+  defp response_provider(provider) when provider in [:apns, :fcm], do: provider
+  defp response_provider(_instance_name), do: :unknown
 
   @doc """
   Sends a push notification to multiple devices and returns success count.
@@ -350,7 +368,7 @@ defmodule PushX do
         PushX.push_batch!(:fcm, tokens, "Hello!")
 
   """
-  @spec push_batch!(provider(), [token()], message(), [option()]) ::
+  @spec push_batch!(provider() | instance_name(), [token()], message(), [option()]) ::
           %{success: non_neg_integer(), failure: non_neg_integer(), total: non_neg_integer()}
   def push_batch!(provider, device_tokens, message, opts \\ []) do
     results = push_batch(provider, device_tokens, message, opts)
