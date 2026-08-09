@@ -400,15 +400,9 @@ defmodule PushX.Instance do
   defp do_apns_send(info, device_token, body, opts, topic, jwt, mode) do
     url = "#{URLs.apns(mode)}/3/device/#{device_token}"
 
-    headers =
-      [
-        {"authorization", "bearer #{jwt}"},
-        {"apns-topic", topic},
-        {"apns-push-type", Keyword.get(opts, :push_type, "alert")},
-        {"apns-priority", to_string(Keyword.get(opts, :priority, 10))}
-      ]
-      |> HTTP.maybe_add_header("apns-expiration", Keyword.get(opts, :expiration))
-      |> HTTP.maybe_add_header("apns-collapse-id", Keyword.get(opts, :collapse_id))
+    # Shared with the static path so header rules (e.g. background pushes
+    # defaulting to apns-priority 5) can't drift.
+    headers = PushX.APNS.build_headers(jwt, topic, opts)
 
     send_apns_instance_request(info, device_token, url, headers, body)
   end

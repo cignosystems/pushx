@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `PushX.JWTCache` wraps the caller-supplied generator in `try/rescue/catch`, so no generator — raise, throw, exit, or bad return shape — can crash the shared cache process.
 
 ### Fixed
+- **Background/silent APNS pushes now default to `apns-priority: 5`** — Apple requires priority 5 for `apns-push-type: background`; the previous unconditional default of 10 produced an invalid request unless the caller remembered `priority: 5` themselves. When `push_type: "background"` is set and no explicit `:priority` is given, PushX now sends 5. Explicit `:priority` always wins. Header building is shared between the static and instance paths (`PushX.APNS.build_headers/3`).
 - **Named instances no longer bypass the hardening the static path has** — three drift bugs closed by extracting shared helpers:
   - Instance sends now pass through the same circuit-breaker + rate-limiter gate as `PushX.APNS`/`PushX.FCM` (new internal `PushX.SendGate`). Breakers are keyed by instance name so one tenant's failing pool can't open the breaker for others; rate limits count per instance using the provider-level config.
   - Instance requests now go through the shared `PushX.HTTP.finch_request/4`, which converts Finch's NimblePool `CaseClauseError` (e.g. `:connection_process_went_down`) into a retryable `:connection_error` — the headline v0.11.0 fix that the instance path had missed, where it still crashed the calling task.

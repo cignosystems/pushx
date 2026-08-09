@@ -453,6 +453,69 @@ defmodule PushX.APNSTest do
       assert expiration >= System.system_time(:second) + 3590
     end
 
+    test "background push_type defaults to apns-priority 5", %{bypass: bypass} do
+      test_pid = self()
+
+      Bypass.expect_once(bypass, "POST", "/3/device/bg-token", fn conn ->
+        send(test_pid, {:headers, conn.req_headers})
+
+        conn
+        |> Plug.Conn.put_resp_header("apns-id", "bg-id")
+        |> Plug.Conn.resp(200, "")
+      end)
+
+      assert {:ok, _} =
+               APNS.send("bg-token", APNS.silent_notification(),
+                 topic: "com.test.app",
+                 push_type: "background"
+               )
+
+      assert_receive {:headers, headers}
+      headers = Map.new(headers)
+      assert headers["apns-push-type"] == "background"
+      assert headers["apns-priority"] == "5"
+    end
+
+    test "explicit priority still wins for background pushes", %{bypass: bypass} do
+      test_pid = self()
+
+      Bypass.expect_once(bypass, "POST", "/3/device/bg-token2", fn conn ->
+        send(test_pid, {:headers, conn.req_headers})
+
+        conn
+        |> Plug.Conn.put_resp_header("apns-id", "bg-id2")
+        |> Plug.Conn.resp(200, "")
+      end)
+
+      assert {:ok, _} =
+               APNS.send("bg-token2", APNS.silent_notification(),
+                 topic: "com.test.app",
+                 push_type: "background",
+                 priority: 10
+               )
+
+      assert_receive {:headers, headers}
+      assert Map.new(headers)["apns-priority"] == "10"
+    end
+
+    test "alert pushes keep the default priority 10", %{bypass: bypass} do
+      test_pid = self()
+
+      Bypass.expect_once(bypass, "POST", "/3/device/alert-token", fn conn ->
+        send(test_pid, {:headers, conn.req_headers})
+
+        conn
+        |> Plug.Conn.put_resp_header("apns-id", "alert-id")
+        |> Plug.Conn.resp(200, "")
+      end)
+
+      assert {:ok, _} =
+               APNS.send("alert-token", %{"aps" => %{"alert" => "Hi"}}, topic: "com.test.app")
+
+      assert_receive {:headers, headers}
+      assert Map.new(headers)["apns-priority"] == "10"
+    end
+
     test "explicit opts win over Message-derived options", %{bypass: bypass} do
       test_pid = self()
 

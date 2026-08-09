@@ -431,16 +431,25 @@ defmodule PushX.APNS do
 
   defp base_url(mode), do: URLs.apns(mode)
 
-  defp build_headers(jwt, topic, opts) do
+  @doc false
+  # Shared with PushX.Instance so header rules can't drift between paths.
+  def build_headers(jwt, topic, opts) do
+    push_type = Keyword.get(opts, :push_type, "alert")
+
     [
       {"authorization", "bearer #{jwt}"},
       {"apns-topic", topic},
-      {"apns-push-type", Keyword.get(opts, :push_type, "alert")},
-      {"apns-priority", to_string(Keyword.get(opts, :priority, 10))}
+      {"apns-push-type", push_type},
+      {"apns-priority", to_string(Keyword.get(opts, :priority, default_priority(push_type)))}
     ]
     |> HTTP.maybe_add_header("apns-expiration", Keyword.get(opts, :expiration))
     |> HTTP.maybe_add_header("apns-collapse-id", Keyword.get(opts, :collapse_id))
   end
+
+  # Apple requires apns-priority 5 for background pushes — 10 is rejected
+  # (or the push is throttled/ignored). Explicit :priority always wins.
+  defp default_priority("background"), do: 5
+  defp default_priority(_push_type), do: 10
 
   # Message delivery fields (priority/ttl/collapse_key) become send options;
   # explicit call-site opts win over struct-derived ones.
