@@ -33,6 +33,7 @@
 - [Circuit Breaker](#circuit-breaker)
 - [Health Check](#health-check)
 - [Token Cleanup Callback](#token-cleanup-callback)
+- [Delivery Semantics](#delivery-semantics)
 - [Troubleshooting](#troubleshooting)
 - [Contributing](#contributing)
 - [License](#license)
@@ -930,6 +931,35 @@ defmodule MyApp.Push do
   end
 end
 ```
+
+---
+
+## Delivery Semantics
+
+PushX delivers **at least once, not exactly once**. Two mechanisms can
+produce duplicate deliveries:
+
+- **Automatic retries.** A send that fails with a connection error may have
+  actually reached the provider (e.g. the response was lost after the request
+  was processed). The retry then delivers the same notification again.
+- **Batch timeouts.** `push_batch/4` kills tasks that exceed `:timeout`. A
+  killed task may have an HTTP request already in flight that the provider
+  still processes and delivers — even though PushX reports that token as
+  `{:error, %Response{status: :connection_error, reason: "timeout"}}`.
+
+Conversely, an `{:ok, ...}` result means the *provider accepted* the message,
+not that the device displayed it.
+
+If duplicates matter for your use case:
+
+- **APNS:** set `collapse_id` (or `Message.collapse_key/2`) — Apple replaces
+  an undelivered notification carrying the same ID instead of stacking a
+  duplicate.
+- **FCM:** set `android: %{"collapse_key" => ...}` (or
+  `Message.collapse_key/2`) for the same effect on Android.
+- **App level:** include your own idempotency key in the payload `data` and
+  de-duplicate in the app's notification handler.
+- Or disable retries (`retry_enabled: false`) and handle failures yourself.
 
 ---
 
