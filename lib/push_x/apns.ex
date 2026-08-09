@@ -120,6 +120,7 @@ defmodule PushX.APNS do
   end
 
   defp do_send(device_token, payload, opts) do
+    opts = merge_message_options(payload, opts)
     mode = Keyword.get(opts, :mode, Config.apns_mode())
 
     cond do
@@ -314,7 +315,8 @@ defmodule PushX.APNS do
       # A task that raises exits with {exception, stacktrace}; keep per-token
       # isolation instead of crashing the whole batch.
       {{:exit, reason}, token} ->
-        {token, {:error, Response.error(:apns, :unknown_error, "task exited: " <> inspect(reason))}}
+        {token,
+         {:error, Response.error(:apns, :unknown_error, "task exited: " <> inspect(reason))}}
     end)
   end
 
@@ -472,6 +474,13 @@ defmodule PushX.APNS do
     |> HTTP.maybe_add_header("apns-expiration", Keyword.get(opts, :expiration))
     |> HTTP.maybe_add_header("apns-collapse-id", Keyword.get(opts, :collapse_id))
   end
+
+  # Message delivery fields (priority/ttl/collapse_key) become send options;
+  # explicit call-site opts win over struct-derived ones.
+  defp merge_message_options(%Message{} = message, opts),
+    do: Keyword.merge(Message.to_apns_options(message), opts)
+
+  defp merge_message_options(_payload, opts), do: opts
 
   defp encode_payload_safe(%Message{} = message),
     do: HTTP.safe_encode(Message.to_apns_payload(message))

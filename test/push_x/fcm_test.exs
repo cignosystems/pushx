@@ -479,4 +479,36 @@ defmodule PushX.FCMTest do
       end
     end
   end
+
+  describe "build_message/3 with Message delivery fields" do
+    test "Message priority/ttl/collapse_key land in the android block" do
+      message =
+        PushX.Message.new("Title", "Body")
+        |> PushX.Message.priority(:normal)
+        |> PushX.Message.ttl(3600)
+        |> PushX.Message.collapse_key("updates")
+
+      %{"message" => built} = FCM.build_message("tok", message, [])
+
+      assert built["android"] == %{
+               "priority" => "NORMAL",
+               "ttl" => "3600s",
+               "collapse_key" => "updates"
+             }
+    end
+
+    test "opts android keys win over Message-derived keys" do
+      message = PushX.Message.new("Title", "Body") |> PushX.Message.priority(:normal)
+
+      %{"message" => built} =
+        FCM.build_message("tok", message, android: %{"priority" => "HIGH"})
+
+      assert built["android"]["priority"] == "HIGH"
+    end
+
+    test "no android block when nothing is set" do
+      %{"message" => built} = FCM.build_message("tok", PushX.Message.new("T", "B"), [])
+      refute Map.has_key?(built, "android")
+    end
+  end
 end

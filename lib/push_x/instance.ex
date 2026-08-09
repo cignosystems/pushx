@@ -303,6 +303,7 @@ defmodule PushX.Instance do
   end
 
   defp apns_send_once(info, device_token, payload, opts) do
+    opts = merge_message_options(payload, opts)
     mode = Keyword.get(opts, :mode, Keyword.get(info.config, :mode, :prod))
 
     cond do
@@ -373,6 +374,13 @@ defmodule PushX.Instance do
 
   defp safe_token?(token) when is_binary(token), do: Regex.match?(@safe_token_regex, token)
   defp safe_token?(_), do: false
+
+  # Message delivery fields (priority/ttl/collapse_key) become send options;
+  # explicit call-site opts win over struct-derived ones.
+  defp merge_message_options(%Message{} = message, opts),
+    do: Keyword.merge(Message.to_apns_options(message), opts)
+
+  defp merge_message_options(_payload, opts), do: opts
 
   defp do_apns_send(info, device_token, body, opts, topic, jwt, mode) do
     url = "#{URLs.apns(mode)}/3/device/#{device_token}"
@@ -672,7 +680,7 @@ defmodule PushX.Instance do
       %{"token" => token}
       |> HTTP.maybe_put("notification", Message.to_fcm_payload(message)["notification"])
       |> HTTP.maybe_put("data", HTTP.stringify_map(Keyword.get(opts, :data) || message.data))
-      |> HTTP.maybe_put("android", Keyword.get(opts, :android))
+      |> HTTP.maybe_put("android", merge_android(message, Keyword.get(opts, :android)))
       |> HTTP.maybe_put("webpush", Keyword.get(opts, :webpush))
 
     %{"message" => base}
@@ -700,5 +708,15 @@ defmodule PushX.Instance do
     |> HTTP.maybe_put("android", Keyword.get(opts, :android) || payload["android"])
     |> HTTP.maybe_put("webpush", Keyword.get(opts, :webpush) || payload["webpush"])
     |> then(&%{"message" => &1})
+  end
+
+  # Message delivery fields (priority/ttl/collapse_key) feed the android
+  # block; keys given via opts win over struct-derived ones.
+  defp merge_android(%Message{} = message, opts_android) do
+    case {Message.to_fcm_android(message), opts_android} do
+      {nil, opts_map} -> opts_map
+      {msg_map, nil} -> msg_map
+      {msg_map, opts_map} -> Map.merge(msg_map, opts_map)
+    end
   end
 end

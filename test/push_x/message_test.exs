@@ -12,7 +12,8 @@ defmodule PushX.MessageTest do
       assert message.badge == nil
       assert message.sound == nil
       assert message.data == %{}
-      assert message.priority == :high
+      # nil = let each provider apply its own default
+      assert message.priority == nil
     end
   end
 
@@ -205,6 +206,65 @@ defmodule PushX.MessageTest do
       payload = Message.to_fcm_payload(message)
 
       assert payload == %{}
+    end
+  end
+
+  describe "to_apns_options/1" do
+    test "maps priority to APNS numeric priority" do
+      assert Message.new("T", "B") |> Message.priority(:high) |> Message.to_apns_options() ==
+               [priority: 10]
+
+      assert Message.new("T", "B") |> Message.priority(:normal) |> Message.to_apns_options() ==
+               [priority: 5]
+    end
+
+    test "returns no options for a plain message" do
+      assert Message.new("T", "B") |> Message.to_apns_options() == []
+    end
+
+    test "maps ttl to an absolute expiration timestamp" do
+      now = System.system_time(:second)
+      [expiration: exp] = Message.new("T", "B") |> Message.ttl(3600) |> Message.to_apns_options()
+
+      assert exp >= now + 3600
+      assert exp <= now + 3601
+    end
+
+    test "ttl 0 maps to expiration 0 (attempt once, do not store)" do
+      assert Message.new("T", "B") |> Message.ttl(0) |> Message.to_apns_options() ==
+               [expiration: 0]
+    end
+
+    test "maps collapse_key to collapse_id" do
+      assert Message.new("T", "B")
+             |> Message.collapse_key("updates")
+             |> Message.to_apns_options() == [collapse_id: "updates"]
+    end
+  end
+
+  describe "to_fcm_android/1" do
+    test "returns nil when no delivery fields are set" do
+      assert Message.new("T", "B") |> Message.to_fcm_android() == nil
+    end
+
+    test "maps priority, ttl, and collapse_key" do
+      android =
+        Message.new("T", "B")
+        |> Message.priority(:normal)
+        |> Message.ttl(3600)
+        |> Message.collapse_key("updates")
+        |> Message.to_fcm_android()
+
+      assert android == %{
+               "priority" => "NORMAL",
+               "ttl" => "3600s",
+               "collapse_key" => "updates"
+             }
+    end
+
+    test "maps :high priority to HIGH" do
+      assert Message.new("T", "B") |> Message.priority(:high) |> Message.to_fcm_android() ==
+               %{"priority" => "HIGH"}
     end
   end
 end

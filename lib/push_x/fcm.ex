@@ -278,7 +278,8 @@ defmodule PushX.FCM do
       # A task that raises exits with {exception, stacktrace}; keep per-token
       # isolation instead of crashing the whole batch.
       {{:exit, reason}, token} ->
-        {token, {:error, Response.error(:fcm, :unknown_error, "task exited: " <> inspect(reason))}}
+        {token,
+         {:error, Response.error(:fcm, :unknown_error, "task exited: " <> inspect(reason))}}
     end)
   end
 
@@ -545,19 +546,21 @@ defmodule PushX.FCM do
 
   defp record_circuit_breaker_result(_), do: :ok
 
-  defp build_message(token, %Message{} = message, opts) do
+  @doc false
+  # Public for tests only — builds the FCM v1 message envelope.
+  def build_message(token, %Message{} = message, opts) do
     base =
       %{"token" => token}
       |> HTTP.maybe_put("notification", Message.to_fcm_payload(message)["notification"])
       |> HTTP.maybe_put("data", HTTP.stringify_map(Keyword.get(opts, :data) || message.data))
-      |> HTTP.maybe_put("android", Keyword.get(opts, :android))
+      |> HTTP.maybe_put("android", merge_android(message, Keyword.get(opts, :android)))
       |> HTTP.maybe_put("apns", Keyword.get(opts, :apns))
       |> HTTP.maybe_put("webpush", Keyword.get(opts, :webpush))
 
     %{"message" => base}
   end
 
-  defp build_message(token, payload, opts) when is_map(payload) do
+  def build_message(token, payload, opts) when is_map(payload) do
     base = %{"token" => token}
 
     # Structured payload: has "notification" and/or "data" keys
@@ -582,6 +585,16 @@ defmodule PushX.FCM do
     |> HTTP.maybe_put("apns", Keyword.get(opts, :apns) || payload["apns"])
     |> HTTP.maybe_put("webpush", Keyword.get(opts, :webpush) || payload["webpush"])
     |> then(&%{"message" => &1})
+  end
+
+  # Message delivery fields (priority/ttl/collapse_key) feed the android
+  # block; keys given via opts win over struct-derived ones.
+  defp merge_android(%Message{} = message, opts_android) do
+    case {Message.to_fcm_android(message), opts_android} do
+      {nil, opts_map} -> opts_map
+      {msg_map, nil} -> msg_map
+      {msg_map, opts_map} -> Map.merge(msg_map, opts_map)
+    end
   end
 
   defp handle_error_response(status, body, response_headers) do

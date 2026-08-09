@@ -356,7 +356,8 @@ defmodule PushX do
       # crash on one bad task, losing every other token's result.
       {{:exit, reason}, token} ->
         {token,
-         {:error, Response.error(response_provider, :unknown_error, "task exited: " <> inspect(reason))}}
+         {:error,
+          Response.error(response_provider, :unknown_error, "task exited: " <> inspect(reason))}}
     end)
   end
 

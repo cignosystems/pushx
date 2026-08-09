@@ -29,11 +29,14 @@ defmodule PushX.Message do
           category: String.t() | nil,
           thread_id: String.t() | nil,
           image: String.t() | nil,
-          priority: :high | :normal,
+          priority: :high | :normal | nil,
           ttl: non_neg_integer() | nil,
           collapse_key: String.t() | nil
         }
 
+  # priority defaults to nil (= let each provider apply its own default) so
+  # that an unset struct never overrides provider rules such as APNS
+  # requiring priority 5 for background pushes.
   defstruct [
     :title,
     :body,
@@ -44,8 +47,8 @@ defmodule PushX.Message do
     :image,
     :ttl,
     :collapse_key,
-    data: %{},
-    priority: :high
+    :priority,
+    data: %{}
   ]
 
   @doc """
@@ -54,7 +57,7 @@ defmodule PushX.Message do
   ## Examples
 
       iex> PushX.Message.new()
-      %PushX.Message{title: nil, body: nil, data: %{}, priority: :high}
+      %PushX.Message{title: nil, body: nil, data: %{}, priority: nil}
 
   """
   @spec new() :: t()
@@ -66,7 +69,7 @@ defmodule PushX.Message do
   ## Examples
 
       iex> PushX.Message.new("Hello", "World")
-      %PushX.Message{title: "Hello", body: "World", data: %{}, priority: :high}
+      %PushX.Message{title: "Hello", body: "World", data: %{}, priority: nil}
 
   """
   @spec new(String.t(), String.t()) :: t()
@@ -193,6 +196,77 @@ defmodule PushX.Message do
   end
 
   @doc """
+  Translates the message's delivery fields into APNS send options.
+
+  Returns a keyword list suitable for merging into the `opts` of
+  `PushX.APNS.send/3` — explicit call-site options take precedence.
+
+    * `priority: :high` → `priority: 10`, `priority: :normal` → `priority: 5`
+    * `ttl` (seconds from now) → `expiration` (absolute Unix timestamp;
+      `ttl: 0` maps to `expiration: 0`, APNS's "attempt once, don't store")
+    * `collapse_key` → `collapse_id`
+
+  ## Examples
+
+      iex> PushX.Message.new("Hi", "There") |> PushX.Message.priority(:normal) |> PushX.Message.to_apns_options()
+      [priority: 5]
+
+  """
+  @spec to_apns_options(t()) :: keyword()
+  def to_apns_options(%__MODULE__{} = message) do
+    []
+    |> maybe_put_kw(
+      :priority,
+      case message.priority do
+        :high -> 10
+        :normal -> 5
+        nil -> nil
+      end
+    )
+    |> maybe_put_kw(
+      :expiration,
+      case message.ttl do
+        nil -> nil
+        0 -> 0
+        ttl -> System.system_time(:second) + ttl
+      end
+    )
+    |> maybe_put_kw(:collapse_id, message.collapse_key)
+  end
+
+  @doc """
+  Translates the message's delivery fields into an FCM `android` block.
+
+  Returns `nil` when none of `priority`, `ttl`, or `collapse_key` are set.
+
+  ## Examples
+
+      iex> PushX.Message.new("Hi", "There") |> PushX.Message.ttl(3600) |> PushX.Message.to_fcm_android()
+      %{"ttl" => "3600s"}
+
+      iex> PushX.Message.new("Hi", "There") |> PushX.Message.to_fcm_android()
+      nil
+
+  """
+  @spec to_fcm_android(t()) :: map() | nil
+  def to_fcm_android(%__MODULE__{} = message) do
+    android =
+      %{}
+      |> maybe_put(
+        "priority",
+        case message.priority do
+          :high -> "HIGH"
+          :normal -> "NORMAL"
+          nil -> nil
+        end
+      )
+      |> maybe_put("ttl", if(message.ttl, do: "#{message.ttl}s"))
+      |> maybe_put("collapse_key", message.collapse_key)
+
+    if android == %{}, do: nil, else: android
+  end
+
+  @doc """
   Converts the message to an FCM payload map.
   """
   @spec to_fcm_payload(t()) :: map()
@@ -212,4 +286,7 @@ defmodule PushX.Message do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp maybe_put_kw(kw, _key, nil), do: kw
+  defp maybe_put_kw(kw, key, value), do: Keyword.put(kw, key, value)
 end

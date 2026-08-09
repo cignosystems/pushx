@@ -368,7 +368,7 @@ defmodule PushX.APNSTest do
     end
   end
 
-  describe "provider-token (JWT) auth errors" do
+  describe "full send path via URL override" do
     setup do
       bypass = Bypass.open()
       Application.put_env(:pushx, :apns_url_override, "http://localhost:#{bypass.port}")
@@ -422,6 +422,55 @@ defmodule PushX.APNSTest do
                APNS.send("token2", %{"aps" => %{"alert" => "Hello"}}, topic: "com.test.app")
 
       assert Agent.get(counter, & &1) == 2
+    end
+
+    test "Message priority/ttl/collapse_key reach the wire as APNS headers", %{bypass: bypass} do
+      test_pid = self()
+
+      Bypass.expect_once(bypass, "POST", "/3/device/hdr-token", fn conn ->
+        send(test_pid, {:headers, conn.req_headers})
+
+        conn
+        |> Plug.Conn.put_resp_header("apns-id", "hdr-id")
+        |> Plug.Conn.resp(200, "")
+      end)
+
+      message =
+        PushX.Message.new("Title", "Body")
+        |> PushX.Message.priority(:normal)
+        |> PushX.Message.ttl(3600)
+        |> PushX.Message.collapse_key("updates")
+
+      assert {:ok, %Response{status: :sent}} =
+               APNS.send("hdr-token", message, topic: "com.test.app")
+
+      assert_receive {:headers, headers}
+      headers = Map.new(headers)
+
+      assert headers["apns-priority"] == "5"
+      assert headers["apns-collapse-id"] == "updates"
+      expiration = String.to_integer(headers["apns-expiration"])
+      assert expiration >= System.system_time(:second) + 3590
+    end
+
+    test "explicit opts win over Message-derived options", %{bypass: bypass} do
+      test_pid = self()
+
+      Bypass.expect_once(bypass, "POST", "/3/device/hdr-token2", fn conn ->
+        send(test_pid, {:headers, conn.req_headers})
+
+        conn
+        |> Plug.Conn.put_resp_header("apns-id", "hdr-id2")
+        |> Plug.Conn.resp(200, "")
+      end)
+
+      message = PushX.Message.new("Title", "Body") |> PushX.Message.priority(:normal)
+
+      assert {:ok, _} =
+               APNS.send("hdr-token2", message, topic: "com.test.app", priority: 10)
+
+      assert_receive {:headers, headers}
+      assert Map.new(headers)["apns-priority"] == "10"
     end
 
     test "TooManyProviderTokenUpdates does not regenerate the JWT", %{bypass: bypass} do
