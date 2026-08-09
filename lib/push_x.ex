@@ -325,8 +325,11 @@ defmodule PushX do
     send_opts = Keyword.drop(opts, [:concurrency, :timeout, :validate_tokens])
     response_provider = response_provider(provider)
 
-    device_tokens
-    |> Task.async_stream(
+    # async_stream_nolink: a task that raises must report {:exit, reason}
+    # below instead of taking down the caller through the task link.
+    Task.Supervisor.async_stream_nolink(
+      PushX.TaskSupervisor,
+      device_tokens,
       fn token ->
         cond do
           validate and provider in [:apns, :fcm] and not Token.valid?(provider, token) ->
@@ -347,6 +350,13 @@ defmodule PushX do
 
       {{:exit, :timeout}, token} ->
         {token, {:error, Response.error(response_provider, :connection_error, "timeout")}}
+
+      # A task that raises (rather than returning an error tuple) exits with
+      # {exception, stacktrace}. Without this clause the whole batch would
+      # crash on one bad task, losing every other token's result.
+      {{:exit, reason}, token} ->
+        {token,
+         {:error, Response.error(response_provider, :unknown_error, "task exited: " <> inspect(reason))}}
     end)
   end
 

@@ -224,6 +224,40 @@ defmodule PushX.BatchTest do
     end
   end
 
+  describe "batch isolation when a task crashes" do
+    # An integer message has no normalize_payload/encode clause, so the task
+    # raises FunctionClauseError. The batch must still return one result per
+    # input token instead of crashing the calling process.
+
+    @tag capture_log: true
+    test "PushX.push_batch survives a raising task" do
+      tokens = ["crash-token-1", "crash-token-2"]
+      results = PushX.push_batch(:apns, tokens, 12_345, topic: "com.test.app")
+
+      assert length(results) == 2
+
+      for {token, result} <- results do
+        assert token in tokens
+        assert {:error, %PushX.Response{status: :unknown_error, reason: reason}} = result
+        assert reason =~ "function_clause"
+      end
+    end
+
+    @tag capture_log: true
+    test "PushX.APNS.send_batch survives a raising task" do
+      results = PushX.APNS.send_batch(["crash-token"], 12_345, topic: "com.test.app")
+
+      assert [{"crash-token", {:error, %PushX.Response{status: :unknown_error}}}] = results
+    end
+
+    @tag capture_log: true
+    test "PushX.FCM.send_batch survives a raising task" do
+      results = PushX.FCM.send_batch(["crash-token"], 12_345)
+
+      assert [{"crash-token", {:error, %PushX.Response{status: :unknown_error}}}] = results
+    end
+  end
+
   describe "PushX.check_rate_limit/1" do
     setup do
       # Disable rate limiting for most tests

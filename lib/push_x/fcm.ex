@@ -251,8 +251,11 @@ defmodule PushX.FCM do
     validate = Keyword.get(opts, :validate_tokens, false)
     send_opts = Keyword.drop(opts, [:concurrency, :timeout, :validate_tokens])
 
-    device_tokens
-    |> Task.async_stream(
+    # async_stream_nolink: a task that raises must report {:exit, reason}
+    # below instead of taking down the caller through the task link.
+    Task.Supervisor.async_stream_nolink(
+      PushX.TaskSupervisor,
+      device_tokens,
       fn token ->
         if validate and not PushX.Token.valid?(:fcm, token) do
           {token, {:error, Response.error(:fcm, :invalid_token, "Invalid token format")}}
@@ -271,6 +274,11 @@ defmodule PushX.FCM do
 
       {{:exit, :timeout}, token} ->
         {token, {:error, Response.error(:fcm, :connection_error, "timeout")}}
+
+      # A task that raises exits with {exception, stacktrace}; keep per-token
+      # isolation instead of crashing the whole batch.
+      {{:exit, reason}, token} ->
+        {token, {:error, Response.error(:fcm, :unknown_error, "task exited: " <> inspect(reason))}}
     end)
   end
 
