@@ -221,6 +221,10 @@ defmodule PushX.FCM do
       Invalid tokens get `{:error, %Response{status: :invalid_token}}` without
       hitting the network.
 
+  Each task runs the full blocking retry cycle; make sure `:timeout`
+  exceeds the worst-case retry backoff or disable retries — see
+  `PushX.push_batch/4` for details.
+
   ## Returns
 
   A list of `{token, result}` tuples.

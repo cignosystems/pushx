@@ -127,6 +127,15 @@ defmodule PushX do
       {:ok, %PushX.Response{provider: :apns, status: :sent, id: "..."}}
       {:error, %PushX.Response{provider: :apns, status: :invalid_token, reason: "BadDeviceToken"}}
 
+  ## Blocking and retries
+
+  Retries run **in the calling process** with `Process.sleep` backoff. With
+  the default config (3 attempts, 10s base delay) a single call can block
+  for ~30 seconds on repeated server errors, or ~60 seconds on a
+  rate-limited response. Don't call this synchronously from a
+  latency-sensitive process (e.g. a Phoenix request) unless retries are
+  disabled (`retry_enabled: false`) or you wrap the call in your own task.
+
   """
   @spec push(provider() | instance_name(), token(), message(), [option()]) ::
           {:ok, Response.t()} | {:error, Response.t()}
@@ -291,6 +300,18 @@ defmodule PushX do
       `true`, invalid tokens get `{:error, %Response{status: :invalid_token}}`
       without ever leaving the local process — the result list always matches
       the input length.
+
+  ## Timeout vs. retries
+
+  Each batch task runs the full retry cycle (blocking backoff — see
+  `push/4`), and a task that exceeds `:timeout` is **killed**, reported as
+  `{:error, %Response{status: :connection_error, reason: "timeout"}}`. With
+  the default retry config (3 attempts, up to 60s delays) a retrying task
+  easily outlives the default 30s timeout, so its retries are cut short.
+  Either raise `:timeout` above `retry_max_attempts × retry_max_delay_ms`,
+  or disable retries for batches (`retry_enabled: false`). Note that a
+  killed task may have an HTTP request already in flight that the provider
+  still delivers — see the "Delivery semantics" section in the README.
 
   ## Examples
 

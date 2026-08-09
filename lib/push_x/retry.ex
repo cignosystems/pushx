@@ -11,6 +11,11 @@ defmodule PushX.Retry do
   - **Rate limited (429)**: Respect `retry-after` header, or default to 60 seconds
   - **Permanent failures**: Do not retry (bad token, payload too large, etc.)
 
+  Backoff runs **in the calling process** via `Process.sleep/1` — a single
+  send can block its caller for the sum of all retry delays (tens of
+  seconds with default config). Inside `push_batch/4` this competes with
+  the per-task `:timeout`; see the batch docs for sizing guidance.
+
   ## Configuration
 
       config :pushx,
