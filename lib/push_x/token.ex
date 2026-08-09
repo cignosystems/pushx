@@ -7,8 +7,10 @@ defmodule PushX.Token do
 
   ## APNS Tokens (iOS/macOS/Safari)
 
-  APNS device tokens are 64 hexadecimal characters (32 bytes).
-  Safari web push tokens use the same format.
+  APNS device tokens are currently 64 hexadecimal characters (32 bytes);
+  Safari web push tokens use the same format. Apple explicitly warns not to
+  hard-code the token length, so validation accepts any even-length hex
+  string of at least 64 characters.
   Example: `"a1b2c3d4e5f6...64 hex chars total"`
 
   ## FCM Tokens (Android/Web)
@@ -36,10 +38,13 @@ defmodule PushX.Token do
   @type token :: String.t()
   @type validation_error :: :empty | :invalid_format | :invalid_length
 
-  # APNS tokens are 64 hex characters (32 bytes)
-  # Safari web push tokens use the same format
-  @apns_token_length 64
-  @apns_token_regex ~r/^[a-fA-F0-9]{64}$/
+  # APNS tokens are currently 64 hex characters (32 bytes), but Apple warns
+  # not to hard-code the length — future tokens may be longer. Accept any
+  # even-length (whole bytes) hex string of >= 64 chars, with a generous
+  # upper bound as a sanity check.
+  @apns_token_min_length 64
+  @apns_token_max_length 512
+  @apns_token_regex ~r/^[a-fA-F0-9]+$/
 
   # FCM tokens vary in length:
   # - Mobile: typically 140-250 chars
@@ -72,8 +77,11 @@ defmodule PushX.Token do
   def validate(_provider, ""), do: {:error, :empty}
 
   def validate(:apns, token) when is_binary(token) do
+    length = byte_size(token)
+
     cond do
-      byte_size(token) != @apns_token_length ->
+      length < @apns_token_min_length or length > @apns_token_max_length or
+          rem(length, 2) != 0 ->
         {:error, :invalid_length}
 
       not Regex.match?(@apns_token_regex, token) ->
@@ -150,7 +158,7 @@ defmodule PushX.Token do
   def error_message(:apns, :empty), do: "APNS token cannot be empty"
 
   def error_message(:apns, :invalid_length),
-    do: "APNS token must be exactly 64 hexadecimal characters"
+    do: "APNS token must be at least 64 hexadecimal characters (an even count)"
 
   def error_message(:apns, :invalid_format),
     do: "APNS token must contain only hexadecimal characters (0-9, a-f)"

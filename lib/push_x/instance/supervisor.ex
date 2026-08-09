@@ -73,7 +73,10 @@ defmodule PushX.Instance.Supervisor do
       conn_opts: [
         transport_opts: [
           timeout: Keyword.get(config, :connect_timeout, 10_000),
-          keepalive: true
+          keepalive: true,
+          # Explicit so a future refactor can't silently disable TLS peer
+          # verification (this is already Mint's default on OTP 25+).
+          verify: :verify_peer
         ]
       ]
     ]

@@ -150,9 +150,7 @@ defmodule PushX.Retry do
   - `:unknown_error` - Unrecognized error (could be client-side issue)
   """
   @spec retryable?(Response.t()) :: boolean()
-  def retryable?(%Response{status: status}) do
-    status in [:connection_error, :rate_limited, :server_error]
-  end
+  defdelegate retryable?(response), to: Response
 
   # Base delay for connection errors (faster than rate limits)
   @connection_error_base_delay_ms 1_000

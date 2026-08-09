@@ -515,7 +515,11 @@ defmodule PushX do
     if Response.should_remove_token?(response) do
       case Config.on_invalid_token() do
         {mod, fun, args} ->
-          Task.start(fn -> apply(mod, fun, [provider, token | args]) end)
+          # Supervised so a crashing cleanup callback is logged (with a
+          # stacktrace) instead of dying silently in an unlinked process.
+          Task.Supervisor.start_child(PushX.TaskSupervisor, fn ->
+            apply(mod, fun, [provider, token | args])
+          end)
 
         nil ->
           :ok

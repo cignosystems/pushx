@@ -26,8 +26,18 @@ defmodule PushX.TokenTest do
       assert Token.validate(:apns, "abc123") == {:error, :invalid_length}
     end
 
-    test "too long token" do
+    test "odd-length token is rejected (not whole bytes)" do
       token = String.duplicate("a", 65)
+      assert Token.validate(:apns, token) == {:error, :invalid_length}
+    end
+
+    test "longer future token formats are accepted (Apple: don't hard-code 64)" do
+      token = String.duplicate("a", 128)
+      assert Token.validate(:apns, token) == :ok
+    end
+
+    test "absurdly long token is rejected" do
+      token = String.duplicate("a", 600)
       assert Token.validate(:apns, token) == {:error, :invalid_length}
     end
 

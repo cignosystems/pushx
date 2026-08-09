@@ -33,7 +33,13 @@ defmodule PushX.Application do
              count: PushX.Config.finch_pool_count(),
              protocols: [:http2],
              conn_opts: [
-               transport_opts: [timeout: PushX.Config.connect_timeout(), keepalive: true]
+               transport_opts: [
+                 timeout: PushX.Config.connect_timeout(),
+                 keepalive: true,
+                 # Explicit so a future refactor can't silently disable TLS peer
+                 # verification (this is already Mint's default on OTP 25+).
+                 verify: :verify_peer
+               ]
              ]
            ],
            # APNS Sandbox
@@ -42,7 +48,13 @@ defmodule PushX.Application do
              count: PushX.Config.finch_pool_count(),
              protocols: [:http2],
              conn_opts: [
-               transport_opts: [timeout: PushX.Config.connect_timeout(), keepalive: true]
+               transport_opts: [
+                 timeout: PushX.Config.connect_timeout(),
+                 keepalive: true,
+                 # Explicit so a future refactor can't silently disable TLS peer
+                 # verification (this is already Mint's default on OTP 25+).
+                 verify: :verify_peer
+               ]
              ]
            ],
            # FCM (Firebase Cloud Messaging)
@@ -51,7 +63,13 @@ defmodule PushX.Application do
              count: PushX.Config.finch_pool_count(),
              protocols: [:http2],
              conn_opts: [
-               transport_opts: [timeout: PushX.Config.connect_timeout(), keepalive: true]
+               transport_opts: [
+                 timeout: PushX.Config.connect_timeout(),
+                 keepalive: true,
+                 # Explicit so a future refactor can't silently disable TLS peer
+                 # verification (this is already Mint's default on OTP 25+).
+                 verify: :verify_peer
+               ]
              ]
            ],
            :default => [

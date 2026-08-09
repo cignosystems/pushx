@@ -175,6 +175,11 @@ defmodule PushX.Message do
 
   @doc """
   Converts the message to an APNS payload map.
+
+  Note: when the message has a title but no explicit sound, `"default"` is
+  injected — a titled notification is assumed to be user-visible. To send a
+  visible-but-silent notification, build the raw APNS payload map yourself
+  (omit `"sound"`) instead of using the `Message` builder.
   """
   @spec to_apns_payload(t()) :: map()
   def to_apns_payload(%__MODULE__{} = message) do
