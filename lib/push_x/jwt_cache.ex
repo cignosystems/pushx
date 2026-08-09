@@ -69,7 +69,7 @@ defmodule PushX.JWTCache do
         {:reply, ok, state}
 
       :miss ->
-        case generate_fn.() do
+        case safe_generate(generate_fn) do
           {:ok, token} = ok ->
             :ets.insert(@table, {cache_key, token, now + ttl_ms})
             {:reply, ok, state}
@@ -81,6 +81,32 @@ defmodule PushX.JWTCache do
   end
 
   ## Private
+
+  # The generator runs caller-supplied code (JWT signing over caller-supplied
+  # credentials). This process is shared by every instance, so an exception
+  # here must become an error tuple — a crash would destroy the ETS table and
+  # every tenant's cached token.
+  defp safe_generate(generate_fn) do
+    case generate_fn.() do
+      {:ok, _token} = ok ->
+        ok
+
+      {:error, _reason} = error ->
+        error
+
+      other ->
+        Logger.error("[PushX.JWTCache] Generator returned an unexpected shape: #{inspect(other)}")
+        {:error, {:invalid_generator_result, other}}
+    end
+  rescue
+    e ->
+      Logger.error("[PushX.JWTCache] Token generation raised: #{Exception.message(e)}")
+      {:error, Exception.message(e)}
+  catch
+    kind, reason ->
+      Logger.error("[PushX.JWTCache] Token generation #{kind}: #{inspect(reason)}")
+      {:error, {kind, reason}}
+  end
 
   defp fast_read(cache_key, now) do
     case :ets.lookup(@table, cache_key) do

@@ -71,7 +71,9 @@ defmodule PushX.Instance do
 
     * `:key_id` - (required) Apple Key ID
     * `:team_id` - (required) Apple Team ID
-    * `:private_key` - (required) PEM string, `{:file, path}`, or `{:system, "ENV_VAR"}`
+    * `:private_key` - (required) PEM string, `{:file, path}`, or `{:system, "ENV_VAR"}`.
+      Must be a P-256 (`prime256v1`) EC key — APNS signs with ES256, and a key
+      on any other curve is rejected at start time.
     * `:mode` - `:prod` or `:sandbox` (default: `:prod`)
     * `:pool_size` - Finch pool size (default: 2)
     * `:pool_count` - Finch pool count (default: 1)
@@ -89,6 +91,12 @@ defmodule PushX.Instance do
     * `{:error, :reserved_name}` if name is `:apns` or `:fcm`
     * `{:error, :already_started}` if instance already exists
     * `{:error, {:missing_config, keys}}` if required config is missing
+    * `{:error, {:invalid_private_key, reason}}` if an APNS `:private_key`
+      cannot sign — a malformed PEM, a key on the wrong curve, a `{:file, path}`
+      whose file is missing, or a `{:system, VAR}` that is unset
+
+  APNS credentials are verified with a test signature before the instance
+  starts, so a bad key fails here rather than on the first push.
 
   """
   @spec start(atom(), :apns | :fcm, keyword()) :: {:ok, atom()} | {:error, term()}
@@ -135,6 +143,11 @@ defmodule PushX.Instance do
   with fresh connections. In-flight requests on the old pool receive
   connection errors, which the retry logic handles automatically.
 
+  The merged config is validated *before* the running instance is stopped, so
+  a rotation to an unusable APNS key returns
+  `{:error, {:invalid_private_key, reason}}` and leaves the current instance
+  serving traffic.
+
   ## Examples
 
       # Rotate APNS key
@@ -154,7 +167,10 @@ defmodule PushX.Instance do
         provider = info.provider
         merged = Keyword.merge(info.config, new_config)
 
-        with :ok <- stop(name) do
+        # Validate before stopping so a bad new credential leaves the
+        # running instance untouched instead of tearing it down.
+        with :ok <- validate_config(provider, merged),
+             :ok <- stop(name) do
           start(name, provider, merged)
         end
 
@@ -476,7 +492,7 @@ defmodule PushX.Instance do
     missing = Enum.reject(required, &Keyword.has_key?(config, &1))
 
     case missing do
-      [] -> :ok
+      [] -> validate_private_key(config)
       keys -> {:error, {:missing_config, keys}}
     end
   end
@@ -489,6 +505,24 @@ defmodule PushX.Instance do
       [] -> :ok
       keys -> {:error, {:missing_config, keys}}
     end
+  end
+
+  # Resolves the key and performs a test sign so a garbage PEM (or a missing
+  # file / unset env var) is rejected at start/reconfigure time instead of
+  # raising inside the shared JWTCache on the first push.
+  defp validate_private_key(config) do
+    key_id = Keyword.fetch!(config, :key_id)
+    private_key = resolve_private_key(Keyword.fetch!(config, :private_key))
+    signer = Joken.Signer.create("ES256", %{"pem" => private_key}, %{"kid" => key_id})
+
+    case Joken.encode_and_sign(%{"iss" => "pushx-validate"}, signer) do
+      {:ok, _token, _claims} -> :ok
+      {:error, reason} -> {:error, {:invalid_private_key, reason}}
+    end
+  rescue
+    e -> {:error, {:invalid_private_key, Exception.message(e)}}
+  catch
+    kind, reason -> {:error, {:invalid_private_key, {kind, reason}}}
   end
 
   defp encode_apns_payload_safe(%Message{} = message),
@@ -593,6 +627,13 @@ defmodule PushX.Instance do
         Logger.error("[PushX.Instance] JWT generation failed: #{inspect(reason)}")
         {:error, "JWT generation failed: #{inspect(reason)}"}
     end
+  rescue
+    # A malformed PEM makes JOSE raise (badarg) instead of returning an error
+    # tuple; surface it as the documented error so the caller and the shared
+    # JWTCache never crash on tenant-supplied credentials.
+    e ->
+      Logger.error("[PushX.Instance] JWT generation raised: #{Exception.message(e)}")
+      {:error, "JWT generation failed: #{Exception.message(e)}"}
   end
 
   defp resolve_private_key({:file, path}), do: File.read!(path)

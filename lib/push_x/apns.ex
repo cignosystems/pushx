@@ -508,5 +508,12 @@ defmodule PushX.APNS do
         Logger.error("[PushX.APNS] JWT generation failed: #{inspect(reason)}")
         {:error, "JWT generation failed: #{inspect(reason)}"}
     end
+  rescue
+    # A malformed PEM makes JOSE raise (badarg) instead of returning an error
+    # tuple; surface it as the documented error so the caller and the shared
+    # JWTCache never crash on a misconfigured credential.
+    e ->
+      Logger.error("[PushX.APNS] JWT generation raised: #{Exception.message(e)}")
+      {:error, "JWT generation failed: #{Exception.message(e)}"}
   end
 end

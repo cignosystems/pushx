@@ -57,6 +57,29 @@ defmodule PushX.InstanceTest do
                Instance.start(:bad_apns2, :apns, key_id: "KEY")
     end
 
+    test "rejects a malformed private key PEM" do
+      assert {:error, {:invalid_private_key, _reason}} =
+               Instance.start(:bad_pem, :apns, apns_config(private_key: "not a pem"))
+    end
+
+    test "rejects a {:file, path} private key whose file is missing" do
+      assert {:error, {:invalid_private_key, _reason}} =
+               Instance.start(
+                 :bad_key_file,
+                 :apns,
+                 apns_config(private_key: {:file, "/nonexistent/AuthKey.p8"})
+               )
+    end
+
+    test "rejects a {:system, var} private key whose env var is unset" do
+      assert {:error, {:invalid_private_key, _reason}} =
+               Instance.start(
+                 :bad_key_env,
+                 :apns,
+                 apns_config(private_key: {:system, "PUSHX_TEST_UNSET_ENV_VAR"})
+               )
+    end
+
     test "validates required FCM config" do
       assert {:error, {:missing_config, [:project_id, :credentials]}} =
                Instance.start(:bad_fcm, :fcm, [])
@@ -173,6 +196,15 @@ defmodule PushX.InstanceTest do
 
     test "returns error for unknown instance" do
       assert {:error, :not_found} = Instance.reconfigure(:nonexistent, mode: :sandbox)
+    end
+
+    test "rejects a bad private key and leaves the running instance untouched" do
+      start_and_cleanup(:reconfig_bad_key, :apns, apns_config())
+
+      assert {:error, {:invalid_private_key, _reason}} =
+               Instance.reconfigure(:reconfig_bad_key, private_key: "garbage")
+
+      assert {:ok, %{provider: :apns, enabled: true}} = Instance.status(:reconfig_bad_key)
     end
   end
 

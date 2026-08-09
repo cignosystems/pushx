@@ -63,38 +63,34 @@ defmodule PushX.JWTCacheTest do
       assert :counters.get(counter, 1) == 1
     end
 
-    test "survives a generate_fn that raises and stays usable afterwards" do
+    test "converts a raising generate_fn into an error tuple without crashing" do
       key = make_unique_key()
+      pid = Process.whereis(PushX.JWTCache)
 
-      # Generate inside an isolated process so we don't take the test process
-      # down with the GenServer when it crashes.
-      task =
-        Task.async(fn ->
-          try do
-            JWTCache.get_or_generate(key, fn -> raise "kaboom" end, 60_000)
-          catch
-            :exit, _reason -> :crashed
-          end
-        end)
+      assert {:error, "kaboom"} =
+               JWTCache.get_or_generate(key, fn -> raise "kaboom" end, 60_000)
 
-      assert :crashed = Task.await(task, 5_000)
-
-      # The cache GenServer is restarted by its supervisor; subsequent calls work.
-      _ = wait_for_cache(50)
+      # The cache process survived (same pid, no supervisor restart) and the
+      # ETS table with every other entry is intact.
+      assert Process.whereis(PushX.JWTCache) == pid
       assert {:ok, "ok"} = JWTCache.get_or_generate(key, fn -> {:ok, "ok"} end, 60_000)
     end
-  end
 
-  defp wait_for_cache(0), do: :error
+    test "converts a throwing generate_fn into an error tuple without crashing" do
+      key = make_unique_key()
+      pid = Process.whereis(PushX.JWTCache)
 
-  defp wait_for_cache(retries) do
-    case Process.whereis(PushX.JWTCache) do
-      nil ->
-        Process.sleep(20)
-        wait_for_cache(retries - 1)
+      assert {:error, {:throw, :kaboom}} =
+               JWTCache.get_or_generate(key, fn -> throw(:kaboom) end, 60_000)
 
-      pid ->
-        {:ok, pid}
+      assert Process.whereis(PushX.JWTCache) == pid
+    end
+
+    test "converts a generate_fn returning a bad shape into an error tuple" do
+      key = make_unique_key()
+
+      assert {:error, {:invalid_generator_result, :oops}} =
+               JWTCache.get_or_generate(key, fn -> :oops end, 60_000)
     end
   end
 

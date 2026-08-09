@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+- **Unvalidated per-instance APNS credentials could crash the shared `PushX.JWTCache` and escalate to a cross-tenant outage** — `Instance.start/3` and `reconfigure/2` only checked that `:private_key` was *present*. A malformed PEM (or a `{:file, path}` whose file is missing / `{:system, VAR}` unset) made `Joken`/`JOSE` raise `badarg` on the first push — inside `PushX.JWTCache`'s `handle_call`, a GenServer shared by every instance and the default APNS path. The caller crashed instead of receiving the documented `{:error, %Response{}}`, the cache's ETS table (holding every tenant's cached JWT) was destroyed with it, and three such pushes within five seconds exceeded `PushX.Supervisor`'s default restart intensity, stopping the `:pushx` application — in a `start_permanent` release, the whole node. One tenant's bad credential became an availability failure for all tenants. Fixed in three layers:
+  - `Instance.start/3` now eagerly resolves the APNS private key and performs a test sign, returning `{:error, {:invalid_private_key, reason}}` instead of accepting a credential that can never sign. `reconfigure/2` validates the merged config *before* stopping the old instance, so a bad rotation leaves the running instance untouched.
+  - `generate_jwt` in both `PushX.APNS` and `PushX.Instance` now rescues exceptions from key resolution and signing, returning the documented `{:error, reason}` tuple.
+  - `PushX.JWTCache` wraps the caller-supplied generator in `try/rescue/catch`, so no generator — raise, throw, exit, or bad return shape — can crash the shared cache process.
+
+### Fixed
+- **Test fixture APNS key was on the wrong curve** — the intentionally committed test key in `test_helper.exs` was a secp256k1 key, which JOSE cannot sign ES256 with (APNS requires P-256); the suite never noticed because JWT generation was only exercised lazily at push time. Replaced with a P-256 key, which the new eager credential validation requires.
+
 ## [0.11.0] - 2026-05-07
 
 ### Documentation
