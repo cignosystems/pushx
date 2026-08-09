@@ -14,11 +14,20 @@ defmodule PushX.RateLimiterTest do
     original_window = Application.get_env(:pushx, :rate_limit_window_ms)
 
     on_exit(fn ->
-      # Restore original config
-      if original_enabled, do: Application.put_env(:pushx, :rate_limit_enabled, original_enabled)
-      if original_apns, do: Application.put_env(:pushx, :rate_limit_apns, original_apns)
-      if original_fcm, do: Application.put_env(:pushx, :rate_limit_fcm, original_fcm)
-      if original_window, do: Application.put_env(:pushx, :rate_limit_window_ms, original_window)
+      # Restore original config. When the original was unset, the key must be
+      # DELETED — `if original, do: put_env` silently left this suite's
+      # values (enabled + tiny limits) leaking into every later test, which
+      # made unrelated send-path tests intermittently hit :rate_limited and
+      # sleep out their 60s ExUnit timeout in retry backoff.
+      restore = fn
+        key, nil -> Application.delete_env(:pushx, key)
+        key, val -> Application.put_env(:pushx, key, val)
+      end
+
+      restore.(:rate_limit_enabled, original_enabled)
+      restore.(:rate_limit_apns, original_apns)
+      restore.(:rate_limit_fcm, original_fcm)
+      restore.(:rate_limit_window_ms, original_window)
       RateLimiter.reset_all()
     end)
 
