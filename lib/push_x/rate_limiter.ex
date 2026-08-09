@@ -57,11 +57,18 @@ defmodule PushX.RateLimiter do
   Checks if a request can be made and increments the counter.
 
   Returns `:ok` if under the limit, `{:error, :rate_limited}` if over.
+
+  The two-arity form counts under an arbitrary `key` (e.g. a named-instance
+  atom) while taking the limit from `provider`'s config — each instance has
+  its own credentials and therefore its own provider-side budget.
   """
   @spec check_and_increment(provider()) :: :ok | {:error, :rate_limited}
-  def check_and_increment(provider) do
+  def check_and_increment(provider), do: check_and_increment(provider, provider)
+
+  @spec check_and_increment(atom(), provider()) :: :ok | {:error, :rate_limited}
+  def check_and_increment(key, provider) do
     if enabled?() do
-      do_check_and_increment(provider)
+      do_check_and_increment(key, provider)
     else
       :ok
     end
@@ -163,25 +170,25 @@ defmodule PushX.RateLimiter do
     PushX.Config.get(:rate_limit_window_ms, @default_window_ms)
   end
 
-  defp do_check_and_increment(provider) do
+  defp do_check_and_increment(key, provider) do
     now = System.monotonic_time(:millisecond)
     window = window_ms()
     max_requests = limit(provider)
 
-    case :ets.lookup(@table_name, provider) do
-      [{^provider, window_start, count}]
+    case :ets.lookup(@table_name, key) do
+      [{^key, window_start, count}]
       when is_integer(window_start) and now - window_start <= window ->
         if count < max_requests do
-          :ets.update_counter(@table_name, provider, {3, 1})
+          :ets.update_counter(@table_name, key, {3, 1})
           :ok
         else
-          Logger.warning("[PushX.RateLimiter] Rate limit exceeded for #{provider}")
+          Logger.warning("[PushX.RateLimiter] Rate limit exceeded for #{key}")
           {:error, :rate_limited}
         end
 
       _ ->
         # Window expired or no entry — start a new window
-        :ets.insert(@table_name, {provider, now, 1})
+        :ets.insert(@table_name, {key, now, 1})
         :ok
     end
   end

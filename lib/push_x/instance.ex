@@ -49,7 +49,7 @@ defmodule PushX.Instance do
 
   require Logger
 
-  alias PushX.{HTTP, JWTCache, Message, Response, Retry, Telemetry, URLs}
+  alias PushX.{HTTP, JWTCache, Message, Response, Retry, SendGate, Telemetry, URLs}
 
   @table :pushx_instances
   @reserved_names [:apns, :fcm]
@@ -304,6 +304,20 @@ defmodule PushX.Instance do
   end
 
   defp apns_send_once(info, device_token, payload, opts) do
+    # Same breaker/limiter gate as the static path, keyed by instance name
+    # so one tenant's failing pool doesn't open the breaker for others.
+    case SendGate.check(info.name, :apns) do
+      :ok ->
+        result = do_apns_send_once(info, device_token, payload, opts)
+        SendGate.record(info.name, result)
+        result
+
+      {:error, %Response{}} = error ->
+        error
+    end
+  end
+
+  defp do_apns_send_once(info, device_token, payload, opts) do
     opts = merge_message_options(payload, opts)
     mode = Keyword.get(opts, :mode, Keyword.get(info.config, :mode, :prod))
 
@@ -408,8 +422,14 @@ defmodule PushX.Instance do
       pool_timeout: Keyword.get(info.config, :pool_timeout, 5_000)
     ]
 
-    case Finch.build(:post, url, headers, body)
-         |> Finch.request(info.finch_name, request_opts) do
+    # HTTP.finch_request carries the shared NimblePool CaseClauseError
+    # rescue — the same hardening the static path has.
+    case HTTP.finch_request(
+           Finch.build(:post, url, headers, body),
+           info.finch_name,
+           request_opts,
+           "PushX.Instance"
+         ) do
       {:ok, %{status: 200, headers: resp_headers}} ->
         apns_id = HTTP.get_header(resp_headers, "apns-id")
         response = Response.success(:apns, apns_id)
@@ -442,6 +462,18 @@ defmodule PushX.Instance do
   end
 
   defp fcm_send_once(info, device_token, payload, opts) do
+    case SendGate.check(info.name, :fcm) do
+      :ok ->
+        result = do_fcm_send_once(info, device_token, payload, opts)
+        SendGate.record(info.name, result)
+        result
+
+      {:error, %Response{}} = error ->
+        error
+    end
+  end
+
+  defp do_fcm_send_once(info, device_token, payload, opts) do
     message = build_fcm_message(device_token, payload, opts)
 
     with {:ok, body} <- HTTP.safe_encode(message),
@@ -484,8 +516,14 @@ defmodule PushX.Instance do
       pool_timeout: Keyword.get(info.config, :pool_timeout, 5_000)
     ]
 
-    case Finch.build(:post, url, headers, body)
-         |> Finch.request(info.finch_name, request_opts) do
+    # HTTP.finch_request carries the shared NimblePool CaseClauseError
+    # rescue — the same hardening the static path has.
+    case HTTP.finch_request(
+           Finch.build(:post, url, headers, body),
+           info.finch_name,
+           request_opts,
+           "PushX.Instance"
+         ) do
       {:ok, %{status: 200, body: resp_body}} ->
         response =
           case JSON.decode(resp_body) do
@@ -677,48 +715,9 @@ defmodule PushX.Instance do
 
   # -- FCM message builder --
 
-  defp build_fcm_message(token, %Message{} = message, opts) do
-    base =
-      %{"token" => token}
-      |> HTTP.maybe_put("notification", Message.to_fcm_payload(message)["notification"])
-      |> HTTP.maybe_put("data", HTTP.stringify_map(Keyword.get(opts, :data) || message.data))
-      |> HTTP.maybe_put("android", merge_android(message, Keyword.get(opts, :android)))
-      |> HTTP.maybe_put("webpush", Keyword.get(opts, :webpush))
-
-    %{"message" => base}
-  end
-
-  defp build_fcm_message(token, payload, opts) when is_map(payload) do
-    base = %{"token" => token}
-
-    base =
-      cond do
-        Map.has_key?(payload, "notification") or Map.has_key?(payload, "data") ->
-          base
-          |> HTTP.maybe_put("notification", payload["notification"])
-          |> HTTP.maybe_put(
-            "data",
-            HTTP.stringify_map(Keyword.get(opts, :data) || payload["data"])
-          )
-
-        true ->
-          Map.put(base, "notification", payload)
-          |> HTTP.maybe_put("data", HTTP.stringify_map(Keyword.get(opts, :data)))
-      end
-
-    base
-    |> HTTP.maybe_put("android", Keyword.get(opts, :android) || payload["android"])
-    |> HTTP.maybe_put("webpush", Keyword.get(opts, :webpush) || payload["webpush"])
-    |> then(&%{"message" => &1})
-  end
-
-  # Message delivery fields (priority/ttl/collapse_key) feed the android
-  # block; keys given via opts win over struct-derived ones.
-  defp merge_android(%Message{} = message, opts_android) do
-    case {Message.to_fcm_android(message), opts_android} do
-      {nil, opts_map} -> opts_map
-      {msg_map, nil} -> msg_map
-      {msg_map, opts_map} -> Map.merge(msg_map, opts_map)
-    end
+  # Delegates to the static builder so the two paths cannot drift (the
+  # instance copy used to silently drop the `apns` override key).
+  defp build_fcm_message(token, payload, opts) do
+    PushX.FCM.build_message(token, payload, opts)
   end
 end

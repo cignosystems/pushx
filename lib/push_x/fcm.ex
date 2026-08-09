@@ -60,13 +60,12 @@ defmodule PushX.FCM do
   require Logger
 
   alias PushX.{
-    CircuitBreaker,
     Config,
     HTTP,
     Message,
-    RateLimiter,
     Response,
     Retry,
+    SendGate,
     Telemetry,
     URLs
   }
@@ -112,17 +111,14 @@ defmodule PushX.FCM do
   """
   @spec send_once(token(), payload(), [option()]) :: {:ok, Response.t()} | {:error, Response.t()}
   def send_once(device_token, payload, opts \\ []) do
-    with :ok <- CircuitBreaker.allow?(:fcm),
-         :ok <- RateLimiter.check_and_increment(:fcm) do
-      result = do_send(device_token, payload, opts)
-      record_circuit_breaker_result(result)
-      result
-    else
-      {:error, :circuit_open} ->
-        {:error, Response.error(:fcm, :circuit_open, "Circuit breaker is open")}
+    case SendGate.check(:fcm, :fcm) do
+      :ok ->
+        result = do_send(device_token, payload, opts)
+        SendGate.record(:fcm, result)
+        result
 
-      {:error, :rate_limited} ->
-        {:error, Response.error(:fcm, :rate_limited, "Client-side rate limit exceeded")}
+      {:error, %Response{}} = error ->
+        error
     end
   end
 
@@ -174,8 +170,14 @@ defmodule PushX.FCM do
           Keyword.take(opts, [:receive_timeout, :pool_timeout])
         )
 
-      case Finch.build(:post, url, headers, body)
-           |> Finch.request(Config.finch_name(), request_opts) do
+      # HTTP.finch_request carries the shared NimblePool CaseClauseError
+      # rescue, so pool-death errors surface as retryable connection errors.
+      case HTTP.finch_request(
+             Finch.build(:post, url, headers, body),
+             Config.finch_name(),
+             request_opts,
+             "PushX.FCM"
+           ) do
         {:ok, %{status: 200, body: response_body}} ->
           response =
             case JSON.decode(response_body) do
@@ -201,26 +203,6 @@ defmodule PushX.FCM do
           {:error, response}
       end
     rescue
-      e in CaseClauseError ->
-        # See PushX.APNS for context — Finch's outer case raises on 2-tuple
-        # error returns from NimblePool. Treat any 2-tuple atom-reason as a
-        # retryable connection error so PushX.Retry recovers; reraise
-        # anything else so real programming bugs still surface.
-        case e do
-          %CaseClauseError{term: {:error, reason}} when is_atom(reason) ->
-            Logger.error(
-              "[PushX.FCM] Finch connection error (#{inspect(reason)}) — likely concurrent request limit / pool process death"
-            )
-
-            response = Response.error(:fcm, :connection_error, Atom.to_string(reason))
-            Telemetry.error(:fcm, device_token, start_time, response)
-            {:error, response}
-
-          _other ->
-            Telemetry.exception(:fcm, device_token, start_time, :error, e, __STACKTRACE__)
-            reraise e, __STACKTRACE__
-        end
-
       e ->
         Telemetry.exception(:fcm, device_token, start_time, :error, e, __STACKTRACE__)
         reraise e, __STACKTRACE__
@@ -396,17 +378,14 @@ defmodule PushX.FCM do
   """
   @spec send_data_once(token(), map(), [option()]) :: {:ok, Response.t()} | {:error, Response.t()}
   def send_data_once(device_token, data, opts \\ []) do
-    with :ok <- CircuitBreaker.allow?(:fcm),
-         :ok <- RateLimiter.check_and_increment(:fcm) do
-      result = do_send_data(device_token, data, opts)
-      record_circuit_breaker_result(result)
-      result
-    else
-      {:error, :circuit_open} ->
-        {:error, Response.error(:fcm, :circuit_open, "Circuit breaker is open")}
+    case SendGate.check(:fcm, :fcm) do
+      :ok ->
+        result = do_send_data(device_token, data, opts)
+        SendGate.record(:fcm, result)
+        result
 
-      {:error, :rate_limited} ->
-        {:error, Response.error(:fcm, :rate_limited, "Client-side rate limit exceeded")}
+      {:error, %Response{}} = error ->
+        error
     end
   end
 
@@ -464,8 +443,14 @@ defmodule PushX.FCM do
           Keyword.take(opts, [:receive_timeout, :pool_timeout])
         )
 
-      case Finch.build(:post, url, headers, body)
-           |> Finch.request(Config.finch_name(), request_opts) do
+      # HTTP.finch_request carries the shared NimblePool CaseClauseError
+      # rescue, so pool-death errors surface as retryable connection errors.
+      case HTTP.finch_request(
+             Finch.build(:post, url, headers, body),
+             Config.finch_name(),
+             request_opts,
+             "PushX.FCM"
+           ) do
         {:ok, %{status: 200, body: response_body}} ->
           response =
             case JSON.decode(response_body) do
@@ -491,26 +476,6 @@ defmodule PushX.FCM do
           {:error, response}
       end
     rescue
-      e in CaseClauseError ->
-        # See PushX.APNS for context — Finch's outer case raises on 2-tuple
-        # error returns from NimblePool. Treat any 2-tuple atom-reason as a
-        # retryable connection error so PushX.Retry recovers; reraise
-        # anything else so real programming bugs still surface.
-        case e do
-          %CaseClauseError{term: {:error, reason}} when is_atom(reason) ->
-            Logger.error(
-              "[PushX.FCM] Finch connection error (#{inspect(reason)}) — likely concurrent request limit / pool process death"
-            )
-
-            response = Response.error(:fcm, :connection_error, Atom.to_string(reason))
-            Telemetry.error(:fcm, device_token, start_time, response)
-            {:error, response}
-
-          _other ->
-            Telemetry.exception(:fcm, device_token, start_time, :error, e, __STACKTRACE__)
-            reraise e, __STACKTRACE__
-        end
-
       e ->
         Telemetry.exception(:fcm, device_token, start_time, :error, e, __STACKTRACE__)
         reraise e, __STACKTRACE__
@@ -534,17 +499,6 @@ defmodule PushX.FCM do
       :ok
     end
   end
-
-  defp record_circuit_breaker_result({:error, %Response{status: status}})
-       when status in [:connection_error, :server_error] do
-    CircuitBreaker.record_failure(:fcm)
-  end
-
-  defp record_circuit_breaker_result({:ok, _response}) do
-    CircuitBreaker.record_success(:fcm)
-  end
-
-  defp record_circuit_breaker_result(_), do: :ok
 
   @doc false
   # Public for tests only — builds the FCM v1 message envelope.

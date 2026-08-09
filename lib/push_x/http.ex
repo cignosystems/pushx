@@ -5,6 +5,42 @@ defmodule PushX.HTTP do
   # HTTP responses and building requests. Extracted so that bug fixes (e.g.,
   # the `Retry-After` parser) only need to be made in one place.
 
+  require Logger
+
+  @doc """
+  Runs a Finch request, converting Finch's self-inflicted `CaseClauseError`
+  into a normal `{:error, reason}` tuple.
+
+  Finch's outer case (lib/finch.ex:516) only matches `{:ok, …}` or the
+  3-tuple `{:error, err, _acc}` shape. When NimblePool returns a 2-tuple —
+  `{:error, :connection_process_went_down}` is the one seen in the wild, but
+  the same machinery can return other atom reasons — Finch raises
+  CaseClauseError on itself. Every send path (static and instance) must
+  treat that as a retryable connection error; sharing the rescue here keeps
+  the paths from drifting again. Anything else is reraised so real
+  programming bugs still surface.
+
+  `label` only tags the log line (e.g. "PushX.APNS").
+  """
+  @spec finch_request(Finch.Request.t(), atom(), keyword(), String.t()) ::
+          {:ok, Finch.Response.t()} | {:error, term()}
+  def finch_request(request, finch_name, request_opts, label) do
+    Finch.request(request, finch_name, request_opts)
+  rescue
+    e in CaseClauseError ->
+      case e do
+        %CaseClauseError{term: {:error, reason}} when is_atom(reason) ->
+          Logger.error(
+            "[#{label}] Finch connection error (#{inspect(reason)}) — likely concurrent request limit / pool process death"
+          )
+
+          {:error, reason}
+
+        _other ->
+          reraise e, __STACKTRACE__
+      end
+  end
+
   @doc "Returns the value of an HTTP header by name (case-sensitive), or nil."
   @spec get_header([{String.t(), String.t()}], String.t()) :: String.t() | nil
   def get_header(headers, key) do

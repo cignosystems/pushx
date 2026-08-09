@@ -391,4 +391,67 @@ defmodule PushX.InstanceTest do
       assert {:error, :not_found} = Instance.reconnect(:nonexistent)
     end
   end
+
+  describe "circuit breaker and rate limiter on the instance path" do
+    setup do
+      Application.put_env(:pushx, :circuit_breaker_enabled, true)
+      Application.put_env(:pushx, :circuit_breaker_threshold, 3)
+
+      on_exit(fn ->
+        Application.delete_env(:pushx, :circuit_breaker_enabled)
+        Application.delete_env(:pushx, :circuit_breaker_threshold)
+        PushX.CircuitBreaker.reset(:apns)
+        PushX.CircuitBreaker.reset(:gated_instance)
+      end)
+
+      :ok
+    end
+
+    test "an open breaker for the instance key blocks sends without touching the network" do
+      start_and_cleanup(:gated_instance, :apns, apns_config())
+
+      for _ <- 1..3, do: PushX.CircuitBreaker.record_failure(:gated_instance)
+      assert PushX.CircuitBreaker.state(:gated_instance) == :open
+
+      assert {:error, %Response{status: :circuit_open}} =
+               PushX.push(:gated_instance, "some-token", "Hello", topic: "com.test.app")
+    end
+
+    test "instance breaker state is independent of the static provider breaker" do
+      start_and_cleanup(:gated_instance, :apns, apns_config())
+
+      for _ <- 1..3, do: PushX.CircuitBreaker.record_failure(:apns)
+      assert PushX.CircuitBreaker.state(:apns) == :open
+
+      # The instance key is unaffected by the static :apns breaker.
+      assert PushX.CircuitBreaker.state(:gated_instance) == :closed
+    end
+  end
+
+  describe "per-key rate limiting" do
+    setup do
+      Application.put_env(:pushx, :rate_limit_enabled, true)
+      Application.put_env(:pushx, :rate_limit_apns, 2)
+      Application.put_env(:pushx, :rate_limit_window_ms, 60_000)
+
+      on_exit(fn ->
+        Application.delete_env(:pushx, :rate_limit_enabled)
+        Application.delete_env(:pushx, :rate_limit_apns)
+        Application.delete_env(:pushx, :rate_limit_window_ms)
+        PushX.RateLimiter.reset_all()
+        PushX.RateLimiter.reset(:tenant_x)
+      end)
+
+      :ok
+    end
+
+    test "instance keys count separately but use the provider's limit" do
+      assert PushX.RateLimiter.check_and_increment(:tenant_x, :apns) == :ok
+      assert PushX.RateLimiter.check_and_increment(:tenant_x, :apns) == :ok
+      assert PushX.RateLimiter.check_and_increment(:tenant_x, :apns) == {:error, :rate_limited}
+
+      # The static :apns budget is untouched by the instance key.
+      assert PushX.RateLimiter.check_and_increment(:apns) == :ok
+    end
+  end
 end

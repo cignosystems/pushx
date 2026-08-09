@@ -37,6 +37,9 @@ defmodule PushX.CircuitBreaker do
   @table_name :pushx_circuit_breaker
 
   @type provider :: :apns | :fcm
+  # Breakers are also keyed by named-instance atoms (per-tenant pools have
+  # independent health), so every entry point accepts any atom key.
+  @type key :: atom()
   @type state :: :closed | :open | :half_open
 
   ## Client API
@@ -54,7 +57,7 @@ defmodule PushX.CircuitBreaker do
   Returns `:ok` if the circuit is closed or half-open (probe),
   `{:error, :circuit_open}` if the circuit is open.
   """
-  @spec allow?(provider()) :: :ok | {:error, :circuit_open}
+  @spec allow?(key()) :: :ok | {:error, :circuit_open}
   def allow?(provider) do
     if enabled?() do
       do_allow?(provider)
@@ -69,7 +72,7 @@ defmodule PushX.CircuitBreaker do
   The write is serialized through the GenServer so concurrent successes
   and failures cannot lose updates via ETS read-modify-write.
   """
-  @spec record_success(provider()) :: :ok
+  @spec record_success(key()) :: :ok
   def record_success(provider) do
     if enabled?() do
       GenServer.call(__MODULE__, {:record_success, provider})
@@ -83,7 +86,7 @@ defmodule PushX.CircuitBreaker do
 
   Serialized through the GenServer.
   """
-  @spec record_failure(provider()) :: :ok
+  @spec record_failure(key()) :: :ok
   def record_failure(provider) do
     if enabled?() do
       GenServer.call(__MODULE__, {:record_failure, provider})
@@ -95,7 +98,7 @@ defmodule PushX.CircuitBreaker do
   @doc """
   Returns the current circuit breaker state for a provider.
   """
-  @spec state(provider()) :: state()
+  @spec state(key()) :: state()
   def state(provider) do
     case :ets.lookup(@table_name, provider) do
       [{^provider, current_state, _count, last_failure}] ->
@@ -109,7 +112,7 @@ defmodule PushX.CircuitBreaker do
   @doc """
   Resets the circuit breaker for a provider. Useful for testing or manual recovery.
   """
-  @spec reset(provider()) :: :ok
+  @spec reset(key()) :: :ok
   def reset(provider) do
     :ets.insert(@table_name, {provider, :closed, 0, nil})
     :ok

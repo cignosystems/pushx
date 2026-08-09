@@ -46,14 +46,13 @@ defmodule PushX.APNS do
   require Logger
 
   alias PushX.{
-    CircuitBreaker,
     Config,
     HTTP,
     JWTCache,
     Message,
-    RateLimiter,
     Response,
     Retry,
+    SendGate,
     Telemetry,
     URLs
   }
@@ -105,17 +104,14 @@ defmodule PushX.APNS do
   """
   @spec send_once(token(), payload(), [option()]) :: {:ok, Response.t()} | {:error, Response.t()}
   def send_once(device_token, payload, opts \\ []) do
-    with :ok <- CircuitBreaker.allow?(:apns),
-         :ok <- RateLimiter.check_and_increment(:apns) do
-      result = do_send(device_token, payload, opts)
-      record_circuit_breaker_result(result)
-      result
-    else
-      {:error, :circuit_open} ->
-        {:error, Response.error(:apns, :circuit_open, "Circuit breaker is open")}
+    case SendGate.check(:apns, :apns) do
+      :ok ->
+        result = do_send(device_token, payload, opts)
+        SendGate.record(:apns, result)
+        result
 
-      {:error, :rate_limited} ->
-        {:error, Response.error(:apns, :rate_limited, "Client-side rate limit exceeded")}
+      {:error, %Response{}} = error ->
+        error
     end
   end
 
@@ -214,8 +210,14 @@ defmodule PushX.APNS do
           Keyword.take(opts, [:receive_timeout, :pool_timeout])
         )
 
-      case Finch.build(:post, url, headers, body)
-           |> Finch.request(Config.finch_name(), request_opts) do
+      # HTTP.finch_request carries the shared NimblePool CaseClauseError
+      # rescue, so pool-death errors surface as retryable connection errors.
+      case HTTP.finch_request(
+             Finch.build(:post, url, headers, body),
+             Config.finch_name(),
+             request_opts,
+             "PushX.APNS"
+           ) do
         {:ok, %{status: 200, headers: response_headers}} ->
           apns_id = HTTP.get_header(response_headers, "apns-id")
           response = Response.success(:apns, apns_id)
@@ -234,30 +236,6 @@ defmodule PushX.APNS do
           {:error, response}
       end
     rescue
-      e in CaseClauseError ->
-        # Finch's outer case (lib/finch.ex:516) only matches `{:ok, …}` or
-        # the 3-tuple `{:error, err, _acc}` shape. When NimblePool returns
-        # the 2-tuple shape — `{:error, :connection_process_went_down}` is
-        # the one we've seen in the wild, but the same machinery could
-        # return other atom reasons — Finch raises CaseClauseError on
-        # itself. Treat any 2-tuple error term as a retryable connection
-        # error so PushX.Retry can recover; reraise everything else so
-        # actual programming bugs still surface.
-        case e do
-          %CaseClauseError{term: {:error, reason}} when is_atom(reason) ->
-            Logger.error(
-              "[PushX.APNS] Finch connection error (#{inspect(reason)}) — likely concurrent request limit / pool process death"
-            )
-
-            response = Response.error(:apns, :connection_error, Atom.to_string(reason))
-            Telemetry.error(:apns, device_token, start_time, response)
-            {:error, response}
-
-          _other ->
-            Telemetry.exception(:apns, device_token, start_time, :error, e, __STACKTRACE__)
-            reraise e, __STACKTRACE__
-        end
-
       e ->
         Telemetry.exception(:apns, device_token, start_time, :error, e, __STACKTRACE__)
         reraise e, __STACKTRACE__
@@ -450,17 +428,6 @@ defmodule PushX.APNS do
   end
 
   # Private functions
-
-  defp record_circuit_breaker_result({:error, %Response{status: status}})
-       when status in [:connection_error, :server_error] do
-    CircuitBreaker.record_failure(:apns)
-  end
-
-  defp record_circuit_breaker_result({:ok, _response}) do
-    CircuitBreaker.record_success(:apns)
-  end
-
-  defp record_circuit_breaker_result(_), do: :ok
 
   defp base_url(mode), do: URLs.apns(mode)
 
