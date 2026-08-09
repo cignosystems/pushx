@@ -156,7 +156,23 @@ defmodule PushX.RateLimiterTest do
       assert RateLimiter.current_count(:fcm) == 0
     end
 
-    test "sliding window allows new requests after time passes" do
+    test "concurrent callers cannot exceed the limit (atomic counter)" do
+      Application.put_env(:pushx, :rate_limit_apns, 10)
+      Application.put_env(:pushx, :rate_limit_window_ms, 60_000)
+      RateLimiter.reset(:apns)
+
+      results =
+        1..100
+        |> Enum.map(fn _ -> Task.async(fn -> RateLimiter.check_and_increment(:apns) end) end)
+        |> Task.await_many(5_000)
+
+      # Exactly the limit is admitted — no overshoot from check-then-increment
+      # races, no undercount from window-reset clobbering.
+      assert Enum.count(results, &(&1 == :ok)) == 10
+      assert Enum.count(results, &(&1 == {:error, :rate_limited})) == 90
+    end
+
+    test "window rolls over: new requests allowed after the window passes" do
       # Set a very short window for testing
       Application.put_env(:pushx, :rate_limit_window_ms, 50)
       Application.put_env(:pushx, :rate_limit_apns, 2)

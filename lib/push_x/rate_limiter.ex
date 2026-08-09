@@ -3,7 +3,11 @@ defmodule PushX.RateLimiter do
   Client-side rate limiting for push notifications.
 
   Prevents exceeding provider rate limits by tracking requests locally.
-  Uses a sliding window algorithm with ETS for fast, concurrent access.
+  Uses a **fixed-window** counter (windows aligned to the clock, counters
+  bumped with a single atomic ETS operation), so concurrent senders can
+  never race the check-then-increment or clobber each other's window
+  resets. Client-side limiting is inherently best-effort: it bounds what
+  *this node* sends, and the true arbiter is always the provider.
 
   ## Configuration
 
@@ -25,10 +29,10 @@ defmodule PushX.RateLimiter do
 
   ## How It Works
 
-  1. Each provider has a separate counter
-  2. Requests are counted within a sliding time window
-  3. When the limit is reached, new requests are rejected
-  4. The window slides forward, allowing new requests
+  1. Time is divided into fixed windows of `rate_limit_window_ms`
+  2. Each key (provider or named instance) gets one atomic counter per window
+  3. When the counter passes the limit, further requests are rejected
+  4. A new window starts a fresh counter; old windows are swept periodically
 
   """
 
@@ -43,6 +47,7 @@ defmodule PushX.RateLimiter do
   @default_limit 5_000
 
   @type provider :: :apns | :fcm
+  @type key :: atom()
 
   ## Client API
 
@@ -65,7 +70,7 @@ defmodule PushX.RateLimiter do
   @spec check_and_increment(provider()) :: :ok | {:error, :rate_limited}
   def check_and_increment(provider), do: check_and_increment(provider, provider)
 
-  @spec check_and_increment(atom(), provider()) :: :ok | {:error, :rate_limited}
+  @spec check_and_increment(key(), provider()) :: :ok | {:error, :rate_limited}
   def check_and_increment(key, provider) do
     if enabled?() do
       do_check_and_increment(key, provider)
@@ -80,27 +85,26 @@ defmodule PushX.RateLimiter do
   @spec check(provider()) :: :ok | {:error, :rate_limited}
   def check(provider) do
     if enabled?() do
-      do_check(provider)
+      if current_count(provider) < limit(provider) do
+        :ok
+      else
+        {:error, :rate_limited}
+      end
     else
       :ok
     end
   end
 
   @doc """
-  Returns the current request count for a provider.
+  Returns the number of requests recorded in the current window for a key.
+
+  Counts attempts, including ones that were rejected over the limit.
   """
-  @spec current_count(provider()) :: non_neg_integer()
-  def current_count(provider) do
-    now = System.monotonic_time(:millisecond)
-    window = window_ms()
-
-    case :ets.lookup(@table_name, provider) do
-      [{^provider, window_start, count}]
-      when is_integer(window_start) and now - window_start <= window ->
-        count
-
-      _ ->
-        0
+  @spec current_count(key()) :: non_neg_integer()
+  def current_count(key) do
+    case :ets.lookup(@table_name, {key, current_window_id()}) do
+      [{_window_key, count}] -> count
+      [] -> 0
     end
   end
 
@@ -120,11 +124,11 @@ defmodule PushX.RateLimiter do
   end
 
   @doc """
-  Resets the rate limiter for a provider. Useful for testing.
+  Resets the rate limiter for a key. Useful for testing.
   """
-  @spec reset(provider()) :: :ok
-  def reset(provider) do
-    :ets.insert(@table_name, {provider, nil, 0})
+  @spec reset(key()) :: :ok
+  def reset(key) do
+    :ets.match_delete(@table_name, {{key, :_}, :_})
     :ok
   end
 
@@ -133,8 +137,7 @@ defmodule PushX.RateLimiter do
   """
   @spec reset_all() :: :ok
   def reset_all do
-    reset(:apns)
-    reset(:fcm)
+    :ets.delete_all_objects(@table_name)
     :ok
   end
 
@@ -142,10 +145,9 @@ defmodule PushX.RateLimiter do
 
   @impl true
   def init(_opts) do
+    # Rows are {{key, window_id}, count}; counters are created and bumped
+    # in one atomic :ets.update_counter/4 call on the send path.
     table = :ets.new(@table_name, [:named_table, :public, :set])
-    # Store {provider, window_start, count} tuples — :nil sentinel means "no active window"
-    :ets.insert(table, {:apns, nil, 0})
-    :ets.insert(table, {:fcm, nil, 0})
 
     # Schedule periodic cleanup
     schedule_cleanup()
@@ -170,62 +172,33 @@ defmodule PushX.RateLimiter do
     PushX.Config.get(:rate_limit_window_ms, @default_window_ms)
   end
 
-  defp do_check_and_increment(key, provider) do
-    now = System.monotonic_time(:millisecond)
-    window = window_ms()
-    max_requests = limit(provider)
-
-    case :ets.lookup(@table_name, key) do
-      [{^key, window_start, count}]
-      when is_integer(window_start) and now - window_start <= window ->
-        if count < max_requests do
-          :ets.update_counter(@table_name, key, {3, 1})
-          :ok
-        else
-          Logger.warning("[PushX.RateLimiter] Rate limit exceeded for #{key}")
-          {:error, :rate_limited}
-        end
-
-      _ ->
-        # Window expired or no entry — start a new window
-        :ets.insert(@table_name, {key, now, 1})
-        :ok
-    end
+  defp current_window_id do
+    # floor_div so negative monotonic time still maps to consistent windows
+    Integer.floor_div(System.monotonic_time(:millisecond), window_ms())
   end
 
-  defp do_check(provider) do
-    now = System.monotonic_time(:millisecond)
-    window = window_ms()
-    max_requests = limit(provider)
+  defp do_check_and_increment(key, provider) do
+    window_key = {key, current_window_id()}
 
-    case :ets.lookup(@table_name, provider) do
-      [{^provider, window_start, count}]
-      when is_integer(window_start) and now - window_start <= window ->
-        if count < max_requests do
-          :ok
-        else
-          {:error, :rate_limited}
-        end
+    # Single atomic op: creates the row at 0 if absent, then increments.
+    # There is no separate check step for concurrent callers to race.
+    count = :ets.update_counter(@table_name, window_key, {2, 1}, {window_key, 0})
 
-      _ ->
-        :ok
+    if count <= limit(provider) do
+      :ok
+    else
+      Logger.warning("[PushX.RateLimiter] Rate limit exceeded for #{inspect(key)}")
+      {:error, :rate_limited}
     end
   end
 
   defp cleanup_old_entries do
-    now = System.monotonic_time(:millisecond)
-    window = window_ms()
+    current = current_window_id()
 
-    for provider <- [:apns, :fcm] do
-      case :ets.lookup(@table_name, provider) do
-        [{^provider, window_start, _count}]
-        when is_integer(window_start) and now - window_start > window ->
-          :ets.insert(@table_name, {provider, nil, 0})
-
-        _ ->
-          :ok
-      end
-    end
+    # Delete counters from windows that have already closed.
+    :ets.select_delete(@table_name, [
+      {{{:"$1", :"$2"}, :"$3"}, [{:<, :"$2", current}], [true]}
+    ])
   end
 
   defp schedule_cleanup do
