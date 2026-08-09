@@ -49,6 +49,52 @@ defmodule PushX.CircuitBreakerTest do
       assert CircuitBreaker.allow?(:apns) == :ok
     end
 
+    test "admits exactly one probe when the cooldown expires" do
+      CircuitBreaker.record_failure(:apns)
+      CircuitBreaker.record_failure(:apns)
+      CircuitBreaker.record_failure(:apns)
+
+      Process.sleep(110)
+
+      results =
+        1..20
+        |> Enum.map(fn _ -> Task.async(fn -> CircuitBreaker.allow?(:apns) end) end)
+        |> Task.await_many(5_000)
+
+      assert Enum.count(results, &(&1 == :ok)) == 1
+      assert Enum.count(results, &(&1 == {:error, :circuit_open})) == 19
+    end
+
+    test "rejects requests while a probe is in flight" do
+      CircuitBreaker.record_failure(:apns)
+      CircuitBreaker.record_failure(:apns)
+      CircuitBreaker.record_failure(:apns)
+
+      Process.sleep(110)
+
+      # First caller becomes the probe...
+      assert CircuitBreaker.allow?(:apns) == :ok
+      # ...everyone else is rejected until the probe reports back.
+      assert CircuitBreaker.allow?(:apns) == {:error, :circuit_open}
+
+      CircuitBreaker.record_success(:apns)
+      assert CircuitBreaker.allow?(:apns) == :ok
+    end
+
+    test "admits a replacement probe if the previous probe never reports" do
+      CircuitBreaker.record_failure(:apns)
+      CircuitBreaker.record_failure(:apns)
+      CircuitBreaker.record_failure(:apns)
+
+      Process.sleep(110)
+      assert CircuitBreaker.allow?(:apns) == :ok
+
+      # The probe dies without recording success/failure. After another full
+      # cooldown, a replacement probe is admitted instead of wedging forever.
+      Process.sleep(110)
+      assert CircuitBreaker.allow?(:apns) == :ok
+    end
+
     test "always allows when disabled" do
       Application.put_env(:pushx, :circuit_breaker_enabled, false)
 

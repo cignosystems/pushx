@@ -10,7 +10,9 @@ defmodule PushX.CircuitBreaker do
 
     * `:closed` — Normal operation, requests flow through
     * `:open` — Provider is failing, requests are rejected immediately
-    * `:half_open` — Cooldown expired, one probe request is allowed through
+    * `:half_open` — Cooldown expired, exactly one probe request is allowed
+      through (others are rejected until the probe reports back; if the
+      probe never reports, another probe is admitted after a full cooldown)
 
   ## Configuration
 
@@ -141,6 +143,42 @@ defmodule PushX.CircuitBreaker do
     {:reply, :ok, state}
   end
 
+  # Serialized open→half_open transition: exactly one caller is granted the
+  # probe. Re-checks state under the GenServer because the caller's ETS read
+  # happened outside it.
+  def handle_call({:try_half_open, key}, _from, state) do
+    now = System.monotonic_time(:millisecond)
+    cooldown = cooldown_ms()
+
+    reply =
+      case :ets.lookup(@table_name, key) do
+        [{^key, :open, count, last}] when is_integer(last) and now - last >= cooldown ->
+          # This caller becomes the probe; the 4th field now records when the
+          # probe was granted so a vanished probe can be replaced later.
+          :ets.insert(@table_name, {key, :half_open, count, now})
+          :ok
+
+        [{^key, :half_open, count, since}]
+        when is_integer(since) and now - since >= cooldown ->
+          # The previous probe never reported back (task killed, node issue).
+          # Admit a replacement rather than staying wedged forever.
+          :ets.insert(@table_name, {key, :half_open, count, now})
+          :ok
+
+        [{^key, :open, _count, _last}] ->
+          {:error, :circuit_open}
+
+        [{^key, :half_open, _count, _since}] ->
+          {:error, :circuit_open}
+
+        _ ->
+          # :closed (e.g. the probe already succeeded) — allow
+          :ok
+      end
+
+    {:reply, reply, state}
+  end
+
   ## Private Functions
 
   defp enabled? do
@@ -155,15 +193,16 @@ defmodule PushX.CircuitBreaker do
     PushX.Config.get(:circuit_breaker_cooldown_ms, 30_000)
   end
 
+  # Fast path: lock-free ETS read. Only the rare open→half_open transition
+  # (and stale-probe replacement) is routed through the GenServer, which
+  # guarantees exactly one probe is admitted.
   defp do_allow?(provider) do
+    now = System.monotonic_time(:millisecond)
+
     case :ets.lookup(@table_name, provider) do
       [{^provider, :open, _count, last_failure}] when is_integer(last_failure) ->
-        now = System.monotonic_time(:millisecond)
-
         if now - last_failure >= cooldown_ms() do
-          # Transition to half_open, allow one probe
-          :ets.insert(@table_name, {provider, :half_open, 0, last_failure})
-          :ok
+          GenServer.call(__MODULE__, {:try_half_open, provider})
         else
           {:error, :circuit_open}
         end
@@ -171,8 +210,17 @@ defmodule PushX.CircuitBreaker do
       [{^provider, :open, _count, _last_failure}] ->
         {:error, :circuit_open}
 
+      [{^provider, :half_open, _count, since}] when is_integer(since) ->
+        if now - since >= cooldown_ms() do
+          # Previous probe went silent; ask the GenServer for a replacement.
+          GenServer.call(__MODULE__, {:try_half_open, provider})
+        else
+          # A probe is in flight — everyone else waits.
+          {:error, :circuit_open}
+        end
+
       _ ->
-        # :closed or :half_open — allow request
+        # :closed — allow request
         :ok
     end
   end
