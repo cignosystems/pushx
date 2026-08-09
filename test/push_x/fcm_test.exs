@@ -74,7 +74,9 @@ defmodule PushX.FCMTest do
       assert {:ok, %Response{status: :sent, id: nil, provider: :fcm}} = result
     end
 
-    test "returns invalid_token error on INVALID_ARGUMENT", %{bypass: bypass} do
+    test "returns invalid_request error on INVALID_ARGUMENT (must not remove tokens)", %{
+      bypass: bypass
+    } do
       Bypass.expect_once(bypass, "POST", "/v1/projects/test-project/messages:send", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
@@ -86,8 +88,11 @@ defmodule PushX.FCMTest do
 
       result = send_via_bypass(bypass, "bad-token", %{"title" => "Hi", "body" => "There"})
 
-      assert {:error, %Response{status: :invalid_token, reason: "Invalid token", provider: :fcm}} =
+      assert {:error,
+              %Response{status: :invalid_request, reason: "Invalid token", provider: :fcm} = resp} =
                result
+
+      refute Response.should_remove_token?(resp)
     end
 
     test "returns unregistered error on UNREGISTERED", %{bypass: bypass} do

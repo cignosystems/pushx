@@ -92,6 +92,12 @@ defmodule PushX.ResponseTest do
       response = Response.error(:apns, :invalid_request)
       assert Response.should_remove_token?(response) == false
     end
+
+    test "an FCM INVALID_ARGUMENT response never triggers token removal" do
+      status = Response.fcm_error_to_status("INVALID_ARGUMENT")
+      response = Response.error(:fcm, status, "malformed payload")
+      refute Response.should_remove_token?(response)
+    end
   end
 
   describe "retryable?/1" do
@@ -130,7 +136,7 @@ defmodule PushX.ResponseTest do
 
   describe "fcm_error_to_status/1" do
     test "maps known FCM errors" do
-      assert Response.fcm_error_to_status("INVALID_ARGUMENT") == :invalid_token
+      assert Response.fcm_error_to_status("INVALID_ARGUMENT") == :invalid_request
       assert Response.fcm_error_to_status("UNREGISTERED") == :unregistered
       assert Response.fcm_error_to_status("SENDER_ID_MISMATCH") == :invalid_token
       assert Response.fcm_error_to_status("QUOTA_EXCEEDED") == :rate_limited

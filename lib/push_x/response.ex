@@ -183,7 +183,11 @@ defmodule PushX.Response do
   @spec fcm_error_to_status(String.t()) :: status()
   def fcm_error_to_status(error_code) do
     case error_code do
-      "INVALID_ARGUMENT" -> :invalid_token
+      # INVALID_ARGUMENT covers any malformed request (oversized fields,
+      # reserved data keys, bad android/apns/webpush blocks) — not just bad
+      # tokens. It must never map to a token-removing status, or a payload
+      # bug would delete every token via :on_invalid_token cleanup.
+      "INVALID_ARGUMENT" -> :invalid_request
       "UNREGISTERED" -> :unregistered
       "SENDER_ID_MISMATCH" -> :invalid_token
       "QUOTA_EXCEEDED" -> :rate_limited
