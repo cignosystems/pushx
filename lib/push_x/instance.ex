@@ -298,7 +298,8 @@ defmodule PushX.Instance do
 
     Retry.with_retry(
       fn -> apns_send_once(info, device_token, payload, opts) end,
-      reconnect_fn: fn -> reconnect(name) end
+      reconnect_fn: fn -> reconnect(name) end,
+      reconnect_key: name
     )
   end
 
@@ -435,7 +436,8 @@ defmodule PushX.Instance do
 
     Retry.with_retry(
       fn -> fcm_send_once(info, device_token, payload, opts) end,
-      reconnect_fn: fn -> reconnect(name) end
+      reconnect_fn: fn -> reconnect(name) end,
+      reconnect_key: name
     )
   end
 

@@ -117,6 +117,10 @@ defmodule PushX.RetryTest do
         Application.delete_env(:pushx, :retry_max_delay_ms)
       end)
 
+      # Reconnects are coalesced per cooldown window; forget prior grants so
+      # each test observes the guard from a clean slate.
+      PushX.ReconnectGuard.reset()
+
       :ok
     end
 
@@ -225,6 +229,47 @@ defmodule PushX.RetryTest do
 
       # Finch should NOT have been restarted
       assert Process.whereis(PushX.Config.finch_name()) == old_pid
+    end
+
+    test "coalesces reconnects: a second connection error within the cooldown skips the restart" do
+      reconnect_count = :counters.new(1, [:atomics])
+
+      reconnect_fn = fn ->
+        :counters.add(reconnect_count, 1, 1)
+        :ok
+      end
+
+      fail = fn -> {:error, Response.error(:apns, :connection_error, "stale")} end
+
+      Retry.with_retry(fail, reconnect_fn: reconnect_fn)
+      Retry.with_retry(fail, reconnect_fn: reconnect_fn)
+
+      # Two full retry cycles, each hitting a first connection error — but
+      # only the first is granted a pool restart within the cooldown window.
+      assert :counters.get(reconnect_count, 1) == 1
+    end
+
+    test "concurrent connection errors trigger at most one reconnect" do
+      reconnect_count = :counters.new(1, [:atomics])
+
+      reconnect_fn = fn ->
+        :counters.add(reconnect_count, 1, 1)
+        :ok
+      end
+
+      1..20
+      |> Enum.map(fn _ ->
+        Task.async(fn ->
+          Retry.with_retry(
+            fn -> {:error, Response.error(:apns, :connection_error, "blip")} end,
+            reconnect_fn: reconnect_fn,
+            max_attempts: 2
+          )
+        end)
+      end)
+      |> Task.await_many(10_000)
+
+      assert :counters.get(reconnect_count, 1) == 1
     end
 
     test "respects retry_enabled config" do

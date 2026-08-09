@@ -27,7 +27,7 @@ defmodule PushX.Retry do
 
   require Logger
 
-  alias PushX.{Config, Response, Telemetry}
+  alias PushX.{Config, ReconnectGuard, Response, Telemetry}
 
   @default_rate_limit_delay_ms 60_000
 
@@ -52,18 +52,23 @@ defmodule PushX.Retry do
           {:ok, Response.t()} | {:error, Response.t()}
   def with_retry(fun, opts \\ []) do
     if retry_enabled?() do
-      max_attempts = Keyword.get(opts, :max_attempts, config_max_attempts())
-      base_delay = Keyword.get(opts, :base_delay_ms, config_base_delay())
-      max_delay = Keyword.get(opts, :max_delay_ms, config_max_delay())
-      reconnect_fn = Keyword.get(opts, :reconnect_fn, &PushX.reconnect/0)
+      retry_opts = %{
+        max_attempts: Keyword.get(opts, :max_attempts, config_max_attempts()),
+        base_delay: Keyword.get(opts, :base_delay_ms, config_base_delay()),
+        max_delay: Keyword.get(opts, :max_delay_ms, config_max_delay()),
+        reconnect_fn: Keyword.get(opts, :reconnect_fn, &PushX.reconnect/0),
+        reconnect_key: Keyword.get(opts, :reconnect_key, :default)
+      }
 
-      do_retry(fun, 1, max_attempts, base_delay, max_delay, reconnect_fn)
+      do_retry(fun, 1, retry_opts)
     else
       fun.()
     end
   end
 
-  defp do_retry(fun, attempt, max_attempts, base_delay, max_delay, reconnect_fn) do
+  defp do_retry(fun, attempt, retry_opts) do
+    %{max_attempts: max_attempts, base_delay: base_delay, max_delay: max_delay} = retry_opts
+
     case fun.() do
       {:ok, response} ->
         {:ok, response}
@@ -84,18 +89,8 @@ defmodule PushX.Retry do
 
           # Retry with appropriate delay
           true ->
-            # On first connection error, restart Finch pool to discard stale HTTP/2 connections.
-            # Retrying on the same dead connection is futile — the pool must be recycled.
             if response.status == :connection_error and attempt == 1 do
-              case reconnect_fn.() do
-                :ok ->
-                  :ok
-
-                {:error, reason} ->
-                  Logger.warning(
-                    "[PushX.Retry] Failed to reconnect HTTP pool: #{inspect(reason)}"
-                  )
-              end
+              maybe_reconnect(retry_opts)
             end
 
             delay = calculate_delay(response, attempt, base_delay, max_delay)
@@ -107,8 +102,30 @@ defmodule PushX.Retry do
 
             Telemetry.retry_attempt(response.provider, response.status, attempt, delay)
             Process.sleep(delay)
-            do_retry(fun, attempt + 1, max_attempts, base_delay, max_delay, reconnect_fn)
+            do_retry(fun, attempt + 1, retry_opts)
         end
+    end
+  end
+
+  # On the first connection error, restart the Finch pool to discard stale
+  # HTTP/2 connections — retrying on the same dead connection is futile.
+  # Restarts are coalesced through PushX.ReconnectGuard: the pool is shared,
+  # so N concurrent requests observing a blip must trigger at most one
+  # restart per cooldown window, not N restarts that kill each other's
+  # healthy in-flight requests.
+  defp maybe_reconnect(%{reconnect_fn: reconnect_fn, reconnect_key: key}) do
+    if ReconnectGuard.acquire(key) do
+      case reconnect_fn.() do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("[PushX.Retry] Failed to reconnect HTTP pool: #{inspect(reason)}")
+      end
+    else
+      Logger.debug(fn ->
+        "[PushX.Retry] Pool #{inspect(key)} was reconnected recently; skipping"
+      end)
     end
   end
 

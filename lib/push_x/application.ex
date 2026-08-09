@@ -19,6 +19,8 @@ defmodule PushX.Application do
         # Batch-send tasks run here via async_stream_nolink, so a raising
         # task reports {:exit, reason} instead of killing the caller
         {Task.Supervisor, name: PushX.TaskSupervisor},
+        # Coalesces automatic Finch pool restarts (one per pool per cooldown)
+        PushX.ReconnectGuard,
         # Circuit breaker (always started, but only tracks when enabled)
         PushX.CircuitBreaker,
         # Finch HTTP client pool with HTTP/2 for APNS and FCM
