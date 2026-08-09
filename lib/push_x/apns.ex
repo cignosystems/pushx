@@ -155,14 +155,37 @@ defmodule PushX.APNS do
     end
   end
 
-  defp do_send_authenticated(device_token, body, opts, mode) do
+  # Apple reasons that mean the cached provider JWT itself is bad and a fresh
+  # one may succeed. TooManyProviderTokenUpdates is deliberately excluded:
+  # it means we're regenerating too often, so minting yet another JWT would
+  # make it worse.
+  @stale_jwt_reasons ["ExpiredProviderToken", "InvalidProviderToken", "MissingProviderToken"]
+
+  defp do_send_authenticated(device_token, body, opts, mode, jwt_refreshed? \\ false) do
     topic = Keyword.fetch!(opts, :topic)
 
     case get_jwt() do
       {:ok, jwt} ->
         url = "#{base_url(mode)}/3/device/#{device_token}"
         headers = build_headers(jwt, topic, opts)
-        send_apns_request(device_token, url, headers, body, opts)
+
+        case send_apns_request(device_token, url, headers, body, opts) do
+          {:error, %Response{status: :auth_error, reason: reason}} = error
+          when reason in @stale_jwt_reasons ->
+            if jwt_refreshed? do
+              error
+            else
+              Logger.warning(
+                "[PushX.APNS] Apple rejected provider token (#{reason}); regenerating JWT and retrying once"
+              )
+
+              JWTCache.invalidate(:apns_jwt)
+              do_send_authenticated(device_token, body, opts, mode, true)
+            end
+
+          result ->
+            result
+        end
 
       {:error, reason} ->
         {:error, Response.error(:apns, :auth_error, reason)}

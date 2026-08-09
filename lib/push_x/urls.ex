@@ -10,8 +10,20 @@ defmodule PushX.URLs do
   @fcm_base "https://fcm.googleapis.com/v1/projects"
 
   @spec apns(:prod | :sandbox) :: String.t()
-  def apns(:prod), do: @apns_prod
-  def apns(:sandbox), do: @apns_sandbox
+  def apns(mode) do
+    # :apns_url_override is test-only — it lets the suite point the real send
+    # path at a local Bypass server. Never set it in production config.
+    case Application.get_env(:pushx, :apns_url_override) do
+      nil ->
+        case mode do
+          :prod -> @apns_prod
+          :sandbox -> @apns_sandbox
+        end
+
+      override when is_binary(override) ->
+        override
+    end
+  end
 
   @spec apns_prod() :: String.t()
   def apns_prod, do: @apns_prod

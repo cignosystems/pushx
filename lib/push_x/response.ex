@@ -139,6 +139,10 @@ defmodule PushX.Response do
       "InternalServerError" -> :server_error
       "ServiceUnavailable" -> :server_error
       "Shutdown" -> :server_error
+      "ExpiredProviderToken" -> :auth_error
+      "InvalidProviderToken" -> :auth_error
+      "MissingProviderToken" -> :auth_error
+      "TooManyProviderTokenUpdates" -> :auth_error
       _ -> :unknown_error
     end
   end

@@ -132,6 +132,13 @@ defmodule PushX.ResponseTest do
     test "returns unknown_error for unrecognized reasons" do
       assert Response.apns_reason_to_status("SomeNewError") == :unknown_error
     end
+
+    test "maps provider-token (JWT) reasons to auth_error" do
+      assert Response.apns_reason_to_status("ExpiredProviderToken") == :auth_error
+      assert Response.apns_reason_to_status("InvalidProviderToken") == :auth_error
+      assert Response.apns_reason_to_status("MissingProviderToken") == :auth_error
+      assert Response.apns_reason_to_status("TooManyProviderTokenUpdates") == :auth_error
+    end
   end
 
   describe "fcm_error_to_status/1" do

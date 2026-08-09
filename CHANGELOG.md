@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `PushX.JWTCache` wraps the caller-supplied generator in `try/rescue/catch`, so no generator — raise, throw, exit, or bad return shape — can crash the shared cache process.
 
 ### Fixed
+- **APNS provider-token (JWT) rejections now self-heal instead of causing up to ~50 minutes of failures** — Apple's `ExpiredProviderToken`, `InvalidProviderToken`, `MissingProviderToken`, and `TooManyProviderTokenUpdates` reasons previously fell through to `:unknown_error`: not retryable, and nothing invalidated the cached JWT, so every send failed until the 50-minute cache TTL rolled over (clock skew, key rotation, or Apple expiring the token early all trigger this). They now classify as `:auth_error`, and for the first three the send path invalidates the cached JWT and retries once with a freshly signed one (both the static `PushX.APNS` path and named instances). `TooManyProviderTokenUpdates` deliberately does *not* regenerate — minting JWTs faster is exactly what that error is complaining about.
 - **Test fixture APNS key was on the wrong curve** — the intentionally committed test key in `test_helper.exs` was a secp256k1 key, which JOSE cannot sign ES256 with (APNS requires P-256); the suite never noticed because JWT generation was only exercised lazily at push time. Replaced with a P-256 key, which the new eager credential validation requires.
 
 ## [0.11.0] - 2026-05-07

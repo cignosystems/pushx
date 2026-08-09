@@ -336,12 +336,33 @@ defmodule PushX.Instance do
     end
   end
 
-  defp apns_send_authenticated(info, device_token, body, opts, mode) do
+  # Mirrors PushX.APNS: reasons that mean the cached provider JWT is stale
+  # and a fresh one may succeed. TooManyProviderTokenUpdates is excluded —
+  # regenerating faster is exactly what Apple is complaining about.
+  @stale_jwt_reasons ["ExpiredProviderToken", "InvalidProviderToken", "MissingProviderToken"]
+
+  defp apns_send_authenticated(info, device_token, body, opts, mode, jwt_refreshed? \\ false) do
     topic = Keyword.fetch!(opts, :topic)
 
     case get_instance_jwt(info) do
       {:ok, jwt} ->
-        do_apns_send(info, device_token, body, opts, topic, jwt, mode)
+        case do_apns_send(info, device_token, body, opts, topic, jwt, mode) do
+          {:error, %Response{status: :auth_error, reason: reason}} = error
+          when reason in @stale_jwt_reasons ->
+            if jwt_refreshed? do
+              error
+            else
+              Logger.warning(
+                "[PushX.Instance] Apple rejected provider token for #{inspect(info.name)} (#{reason}); regenerating JWT and retrying once"
+              )
+
+              JWTCache.invalidate({:apns_jwt, info.name})
+              apns_send_authenticated(info, device_token, body, opts, mode, true)
+            end
+
+          result ->
+            result
+        end
 
       {:error, reason} ->
         {:error, Response.error(:apns, :auth_error, reason)}

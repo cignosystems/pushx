@@ -2,7 +2,6 @@ defmodule PushX.Instance.Server do
   @moduledoc false
 
   use GenServer
-  require Logger
 
   @table :pushx_instances
 

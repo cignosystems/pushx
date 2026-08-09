@@ -367,4 +367,78 @@ defmodule PushX.APNSTest do
       end
     end
   end
+
+  describe "provider-token (JWT) auth errors" do
+    setup do
+      bypass = Bypass.open()
+      Application.put_env(:pushx, :apns_url_override, "http://localhost:#{bypass.port}")
+      PushX.JWTCache.invalidate(:apns_jwt)
+
+      on_exit(fn ->
+        Application.delete_env(:pushx, :apns_url_override)
+        PushX.JWTCache.invalidate(:apns_jwt)
+      end)
+
+      {:ok, bypass: bypass}
+    end
+
+    test "ExpiredProviderToken invalidates the cached JWT and retries once", %{bypass: bypass} do
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      Bypass.expect(bypass, "POST", "/3/device/token1", fn conn ->
+        attempt = Agent.get_and_update(counter, fn n -> {n + 1, n + 1} end)
+
+        if attempt == 1 do
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.resp(403, ~s({"reason": "ExpiredProviderToken"}))
+        else
+          conn
+          |> Plug.Conn.put_resp_header("apns-id", "retry-ok")
+          |> Plug.Conn.resp(200, "")
+        end
+      end)
+
+      assert {:ok, %Response{status: :sent, id: "retry-ok"}} =
+               APNS.send("token1", %{"aps" => %{"alert" => "Hello"}}, topic: "com.test.app")
+
+      assert Agent.get(counter, & &1) == 2
+    end
+
+    test "a second provider-token rejection surfaces :auth_error without looping", %{
+      bypass: bypass
+    } do
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      Bypass.expect(bypass, "POST", "/3/device/token2", fn conn ->
+        Agent.update(counter, &(&1 + 1))
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(403, ~s({"reason": "InvalidProviderToken"}))
+      end)
+
+      assert {:error, %Response{status: :auth_error, reason: "InvalidProviderToken"}} =
+               APNS.send("token2", %{"aps" => %{"alert" => "Hello"}}, topic: "com.test.app")
+
+      assert Agent.get(counter, & &1) == 2
+    end
+
+    test "TooManyProviderTokenUpdates does not regenerate the JWT", %{bypass: bypass} do
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      Bypass.expect(bypass, "POST", "/3/device/token3", fn conn ->
+        Agent.update(counter, &(&1 + 1))
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(429, ~s({"reason": "TooManyProviderTokenUpdates"}))
+      end)
+
+      assert {:error, %Response{status: :auth_error, reason: "TooManyProviderTokenUpdates"}} =
+               APNS.send("token3", %{"aps" => %{"alert" => "Hello"}}, topic: "com.test.app")
+
+      assert Agent.get(counter, & &1) == 1
+    end
+  end
 end
