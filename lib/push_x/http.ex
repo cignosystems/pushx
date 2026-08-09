@@ -74,8 +74,6 @@ defmodule PushX.HTTP do
     end
   end
 
-  defp parse_retry_after_value(_), do: nil
-
   # RFC 1123 HTTP-date: "Wed, 21 Oct 2015 07:28:00 GMT"
   @http_date_regex ~r/\A\w{3}, (\d{2}) (\w{3}) (\d{4}) (\d{2}):(\d{2}):(\d{2}) GMT\z/
 

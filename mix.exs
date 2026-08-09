@@ -14,6 +14,7 @@ defmodule PushX.MixProject do
       description: description(),
       package: package(),
       docs: docs(),
+      dialyzer: dialyzer(),
       name: "PushX",
       source_url: @source_url
     ]
@@ -35,7 +36,16 @@ defmodule PushX.MixProject do
 
       # Dev/Test
       {:ex_doc, "~> 0.40", only: :dev, runtime: false},
+      {:dialyxir, "~> 1.4", only: :dev, runtime: false},
       {:bypass, "~> 2.1", only: :test}
+    ]
+  end
+
+  defp dialyzer do
+    [
+      # Committed to a stable path so CI can cache the PLT between runs.
+      plt_file: {:no_warn, "priv/plts/dialyzer.plt"},
+      plt_add_apps: [:ex_unit]
     ]
   end
 
