@@ -71,12 +71,19 @@ defmodule PushX.CircuitBreaker do
   @doc """
   Records a successful request, resetting the circuit to `:closed`.
 
-  The write is serialized through the GenServer so concurrent successes
-  and failures cannot lose updates via ETS read-modify-write.
+  Writes are serialized through the GenServer so concurrent successes
+  and failures cannot lose updates via ETS read-modify-write — but in
+  steady state (`:closed` with zero failures) a success changes nothing,
+  so it skips the GenServer round-trip entirely. The breaker process
+  therefore sees no traffic at all on the healthy hot path, instead of
+  serializing every send result at high throughput. The skip can race a
+  concurrent failure (the reset it would have applied is missed), which
+  at worst opens the breaker one failure early — the next non-steady
+  success resets the count through the GenServer as before.
   """
   @spec record_success(key()) :: :ok
   def record_success(provider) do
-    if enabled?() do
+    if enabled?() and not steady_state_closed?(provider) do
       GenServer.call(__MODULE__, {:record_success, provider})
     end
 
@@ -183,6 +190,13 @@ defmodule PushX.CircuitBreaker do
 
   defp enabled? do
     PushX.Config.get(:circuit_breaker_enabled, false)
+  end
+
+  # Lock-free read used by record_success/1 to elide the GenServer call on
+  # the healthy hot path. A missing entry is not steady state: routing it
+  # through the GenServer seeds the {key, :closed, 0, nil} row.
+  defp steady_state_closed?(provider) do
+    match?([{_, :closed, 0, _}], :ets.lookup(@table_name, provider))
   end
 
   defp threshold do

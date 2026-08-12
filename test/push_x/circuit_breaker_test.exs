@@ -137,6 +137,38 @@ defmodule PushX.CircuitBreakerTest do
     end
   end
 
+  describe "record_success/1 steady-state elision" do
+    test "skips the GenServer when already closed with zero failures" do
+      # Seed the row (reset/1 in setup already wrote {:apns, :closed, 0, nil})
+      breaker = Process.whereis(CircuitBreaker)
+      :erlang.trace(breaker, true, [:receive])
+
+      CircuitBreaker.record_success(:apns)
+
+      refute_receive {:trace, ^breaker, :receive, {:"$gen_call", _, {:record_success, :apns}}}, 50
+      :erlang.trace(breaker, false, [:receive])
+    end
+
+    test "goes through the GenServer when there are failures to reset" do
+      CircuitBreaker.record_failure(:apns)
+
+      breaker = Process.whereis(CircuitBreaker)
+      :erlang.trace(breaker, true, [:receive])
+
+      CircuitBreaker.record_success(:apns)
+
+      assert_receive {:trace, ^breaker, :receive, {:"$gen_call", _, {:record_success, :apns}}}
+      :erlang.trace(breaker, false, [:receive])
+      assert CircuitBreaker.state(:apns) == :closed
+    end
+
+    test "seeds the table row for a previously unseen key" do
+      CircuitBreaker.record_success(:some_instance)
+      assert CircuitBreaker.state(:some_instance) == :closed
+      assert CircuitBreaker.allow?(:some_instance) == :ok
+    end
+  end
+
   describe "record_failure/1" do
     test "increments failure count" do
       CircuitBreaker.record_failure(:apns)
