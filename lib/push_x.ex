@@ -74,7 +74,7 @@ defmodule PushX do
 
   require Logger
 
-  alias PushX.{APNS, CircuitBreaker, Config, FCM, Message, Response, Token, RateLimiter}
+  alias PushX.{APNS, CircuitBreaker, Config, FCM, Message, RateLimiter, Response, Token}
 
   @type provider :: :apns | :fcm
   @type instance_name :: atom()
@@ -355,12 +355,10 @@ defmodule PushX do
       PushX.TaskSupervisor,
       device_tokens,
       fn token ->
-        cond do
-          validate and provider in [:apns, :fcm] and not Token.valid?(provider, token) ->
-            {token, {:error, Response.error(provider, :invalid_token, "Invalid token format")}}
-
-          true ->
-            {token, push(provider, token, message, send_opts)}
+        if validate and provider in [:apns, :fcm] and not Token.valid?(provider, token) do
+          {token, {:error, Response.error(provider, :invalid_token, "Invalid token format")}}
+        else
+          {token, push(provider, token, message, send_opts)}
         end
       end,
       max_concurrency: concurrency,

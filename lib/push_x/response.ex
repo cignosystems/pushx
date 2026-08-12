@@ -128,23 +128,24 @@ defmodule PushX.Response do
 
   See: https://developer.apple.com/documentation/usernotifications/setting_up_a_remote_notification_server/handling_notification_responses_from_apns
   """
+  @apns_reason_statuses %{
+    "BadDeviceToken" => :invalid_token,
+    "Unregistered" => :unregistered,
+    "ExpiredToken" => :expired_token,
+    "PayloadTooLarge" => :payload_too_large,
+    "TooManyRequests" => :rate_limited,
+    "InternalServerError" => :server_error,
+    "ServiceUnavailable" => :server_error,
+    "Shutdown" => :server_error,
+    "ExpiredProviderToken" => :auth_error,
+    "InvalidProviderToken" => :auth_error,
+    "MissingProviderToken" => :auth_error,
+    "TooManyProviderTokenUpdates" => :auth_error
+  }
+
   @spec apns_reason_to_status(String.t()) :: status()
   def apns_reason_to_status(reason) do
-    case reason do
-      "BadDeviceToken" -> :invalid_token
-      "Unregistered" -> :unregistered
-      "ExpiredToken" -> :expired_token
-      "PayloadTooLarge" -> :payload_too_large
-      "TooManyRequests" -> :rate_limited
-      "InternalServerError" -> :server_error
-      "ServiceUnavailable" -> :server_error
-      "Shutdown" -> :server_error
-      "ExpiredProviderToken" -> :auth_error
-      "InvalidProviderToken" -> :auth_error
-      "MissingProviderToken" -> :auth_error
-      "TooManyProviderTokenUpdates" -> :auth_error
-      _ -> :unknown_error
-    end
+    Map.get(@apns_reason_statuses, reason, :unknown_error)
   end
 
   @doc """

@@ -525,18 +525,17 @@ defmodule PushX.FCM do
     # Structured payload: has "notification" and/or "data" keys
     # Simple payload: treat entire map as notification (backwards compatible)
     base =
-      cond do
-        Map.has_key?(payload, "notification") or Map.has_key?(payload, "data") ->
-          base
-          |> HTTP.maybe_put("notification", payload["notification"])
-          |> HTTP.maybe_put(
-            "data",
-            HTTP.stringify_map(Keyword.get(opts, :data) || payload["data"])
-          )
-
-        true ->
-          Map.put(base, "notification", payload)
-          |> HTTP.maybe_put("data", HTTP.stringify_map(Keyword.get(opts, :data)))
+      if Map.has_key?(payload, "notification") or Map.has_key?(payload, "data") do
+        base
+        |> HTTP.maybe_put("notification", payload["notification"])
+        |> HTTP.maybe_put(
+          "data",
+          HTTP.stringify_map(Keyword.get(opts, :data) || payload["data"])
+        )
+      else
+        base
+        |> Map.put("notification", payload)
+        |> HTTP.maybe_put("data", HTTP.stringify_map(Keyword.get(opts, :data)))
       end
 
     base

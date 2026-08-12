@@ -369,15 +369,14 @@ defmodule PushX.FCMTest do
       base = %{"token" => token}
 
       base =
-        cond do
-          Map.has_key?(payload, "notification") or Map.has_key?(payload, "data") ->
-            base
-            |> maybe_put("notification", payload["notification"])
-            |> maybe_put("data", stringify_map(Keyword.get(opts, :data) || payload["data"]))
-
-          true ->
-            Map.put(base, "notification", payload)
-            |> maybe_put("data", stringify_map(Keyword.get(opts, :data)))
+        if Map.has_key?(payload, "notification") or Map.has_key?(payload, "data") do
+          base
+          |> maybe_put("notification", payload["notification"])
+          |> maybe_put("data", stringify_map(Keyword.get(opts, :data) || payload["data"]))
+        else
+          base
+          |> Map.put("notification", payload)
+          |> maybe_put("data", stringify_map(Keyword.get(opts, :data)))
         end
 
       %{"message" => base}
