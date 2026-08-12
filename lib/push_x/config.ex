@@ -209,6 +209,37 @@ defmodule PushX.Config do
   @spec retry_max_delay_ms() :: pos_integer()
   def retry_max_delay_ms, do: get(:retry_max_delay_ms, 60_000)
 
+  @batch_timeout_floor_ms 30_000
+  # Rate-limited responses without a retry-after header sleep this long
+  # (see PushX.Retry), which can exceed :retry_max_delay_ms.
+  @rate_limit_delay_ms 60_000
+
+  @doc """
+  Default per-task timeout for batch sends, in milliseconds.
+
+  Retries block the sending task (see `PushX.Retry`), so a batch task can
+  legitimately outlive any flat timeout while it backs off between attempts.
+  When retries are enabled this covers the worst-case retry budget:
+
+      attempts × (receive_timeout + pool_timeout)
+        + (attempts − 1) × max(retry_max_delay_ms, 60s rate-limit delay)
+
+  With retries disabled it is 30 seconds. An explicit `:timeout` option on
+  `PushX.push_batch/4` / `send_batch/3` always takes precedence.
+  """
+  @spec batch_timeout_ms() :: pos_integer()
+  def batch_timeout_ms do
+    if retry_enabled?() do
+      attempts = retry_max_attempts()
+      per_attempt = receive_timeout() + pool_timeout()
+      worst_delay = max(retry_max_delay_ms(), @rate_limit_delay_ms)
+
+      max(@batch_timeout_floor_ms, attempts * per_attempt + (attempts - 1) * worst_delay)
+    else
+      @batch_timeout_floor_ms
+    end
+  end
+
   # Request timeout configuration
 
   @doc """

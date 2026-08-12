@@ -339,6 +339,48 @@ defmodule PushX.ConfigTest do
     end
   end
 
+  describe "batch_timeout_ms/0" do
+    test "covers the worst-case retry budget with default config" do
+      # 3 attempts × (15s receive + 5s pool) + 2 delays × 60s = 180s
+      assert Config.batch_timeout_ms() == 180_000
+    end
+
+    test "is 30s when retries are disabled" do
+      Application.put_env(:pushx, :retry_enabled, false)
+      assert Config.batch_timeout_ms() == 30_000
+      Application.delete_env(:pushx, :retry_enabled)
+    end
+
+    test "scales with retry and request-timeout config" do
+      Application.put_env(:pushx, :retry_max_attempts, 2)
+      Application.put_env(:pushx, :receive_timeout, 10_000)
+      Application.put_env(:pushx, :pool_timeout, 5_000)
+      Application.put_env(:pushx, :retry_max_delay_ms, 90_000)
+
+      # 2 × 15s + 1 × 90s
+      assert Config.batch_timeout_ms() == 120_000
+
+      Application.delete_env(:pushx, :retry_max_attempts)
+      Application.delete_env(:pushx, :receive_timeout)
+      Application.delete_env(:pushx, :pool_timeout)
+      Application.delete_env(:pushx, :retry_max_delay_ms)
+    end
+
+    test "never drops below the 30s floor" do
+      Application.put_env(:pushx, :retry_max_attempts, 1)
+      Application.put_env(:pushx, :retry_max_delay_ms, 1)
+      Application.put_env(:pushx, :receive_timeout, 1_000)
+      Application.put_env(:pushx, :pool_timeout, 1_000)
+
+      assert Config.batch_timeout_ms() == 30_000
+
+      Application.delete_env(:pushx, :retry_max_attempts)
+      Application.delete_env(:pushx, :retry_max_delay_ms)
+      Application.delete_env(:pushx, :receive_timeout)
+      Application.delete_env(:pushx, :pool_timeout)
+    end
+  end
+
   describe "finch_request_opts/0" do
     test "returns keyword list with timeouts" do
       opts = Config.finch_request_opts()

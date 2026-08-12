@@ -216,14 +216,15 @@ defmodule PushX.FCM do
 
   All standard options plus:
     * `:concurrency` - Max concurrent requests (default: 50)
-    * `:timeout` - Timeout per request in ms (default: 30_000)
+    * `:timeout` - Timeout per request in ms (default:
+      `PushX.Config.batch_timeout_ms/0`, sized to the worst-case retry backoff)
     * `:validate_tokens` - Validate token format before sending (default: false).
       Invalid tokens get `{:error, %Response{status: :invalid_token}}` without
       hitting the network.
 
-  Each task runs the full blocking retry cycle; make sure `:timeout`
-  exceeds the worst-case retry backoff or disable retries — see
-  `PushX.push_batch/4` for details.
+  Each task runs the full blocking retry cycle; if you pass an explicit
+  `:timeout`, make sure it exceeds the worst-case retry backoff or disable
+  retries — see `PushX.push_batch/4` for details.
 
   ## Returns
 
@@ -233,7 +234,7 @@ defmodule PushX.FCM do
           [{token(), {:ok, Response.t()} | {:error, Response.t()}}]
   def send_batch(device_tokens, payload, opts \\ []) do
     concurrency = Keyword.get(opts, :concurrency, 50)
-    timeout = Keyword.get(opts, :timeout, 30_000)
+    timeout = Keyword.get_lazy(opts, :timeout, &Config.batch_timeout_ms/0)
     validate = Keyword.get(opts, :validate_tokens, false)
     send_opts = Keyword.drop(opts, [:concurrency, :timeout, :validate_tokens])
 

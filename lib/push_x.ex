@@ -295,7 +295,10 @@ defmodule PushX do
     * `message` - A string, map, or `PushX.Message` struct
     * `opts` - Provider-specific options plus:
       * `:concurrency` - Max concurrent requests (default: 50)
-      * `:timeout` - Timeout per request in ms (default: 30_000)
+      * `:timeout` - Timeout per request in ms. Defaults to
+        `PushX.Config.batch_timeout_ms/0`, which covers the worst-case
+        blocking-retry budget (3 minutes with default retry config;
+        30 seconds when retries are disabled)
       * `:validate_tokens` - Validate tokens before sending (default: false). When
       `true`, invalid tokens get `{:error, %Response{status: :invalid_token}}`
       without ever leaving the local process — the result list always matches
@@ -305,13 +308,13 @@ defmodule PushX do
 
   Each batch task runs the full retry cycle (blocking backoff — see
   `push/4`), and a task that exceeds `:timeout` is **killed**, reported as
-  `{:error, %Response{status: :connection_error, reason: "timeout"}}`. With
-  the default retry config (3 attempts, up to 60s delays) a retrying task
-  easily outlives the default 30s timeout, so its retries are cut short.
-  Either raise `:timeout` above `retry_max_attempts × retry_max_delay_ms`,
-  or disable retries for batches (`retry_enabled: false`). Note that a
-  killed task may have an HTTP request already in flight that the provider
-  still delivers — see the "Delivery semantics" section in the README.
+  `{:error, %Response{status: :connection_error, reason: "timeout"}}`. The
+  default timeout is computed from the retry config so a retrying task is
+  not cut short mid-backoff; if you pass an explicit `:timeout`, keep it
+  above `retry_max_attempts × retry_max_delay_ms` or disable retries for
+  batches (`retry_enabled: false`). Note that a killed task may have an
+  HTTP request already in flight that the provider still delivers — see
+  the "Delivery semantics" section in the README.
 
   ## Examples
 
@@ -341,7 +344,7 @@ defmodule PushX do
           [{token(), {:ok, Response.t()} | {:error, Response.t()}}]
   def push_batch(provider, device_tokens, message, opts \\ []) do
     concurrency = Keyword.get(opts, :concurrency, batch_concurrency())
-    timeout = Keyword.get(opts, :timeout, 30_000)
+    timeout = Keyword.get_lazy(opts, :timeout, &Config.batch_timeout_ms/0)
     validate = Keyword.get(opts, :validate_tokens, false)
     send_opts = Keyword.drop(opts, [:concurrency, :timeout, :validate_tokens])
     response_provider = response_provider(provider)
