@@ -272,18 +272,22 @@ defmodule PushX.ConfigTest do
   end
 
   describe "request_timeout/0" do
+    # The function is @deprecated but still public until the next major;
+    # apply/3 keeps the compiler from warning about the intentional calls.
     test "returns default of 30_000" do
       original = Application.get_env(:pushx, :request_timeout)
       Application.delete_env(:pushx, :request_timeout)
 
-      assert Config.request_timeout() == 30_000
+      # credo:disable-for-next-line Credo.Check.Refactor.Apply
+      assert apply(Config, :request_timeout, []) == 30_000
 
       if original, do: Application.put_env(:pushx, :request_timeout, original)
     end
 
     test "returns configured value" do
       Application.put_env(:pushx, :request_timeout, 60_000)
-      assert Config.request_timeout() == 60_000
+      # credo:disable-for-next-line Credo.Check.Refactor.Apply
+      assert apply(Config, :request_timeout, []) == 60_000
       Application.delete_env(:pushx, :request_timeout)
     end
   end

@@ -20,4 +20,7 @@ J7BDAU8edFnAS0L40PGdujHkRdi2vKVCLA==
 
 Application.put_env(:pushx, :apns_private_key, test_private_key)
 
-ExUnit.start()
+# capture_log: the suite intentionally exercises failure paths (rate limits,
+# open breakers, retries, JWT rejections), so their warnings are expected
+# noise. Captured logs are still printed for failing tests.
+ExUnit.start(capture_log: true)
