@@ -78,7 +78,7 @@ defmodule PushX.MixProject do
       },
       maintainers: ["Cigno Systems AB"],
       files:
-        ~w(lib .formatter.exs mix.exs README.md LICENSE CHANGELOG.md AGENTS.md pushx_logo.png)
+        ~w(lib .formatter.exs mix.exs README.md LICENSE CHANGELOG.md AGENTS.md pushx_logo.png assets)
     ]
   end
 
@@ -88,7 +88,11 @@ defmodule PushX.MixProject do
       extras: ["README.md", "AGENTS.md", "CHANGELOG.md", "LICENSE"],
       source_ref: "v#{@version}",
       source_url: @source_url,
-      logo: "pushx_logo.png",
+      # Icon-only, transparent, square: ExDoc renders the logo at 48x48 in the
+      # sidebar (next to the project name it already prints) on both the light
+      # and dark themes. The wordmark version (pushx_logo.png) is for README.
+      logo: "assets/pushx_icon.png",
+      favicon: "assets/pushx_icon.png",
       # CHANGELOG references internal modules (@moduledoc false) by name to
       # describe behaviour changes — that's expected and shouldn't warn.
       skip_undefined_reference_warnings_on: ["CHANGELOG.md"],
