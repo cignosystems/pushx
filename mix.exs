@@ -15,6 +15,7 @@ defmodule PushX.MixProject do
       package: package(),
       docs: docs(),
       dialyzer: dialyzer(),
+      test_coverage: test_coverage(),
       name: "PushX",
       source_url: @source_url
     ]
@@ -40,6 +41,14 @@ defmodule PushX.MixProject do
       {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: :dev, runtime: false},
       {:bypass, "~> 2.1", only: :test}
+    ]
+  end
+
+  defp test_coverage do
+    [
+      # Enforced by `mix test --cover` locally and in CI. Kept at the current
+      # level so coverage can only ratchet up; raise it when it grows.
+      summary: [threshold: 94]
     ]
   end
 

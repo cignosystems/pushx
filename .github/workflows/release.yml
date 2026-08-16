@@ -5,10 +5,49 @@ on:
     tags:
       - 'v*'
 
+# Least privilege: publishing needs the HEX_API_KEY secret, not repo write.
+permissions:
+  contents: read
+
 jobs:
+  # Never publish untested code: the tag must match mix.exs and the full
+  # suite (with the coverage gate) must pass on the release toolchain.
+  verify:
+    name: Verify tag and run tests
+    runs-on: ubuntu-latest
+    env:
+      MIX_ENV: test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.19"
+          otp-version: "28"
+
+      - name: Check tag matches mix.exs version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VERSION="$(grep -E '^\s*@version "' mix.exs | sed -E 's/.*"([^"]+)".*/\1/')"
+          echo "tag=$TAG mix.exs=$VERSION"
+          test "$TAG" = "$VERSION" || { echo "::error::tag v$TAG does not match mix.exs @version $VERSION"; exit 1; }
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Compile with warnings as errors
+        run: mix compile --warnings-as-errors
+
+      - name: Run tests with coverage threshold
+        run: mix test --cover
+
   publish:
     name: Publish to Hex.pm
     runs-on: ubuntu-latest
+    needs: verify
     env:
       MIX_ENV: dev  # Required for ex_doc to be available
 

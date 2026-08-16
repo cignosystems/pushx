@@ -561,6 +561,50 @@ defmodule PushX.FCMTest do
     end
   end
 
+  describe "FCM not configured" do
+    # Without the test fetcher seam the real Goth.fetch/1 runs; with no Goth
+    # process (FCM unconfigured) it exits the caller with :noproc. The
+    # documented contract is {:error, %Response{}} — never an exit.
+    setup do
+      Application.put_env(:pushx, :fcm_token_fetcher, nil)
+      Application.put_env(:pushx, :retry_enabled, false)
+
+      on_exit(fn ->
+        Application.put_env(:pushx, :fcm_token_fetcher, {PushX.TestOAuth, :fetch, []})
+        Application.delete_env(:pushx, :retry_enabled)
+      end)
+
+      :ok
+    end
+
+    test "send/3, send_data/3 and PushX.push/4 return a non-retryable auth_error" do
+      for result <- [
+            FCM.send("token", %{"title" => "Hi", "body" => "There"}),
+            FCM.send_data("token", %{action: "sync"}),
+            PushX.push(:fcm, "token", "Hi")
+          ] do
+        assert {:error, %Response{status: :auth_error, provider: :fcm, reason: reason} = resp} =
+                 result
+
+        assert reason =~ "FCM is not configured"
+        refute Response.retryable?(resp)
+      end
+    end
+
+    test "fetch_access_token/1 reports a missing OAuth process as an error tuple" do
+      assert {:error, {:oauth_not_running, :"PushX.Goth.nope"}} =
+               FCM.fetch_access_token(:"PushX.Goth.nope")
+
+      assert {:error, %Response{status: :auth_error}} =
+               FCM.oauth_error_response({:oauth_not_running, :"PushX.Goth.nope"})
+
+      assert {:error, %Response{status: :connection_error, reason: reason}} =
+               FCM.oauth_error_response(%RuntimeError{message: "token endpoint 503"})
+
+      assert reason =~ "OAuth token error"
+    end
+  end
+
   describe "client-side rate limit gate" do
     setup do
       Application.put_env(:pushx, :rate_limit_enabled, true)

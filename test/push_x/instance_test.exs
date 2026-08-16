@@ -89,6 +89,60 @@ defmodule PushX.InstanceTest do
       assert {:error, {:missing_config, [:credentials]}} =
                Instance.start(:bad_fcm2, :fcm, project_id: "proj")
     end
+
+    # Goth prefetches eagerly and raises on unusable credentials, which
+    # crash-loops up to PushX.Instance.DynamicSupervisor and kills every
+    # named instance — so unusable credentials must be rejected *before*
+    # anything starts, and start/3 must not report success for them.
+    test "rejects FCM credentials without the service-account keys" do
+      assert {:error, {:invalid_credentials, reason}} =
+               Instance.start(:bad_fcm3, :fcm, project_id: "p", credentials: %{"type" => "x"})
+
+      assert reason =~ ~s(missing "private_key")
+
+      assert {:error, {:invalid_credentials, reason}} =
+               Instance.start(:bad_fcm4, :fcm,
+                 project_id: "p",
+                 credentials: %{"private_key" => PushX.TestCredentials.fcm_private_key_pem()}
+               )
+
+      assert reason =~ ~s(missing "client_email")
+      refute :bad_fcm3 in Instance.list()
+      refute :bad_fcm4 in Instance.list()
+    end
+
+    test "rejects FCM credentials whose private key cannot sign RS256" do
+      base = PushX.TestCredentials.fcm()
+
+      assert {:error, {:invalid_credentials, "\"private_key\" is not a valid PEM"}} =
+               Instance.start(:bad_fcm5, :fcm,
+                 project_id: "p",
+                 credentials: %{base | "private_key" => "-----BEGIN GARBAGE-----"}
+               )
+
+      # A valid PEM of the wrong kind (the P-256 APNS test key) cannot RS256-sign.
+      assert {:error, {:invalid_credentials, _reason}} =
+               Instance.start(:bad_fcm6, :fcm,
+                 project_id: "p",
+                 credentials: %{base | "private_key" => test_private_key()}
+               )
+    end
+
+    test "rejects FCM credentials that are neither a map nor JSON" do
+      assert {:error, {:invalid_credentials, reason}} =
+               Instance.start(:bad_fcm7, :fcm, project_id: "p", credentials: "not json")
+
+      assert reason =~ "decoded service-account map"
+
+      assert {:error, {:invalid_credentials, _}} =
+               Instance.start(:bad_fcm8, :fcm, project_id: "p", credentials: 42)
+    end
+
+    test "accepts FCM credentials as a JSON string" do
+      json = JSON.encode!(PushX.TestCredentials.fcm())
+      start_and_cleanup(:json_creds, :fcm, project_id: "p", credentials: json)
+      assert {:ok, %{provider: :fcm}} = Instance.status(:json_creds)
+    end
   end
 
   describe "stop/1" do
@@ -206,6 +260,15 @@ defmodule PushX.InstanceTest do
 
       assert {:ok, %{provider: :apns, enabled: true}} = Instance.status(:reconfig_bad_key)
     end
+
+    test "rejects bad FCM credentials and leaves the running instance untouched" do
+      start_and_cleanup(:reconfig_bad_creds, :fcm, fcm_config())
+
+      assert {:error, {:invalid_credentials, _reason}} =
+               Instance.reconfigure(:reconfig_bad_creds, credentials: %{"type" => "x"})
+
+      assert {:ok, %{provider: :fcm, enabled: true}} = Instance.status(:reconfig_bad_creds)
+    end
   end
 
   describe "list/0" do
@@ -272,7 +335,7 @@ defmodule PushX.InstanceTest do
 
   defp fcm_config(overrides \\ []) do
     Keyword.merge(
-      [project_id: "tenant-project", credentials: %{"type" => "service_account"}],
+      [project_id: "tenant-project", credentials: PushX.TestCredentials.fcm()],
       overrides
     )
   end

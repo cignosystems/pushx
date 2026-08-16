@@ -81,7 +81,9 @@ defmodule PushX.Instance do
   ## FCM Config Keys
 
     * `:project_id` - (required) Firebase project ID
-    * `:credentials` - (required) Service account credentials map or JSON string
+    * `:credentials` - (required) Service account credentials map or JSON string.
+      Must contain `"private_key"` (an RSA PEM able to sign RS256) and
+      `"client_email"`; anything else is rejected at start time.
     * `:pool_size` - Finch pool size (default: 2)
     * `:pool_count` - Finch pool count (default: 1)
 
@@ -94,9 +96,13 @@ defmodule PushX.Instance do
     * `{:error, {:invalid_private_key, reason}}` if an APNS `:private_key`
       cannot sign — a malformed PEM, a key on the wrong curve, a `{:file, path}`
       whose file is missing, or a `{:system, VAR}` that is unset
+    * `{:error, {:invalid_credentials, reason}}` if FCM `:credentials` are not
+      a service-account map (or its JSON), lack `"private_key"`/`"client_email"`,
+      or hold a key that cannot sign RS256
 
-  APNS credentials are verified with a test signature before the instance
-  starts, so a bad key fails here rather than on the first push.
+  Credentials are verified with a test signature before the instance starts,
+  so a bad key fails here rather than on the first push (APNS) or by crashing
+  the OAuth process after start (FCM).
 
   """
   @spec start(atom(), :apns | :fcm, keyword()) :: {:ok, atom()} | {:error, term()}
@@ -144,9 +150,9 @@ defmodule PushX.Instance do
   connection errors, which the retry logic handles automatically.
 
   The merged config is validated *before* the running instance is stopped, so
-  a rotation to an unusable APNS key returns
-  `{:error, {:invalid_private_key, reason}}` and leaves the current instance
-  serving traffic.
+  a rotation to an unusable APNS key (`{:error, {:invalid_private_key, reason}}`)
+  or unusable FCM credentials (`{:error, {:invalid_credentials, reason}}`)
+  leaves the current instance serving traffic.
 
   ## Examples
 
@@ -496,8 +502,7 @@ defmodule PushX.Instance do
         send_fcm_instance_request(info, device_token, url, headers, body)
 
       {:error, reason} ->
-        Logger.error("[PushX.Instance] FCM OAuth token error: #{inspect(reason)}")
-        {:error, Response.error(:fcm, :connection_error, "OAuth token error: #{inspect(reason)}")}
+        PushX.FCM.oauth_error_response(reason)
     end
   end
 
@@ -565,8 +570,56 @@ defmodule PushX.Instance do
     missing = Enum.reject(required, &Keyword.has_key?(config, &1))
 
     case missing do
-      [] -> :ok
+      [] -> validate_fcm_credentials(Keyword.fetch!(config, :credentials))
       keys -> {:error, {:missing_config, keys}}
+    end
+  end
+
+  # Goth eagerly exchanges the service-account credentials with Google when
+  # it starts. A credentials map without "private_key"/"client_email", or
+  # with a PEM that cannot sign RS256, makes Goth raise on that prefetch and
+  # crash-loop; the restarts escalate through the instance supervisor to
+  # PushX.Instance.DynamicSupervisor, which takes down *every* named
+  # instance — while start/3 has already reported {:ok, name}. Reject such
+  # credentials here, before anything is started, with a test sign
+  # (mirrors validate_private_key/1 for APNS).
+  @credentials_shape_error "credentials must be a decoded service-account map (or its JSON string)"
+
+  defp validate_fcm_credentials(credentials) do
+    with {:ok, creds} <- decode_credentials(credentials),
+         {:ok, pem} <- fetch_credential(creds, "private_key"),
+         {:ok, _email} <- fetch_credential(creds, "client_email"),
+         %JOSE.JWK{} = jwk <- JOSE.JWK.from_pem(pem) do
+      {_, _compact} =
+        JOSE.JWT.sign(jwk, %{"alg" => "RS256"}, %{"iss" => "pushx-validate"})
+        |> JOSE.JWS.compact()
+
+      :ok
+    else
+      {:error, _} = error -> error
+      _not_a_key -> {:error, {:invalid_credentials, "\"private_key\" is not a valid PEM"}}
+    end
+  rescue
+    e -> {:error, {:invalid_credentials, Exception.message(e)}}
+  catch
+    kind, reason -> {:error, {:invalid_credentials, {kind, reason}}}
+  end
+
+  defp decode_credentials(%{} = map), do: {:ok, map}
+
+  defp decode_credentials(json) when is_binary(json) do
+    case JSON.decode(json) do
+      {:ok, %{} = map} -> {:ok, map}
+      _ -> {:error, {:invalid_credentials, @credentials_shape_error}}
+    end
+  end
+
+  defp decode_credentials(_other), do: {:error, {:invalid_credentials, @credentials_shape_error}}
+
+  defp fetch_credential(creds, key) do
+    case creds do
+      %{^key => value} when is_binary(value) and value != "" -> {:ok, value}
+      _ -> {:error, {:invalid_credentials, "missing #{inspect(key)}"}}
     end
   end
 

@@ -152,8 +152,7 @@ defmodule PushX.FCM do
         send_fcm_request(device_token, url, headers, body, opts)
 
       {:error, reason} ->
-        Logger.error("[PushX.FCM] Failed to get OAuth token: #{inspect(reason)}")
-        {:error, Response.error(:fcm, :connection_error, "OAuth token error: #{inspect(reason)}")}
+        oauth_error_response(reason)
     end
   end
 
@@ -428,8 +427,7 @@ defmodule PushX.FCM do
         send_fcm_data_request(device_token, url, headers, body, opts)
 
       {:error, reason} ->
-        Logger.error("[PushX.FCM] Failed to get OAuth token: #{inspect(reason)}")
-        {:error, Response.error(:fcm, :connection_error, "OAuth token error: #{inspect(reason)}")}
+        oauth_error_response(reason)
     end
   end
 
@@ -585,7 +583,7 @@ defmodule PushX.FCM do
   def fetch_access_token(goth_name) do
     result =
       case Config.fcm_token_fetcher() do
-        nil -> Goth.fetch(goth_name)
+        nil -> goth_fetch(goth_name)
         {mod, fun, args} -> apply(mod, fun, [goth_name | args])
       end
 
@@ -593,5 +591,39 @@ defmodule PushX.FCM do
       {:ok, %{token: token}} -> {:ok, token}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  # Goth.fetch/1 is a GenServer.call: when no Goth process exists (FCM not
+  # configured, or the instance's Goth died) it *exits* the caller with
+  # :noproc. Convert that into an error tuple so the documented
+  # {:error, %Response{}} contract holds instead of crashing the caller.
+  defp goth_fetch(goth_name) do
+    Goth.fetch(goth_name)
+  catch
+    :exit, {:noproc, _} -> {:error, {:oauth_not_running, goth_name}}
+  end
+
+  @doc false
+  # Shared by the static and instance paths: maps an OAuth fetch failure to
+  # the right response. A missing Goth process is a configuration problem
+  # (:auth_error, not retryable); anything else is a transient token-endpoint
+  # failure (:connection_error, retryable).
+  @spec oauth_error_response(term()) :: {:error, Response.t()}
+  def oauth_error_response({:oauth_not_running, goth_name}) do
+    Logger.error(
+      "[PushX.FCM] OAuth process #{inspect(goth_name)} is not running — is FCM configured (:fcm_project_id and :fcm_credentials)?"
+    )
+
+    {:error,
+     Response.error(
+       :fcm,
+       :auth_error,
+       "FCM is not configured: OAuth process #{inspect(goth_name)} is not running"
+     )}
+  end
+
+  def oauth_error_response(reason) do
+    Logger.error("[PushX.FCM] Failed to get OAuth token: #{inspect(reason)}")
+    {:error, Response.error(:fcm, :connection_error, "OAuth token error: #{inspect(reason)}")}
   end
 end

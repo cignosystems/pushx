@@ -30,7 +30,8 @@ Notes for humans and AI assistants modifying this library itself. If you are
 
 - All tests: `mix test`
 - Single file: `mix test test/push_x/apns_test.exs`
-- Coverage: `mix test --cover` — the threshold (90%) is enforced; keep it green
+- Coverage: `mix test --cover` — the threshold in `mix.exs` (`test_coverage`,
+  currently 94%) is enforced locally and in CI; ratchet it up, never down
 - HTTP traffic is mocked via `bypass` — no network calls during tests
 - Integration tests must call the **real** public functions (`PushX.push/4`,
   `PushX.APNS.send/3`, `PushX.FCM.send/3`, `PushX.Instance` via `PushX.push/4`)
@@ -48,8 +49,19 @@ Notes for humans and AI assistants modifying this library itself. If you are
 
 - `mix format --check-formatted`
 - `mix credo --strict` (runs in CI)
-- `mix docs` — hexdocs output to `doc/`
+- `mix docs --warnings-as-errors` — hexdocs output to `doc/`
 - `mix dialyzer` (runs in CI with a cached PLT)
+- `mix deps.audit` — dependency advisories (runs in CI, also weekly on a schedule)
+- `mix hex.build` — package sanity check (runs in CI)
+
+## Releasing
+
+1. Move the `[Unreleased]` changelog section to `[x.y.z] - YYYY-MM-DD` and add
+   the compare link; bump `@version` in `mix.exs` and the `~> x.y` constraint
+   in `README.md` / `AGENTS.md`.
+2. Commit, then `git tag vx.y.z && git push --tags`.
+3. The release workflow verifies the tag matches `@version`, runs the suite
+   with the coverage gate, and only then publishes the package and docs to Hex.
 
 ## Coding conventions
 
