@@ -4,6 +4,10 @@ defmodule PushX.FCMTest do
   alias PushX.FCM
   alias PushX.Response
 
+  defmodule Sink do
+    def invalid(provider, token, pid), do: send(pid, {:invalid_token, provider, token})
+  end
+
   doctest PushX.FCM
 
   describe "notification/2" do
@@ -240,6 +244,36 @@ defmodule PushX.FCMTest do
       assert {:error, %Response{status: :connection_error, provider: :fcm}} = result
     end
 
+    test "retry: :none returns a retryable failure immediately even with retries enabled", %{
+      bypass: bypass
+    } do
+      # The describe's setup disables retries; turn them on with a long
+      # backoff so a blocking retry would be observable as a stall.
+      Application.put_env(:pushx, :retry_enabled, true)
+      Application.put_env(:pushx, :retry_base_delay_ms, 60_000)
+      on_exit(fn -> Application.delete_env(:pushx, :retry_base_delay_ms) end)
+
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      Bypass.expect(bypass, "POST", "/v1/projects/test-project/messages:send", fn conn ->
+        Agent.update(counter, &(&1 + 1))
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.put_resp_header("retry-after", "30")
+        |> Plug.Conn.resp(429, ~s({"error": {"status": "QUOTA_EXCEEDED", "message": "slow"}}))
+      end)
+
+      {us, result} =
+        :timer.tc(fn ->
+          FCM.send("token", %{"title" => "Hi", "body" => "There"}, retry: :none)
+        end)
+
+      assert {:error, %Response{status: :rate_limited, retry_after: 30}} = result
+      assert Agent.get(counter, & &1) == 1
+      assert us < 5_000_000
+    end
+
     test "returns connection_error when the OAuth token cannot be fetched" do
       # No request reaches the server: the token is fetched before sending, and
       # an unexpected request would surface as a Bypass 500 / different status.
@@ -433,6 +467,98 @@ defmodule PushX.FCMTest do
     end
   end
 
+  describe "topic and condition targets" do
+    setup do
+      bypass = Bypass.open()
+      Application.put_env(:pushx, :fcm_url_override, "http://localhost:#{bypass.port}")
+      Application.put_env(:pushx, :retry_enabled, false)
+
+      on_exit(fn ->
+        Application.delete_env(:pushx, :fcm_url_override)
+        Application.delete_env(:pushx, :retry_enabled)
+      end)
+
+      {:ok, bypass: bypass}
+    end
+
+    test "{:topic, name} sends a topic message (no token field)", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/v1/projects/test-project/messages:send", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        payload = JSON.decode!(body)
+
+        assert payload["message"]["topic"] == "news"
+        refute Map.has_key?(payload["message"], "token")
+        assert payload["message"]["notification"]["title"] == "Breaking"
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, ~s({"name": "projects/test-project/messages/topic-1"}))
+      end)
+
+      assert {:ok, %Response{status: :sent, id: "projects/test-project/messages/topic-1"}} =
+               FCM.send({:topic, "news"}, %{"title" => "Breaking", "body" => "..."})
+    end
+
+    test "{:condition, expr} sends a condition message, also for data-only", %{bypass: bypass} do
+      Bypass.expect(bypass, "POST", "/v1/projects/test-project/messages:send", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        payload = JSON.decode!(body)
+
+        assert payload["message"]["condition"] == "'news' in topics && 'sports' in topics"
+        refute Map.has_key?(payload["message"], "token")
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, ~s({"name": "m"}))
+      end)
+
+      cond_target = {:condition, "'news' in topics && 'sports' in topics"}
+      assert {:ok, _} = FCM.send(cond_target, PushX.Message.new("Match", "report"))
+      assert {:ok, _} = FCM.send_data(cond_target, %{event: "kickoff"})
+      assert {:ok, _} = PushX.push(:fcm, cond_target, "Match report")
+      assert {:ok, _} = PushX.push_data(:fcm, cond_target, %{event: "kickoff"})
+    end
+
+    test "invalid targets are rejected locally with :invalid_request" do
+      for bad <- [
+            {:topic, "/topics/news"},
+            {:topic, "has space"},
+            {:topic, ""},
+            {:condition, ""},
+            {:foo, "x"},
+            42,
+            ""
+          ] do
+        assert {:error, %Response{status: :invalid_request, reason: reason}} =
+                 FCM.send_once(bad, %{"title" => "Hi", "body" => "There"}),
+               "expected #{inspect(bad)} to be rejected"
+
+        assert reason =~ "Invalid FCM"
+      end
+    end
+
+    test "topics never trigger token cleanup" do
+      # A topic-scoped error can't be about a device, so :on_invalid_token
+      # must not fire (and should_remove_token? is false for the statuses
+      # FCM returns for topics anyway).
+      Application.put_env(:pushx, :on_invalid_token, {PushX.FCMTest.Sink, :invalid, [self()]})
+      on_exit(fn -> Application.delete_env(:pushx, :on_invalid_token) end)
+
+      # No Bypass expectation: force the local validation error path.
+      assert {:error, _} = PushX.push(:fcm, {:topic, "bad topic"}, "Hi")
+      refute_receive {:invalid_token, _, _}, 50
+    end
+  end
+
+  describe "APNS rejects non-token targets" do
+    test "with a clear :invalid_request instead of :invalid_token" do
+      assert {:error, %Response{status: :invalid_request, provider: :apns, reason: reason}} =
+               PushX.push(:apns, {:topic, "news"}, "Hi", topic: "com.test.app")
+
+      assert reason =~ "device tokens only"
+    end
+  end
+
   describe "send_data/3 HTTP integration" do
     setup do
       bypass = Bypass.open()
@@ -577,13 +703,13 @@ defmodule PushX.FCMTest do
       :ok
     end
 
-    test "send/3, send_data/3 and PushX.push/4 return a non-retryable auth_error" do
+    test "send/3, send_data/3 and PushX.push/4 return a non-retryable :not_configured" do
       for result <- [
             FCM.send("token", %{"title" => "Hi", "body" => "There"}),
             FCM.send_data("token", %{action: "sync"}),
             PushX.push(:fcm, "token", "Hi")
           ] do
-        assert {:error, %Response{status: :auth_error, provider: :fcm, reason: reason} = resp} =
+        assert {:error, %Response{status: :not_configured, provider: :fcm, reason: reason} = resp} =
                  result
 
         assert reason =~ "FCM is not configured"
@@ -591,11 +717,29 @@ defmodule PushX.FCMTest do
       end
     end
 
+    test "a missing :fcm_project_id is :not_configured before any token is fetched" do
+      original = Application.get_env(:pushx, :fcm_project_id)
+      Application.delete_env(:pushx, :fcm_project_id)
+      on_exit(fn -> Application.put_env(:pushx, :fcm_project_id, original) end)
+
+      assert {:error, %Response{status: :not_configured, reason: reason}} =
+               FCM.send_once("token", %{"title" => "Hi", "body" => "There"})
+
+      assert reason =~ ":fcm_project_id"
+
+      # An explicit :project_id on the call still needs a token source, which
+      # is absent here, so it fails on the OAuth step instead.
+      assert {:error, %Response{status: :not_configured, reason: reason}} =
+               FCM.send_once("token", %{"title" => "Hi", "body" => "There"}, project_id: "p")
+
+      assert reason =~ "OAuth process"
+    end
+
     test "fetch_access_token/1 reports a missing OAuth process as an error tuple" do
       assert {:error, {:oauth_not_running, :"PushX.Goth.nope"}} =
                FCM.fetch_access_token(:"PushX.Goth.nope")
 
-      assert {:error, %Response{status: :auth_error}} =
+      assert {:error, %Response{status: :not_configured}} =
                FCM.oauth_error_response({:oauth_not_running, :"PushX.Goth.nope"})
 
       assert {:error, %Response{status: :connection_error, reason: reason}} =

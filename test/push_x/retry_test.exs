@@ -287,4 +287,53 @@ defmodule PushX.RetryTest do
       assert :counters.get(call_count, 1) == 1
     end
   end
+
+  describe "maybe_with_retry/4 (per-call :retry option)" do
+    setup do
+      Application.put_env(:pushx, :retry_enabled, true)
+      Application.put_env(:pushx, :retry_max_attempts, 3)
+      Application.put_env(:pushx, :retry_base_delay_ms, 1)
+      Application.put_env(:pushx, :retry_max_delay_ms, 5)
+
+      on_exit(fn ->
+        for k <- [:retry_enabled, :retry_max_attempts, :retry_base_delay_ms, :retry_max_delay_ms],
+            do: Application.delete_env(:pushx, k)
+      end)
+
+      :ok
+    end
+
+    test "retry: :none makes exactly one attempt even when retries are enabled" do
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      result =
+        Retry.maybe_with_retry(:fcm, [retry: :none], fn ->
+          Agent.update(counter, &(&1 + 1))
+          {:error, Response.error(:fcm, :server_error, "boom")}
+        end)
+
+      assert {:error, %Response{status: :server_error}} = result
+      assert Agent.get(counter, & &1) == 1
+    end
+
+    test "retry: :blocking (and the default) retries retryable failures" do
+      for opts <- [[retry: :blocking], []] do
+        {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+        Retry.maybe_with_retry(:apns, opts, fn ->
+          Agent.update(counter, &(&1 + 1))
+          {:error, Response.error(:apns, :server_error, "boom")}
+        end)
+
+        assert Agent.get(counter, & &1) == 3
+      end
+    end
+
+    test "an invalid :retry value is rejected without calling the function" do
+      assert {:error, %Response{status: :invalid_request, provider: :apns, reason: reason}} =
+               Retry.maybe_with_retry(:apns, [retry: :sometimes], fn -> flunk("must not run") end)
+
+      assert reason =~ ":retry"
+    end
+  end
 end

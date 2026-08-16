@@ -94,7 +94,7 @@ defmodule PushX.APNS do
   """
   @spec send(token(), payload(), [option()]) :: {:ok, Response.t()} | {:error, Response.t()}
   def send(device_token, payload, opts \\ []) do
-    Retry.with_retry(fn -> send_once(device_token, payload, opts) end)
+    Retry.maybe_with_retry(:apns, opts, fn -> send_once(device_token, payload, opts) end)
   end
 
   @doc """
@@ -120,6 +120,14 @@ defmodule PushX.APNS do
     mode = Keyword.get(opts, :mode, Config.apns_mode())
 
     cond do
+      not Config.apns_configured?() ->
+        {:error,
+         Response.error(
+           :apns,
+           :not_configured,
+           "APNS is not configured: set :apns_key_id, :apns_team_id and :apns_private_key"
+         )}
+
       mode not in [:prod, :sandbox] ->
         {:error,
          Response.error(
@@ -130,6 +138,14 @@ defmodule PushX.APNS do
 
       Keyword.get(opts, :topic) in [nil, ""] ->
         {:error, Response.error(:apns, :invalid_request, ":topic option is required")}
+
+      not is_binary(device_token) ->
+        {:error,
+         Response.error(
+           :apns,
+           :invalid_request,
+           "APNS delivers to device tokens only (topics/conditions are FCM features)"
+         )}
 
       not safe_token?(device_token) ->
         {:error,
@@ -195,7 +211,6 @@ defmodule PushX.APNS do
   @safe_token_regex ~r/\A[A-Za-z0-9_\-]+\z/
 
   defp safe_token?(token) when is_binary(token), do: Regex.match?(@safe_token_regex, token)
-  defp safe_token?(_), do: false
 
   defp send_apns_request(device_token, url, headers, body, opts) do
     Logger.debug(fn -> "[PushX.APNS] Sending to #{Telemetry.truncate_token(device_token)}" end)

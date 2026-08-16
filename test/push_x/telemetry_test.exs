@@ -138,4 +138,13 @@ defmodule PushX.TelemetryTest do
       assert metadata.status == :rate_limited
     end
   end
+
+  describe "truncate_token/1 with FCM targets" do
+    test "labels topics and conditions instead of treating them as tokens" do
+      assert PushX.Telemetry.truncate_token({:topic, "news"}) == "topic:news"
+
+      assert PushX.Telemetry.truncate_token({:condition, "'a' in topics && 'b' in topics"}) ==
+               "condition:'a' in t...pics"
+    end
+  end
 end

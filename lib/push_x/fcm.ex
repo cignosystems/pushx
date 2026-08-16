@@ -71,6 +71,14 @@ defmodule PushX.FCM do
   }
 
   @type token :: String.t()
+  @typedoc """
+  Where an FCM message goes: a device registration token, a topic
+  (`{:topic, "news"}` — the name only, without the `/topics/` prefix), or a
+  condition (`{:condition, "'news' in topics && 'sports' in topics"}`).
+  Topics and conditions fan out server-side, so `PushX.Response` carries no
+  per-device information for them and `should_remove_token?/1` is never true.
+  """
+  @type target :: token() | {:topic, String.t()} | {:condition, String.t()}
   @type payload :: map() | Message.t()
   @type option ::
           {:project_id, String.t()}
@@ -99,9 +107,9 @@ defmodule PushX.FCM do
     * `{:error, %PushX.Response{}}` on failure
 
   """
-  @spec send(token(), payload(), [option()]) :: {:ok, Response.t()} | {:error, Response.t()}
+  @spec send(target(), payload(), [option()]) :: {:ok, Response.t()} | {:error, Response.t()}
   def send(device_token, payload, opts \\ []) do
-    Retry.with_retry(fn -> send_once(device_token, payload, opts) end)
+    Retry.maybe_with_retry(:fcm, opts, fn -> send_once(device_token, payload, opts) end)
   end
 
   @doc """
@@ -109,7 +117,7 @@ defmodule PushX.FCM do
 
   Use this when you want to handle retries yourself or for testing.
   """
-  @spec send_once(token(), payload(), [option()]) :: {:ok, Response.t()} | {:error, Response.t()}
+  @spec send_once(target(), payload(), [option()]) :: {:ok, Response.t()} | {:error, Response.t()}
   def send_once(device_token, payload, opts \\ []) do
     case SendGate.check(:fcm, :fcm) do
       :ok ->
@@ -123,10 +131,11 @@ defmodule PushX.FCM do
   end
 
   defp do_send(device_token, payload, opts) do
-    message = build_message(device_token, payload, opts)
-
-    # Validate the payload (encode + size) before requesting an OAuth token.
-    with {:ok, body} <- HTTP.safe_encode(message),
+    # Validate the target and payload (encode + size) before requesting an
+    # OAuth token.
+    with :ok <- validate_target(device_token),
+         message = build_message(device_token, payload, opts),
+         {:ok, body} <- HTTP.safe_encode(message),
          :ok <- check_payload_size(body) do
       do_send_authenticated(device_token, body, opts)
     else
@@ -139,20 +148,36 @@ defmodule PushX.FCM do
   end
 
   defp do_send_authenticated(device_token, body, opts) do
-    case get_access_token() do
-      {:ok, access_token} ->
-        project_id = Keyword.get(opts, :project_id, Config.fcm_project_id())
-        url = URLs.fcm_send_url(project_id)
+    with {:ok, project_id} <- resolve_project_id(opts),
+         {:ok, access_token} <- get_access_token() do
+      url = URLs.fcm_send_url(project_id)
 
-        headers = [
-          {"authorization", "Bearer #{access_token}"},
-          {"content-type", "application/json"}
-        ]
+      headers = [
+        {"authorization", "Bearer #{access_token}"},
+        {"content-type", "application/json"}
+      ]
 
-        send_fcm_request(device_token, url, headers, body, opts)
+      send_fcm_request(device_token, url, headers, body, opts)
+    else
+      {:error, %Response{} = response} -> {:error, response}
+      {:error, reason} -> oauth_error_response(reason)
+    end
+  end
 
-      {:error, reason} ->
-        oauth_error_response(reason)
+  # The static path needs a project id from the call or the config; without
+  # one there is nothing to send to, and Config.fcm_project_id/0 would raise.
+  defp resolve_project_id(opts) do
+    case Keyword.get(opts, :project_id) || Config.get(:fcm_project_id) do
+      nil ->
+        {:error,
+         Response.error(
+           :fcm,
+           :not_configured,
+           "FCM is not configured: set :fcm_project_id (and :fcm_credentials or :fcm_token_fetcher)"
+         )}
+
+      project_id ->
+        {:ok, project_id}
     end
   end
 
@@ -372,15 +397,16 @@ defmodule PushX.FCM do
   @doc """
   Sends a data-only message (no visible notification) with automatic retry.
   """
-  @spec send_data(token(), map(), [option()]) :: {:ok, Response.t()} | {:error, Response.t()}
+  @spec send_data(target(), map(), [option()]) :: {:ok, Response.t()} | {:error, Response.t()}
   def send_data(device_token, data, opts \\ []) do
-    Retry.with_retry(fn -> send_data_once(device_token, data, opts) end)
+    Retry.maybe_with_retry(:fcm, opts, fn -> send_data_once(device_token, data, opts) end)
   end
 
   @doc """
   Sends a data-only message without retry.
   """
-  @spec send_data_once(token(), map(), [option()]) :: {:ok, Response.t()} | {:error, Response.t()}
+  @spec send_data_once(target(), map(), [option()]) ::
+          {:ok, Response.t()} | {:error, Response.t()}
   def send_data_once(device_token, data, opts \\ []) do
     case SendGate.check(:fcm, :fcm) do
       :ok ->
@@ -394,14 +420,11 @@ defmodule PushX.FCM do
   end
 
   defp do_send_data(device_token, data, opts) do
-    message = %{
-      "message" => %{
-        "token" => device_token,
-        "data" => HTTP.stringify_map(data)
-      }
-    }
-
-    with {:ok, body} <- HTTP.safe_encode(message),
+    with :ok <- validate_target(device_token),
+         message = %{
+           "message" => Map.put(target_field(device_token), "data", HTTP.stringify_map(data))
+         },
+         {:ok, body} <- HTTP.safe_encode(message),
          :ok <- check_payload_size(body) do
       do_send_data_authenticated(device_token, body, opts)
     else
@@ -414,20 +437,19 @@ defmodule PushX.FCM do
   end
 
   defp do_send_data_authenticated(device_token, body, opts) do
-    case get_access_token() do
-      {:ok, access_token} ->
-        project_id = Keyword.get(opts, :project_id, Config.fcm_project_id())
-        url = URLs.fcm_send_url(project_id)
+    with {:ok, project_id} <- resolve_project_id(opts),
+         {:ok, access_token} <- get_access_token() do
+      url = URLs.fcm_send_url(project_id)
 
-        headers = [
-          {"authorization", "Bearer #{access_token}"},
-          {"content-type", "application/json"}
-        ]
+      headers = [
+        {"authorization", "Bearer #{access_token}"},
+        {"content-type", "application/json"}
+      ]
 
-        send_fcm_data_request(device_token, url, headers, body, opts)
-
-      {:error, reason} ->
-        oauth_error_response(reason)
+      send_fcm_data_request(device_token, url, headers, body, opts)
+    else
+      {:error, %Response{} = response} -> {:error, response}
+      {:error, reason} -> oauth_error_response(reason)
     end
   end
 
@@ -507,7 +529,7 @@ defmodule PushX.FCM do
   # Public for tests only — builds the FCM v1 message envelope.
   def build_message(token, %Message{} = message, opts) do
     base =
-      %{"token" => token}
+      target_field(token)
       |> HTTP.maybe_put("notification", Message.to_fcm_payload(message)["notification"])
       |> HTTP.maybe_put("data", HTTP.stringify_map(Keyword.get(opts, :data) || message.data))
       |> HTTP.maybe_put("android", merge_android(message, Keyword.get(opts, :android)))
@@ -518,7 +540,7 @@ defmodule PushX.FCM do
   end
 
   def build_message(token, payload, opts) when is_map(payload) do
-    base = %{"token" => token}
+    base = target_field(token)
 
     # Structured payload: has "notification" and/or "data" keys
     # Simple payload: treat entire map as notification (backwards compatible)
@@ -545,6 +567,44 @@ defmodule PushX.FCM do
 
   # Message delivery fields (priority/ttl/collapse_key) feed the android
   # block; keys given via opts win over struct-derived ones.
+  # FCM v1 target selector: exactly one of token / topic / condition.
+  defp target_field({:topic, name}), do: %{"topic" => name}
+  defp target_field({:condition, expr}), do: %{"condition" => expr}
+  defp target_field(token), do: %{"token" => token}
+
+  # https://firebase.google.com/docs/cloud-messaging/send-message#send_messages_to_topics
+  @topic_regex ~r/\A[a-zA-Z0-9\-_.~%]+\z/
+
+  @doc false
+  # Shared with PushX.Instance so target rules cannot drift between paths.
+  @spec validate_target(term()) :: :ok | {:error, Response.t()}
+  def validate_target(token) when is_binary(token) and token != "", do: :ok
+
+  def validate_target({:topic, name}) when is_binary(name) do
+    if Regex.match?(@topic_regex, name) do
+      :ok
+    else
+      {:error,
+       Response.error(
+         :fcm,
+         :invalid_request,
+         "Invalid FCM topic #{inspect(name)}: use the bare name (no /topics/ prefix), " <>
+           "characters [a-zA-Z0-9-_.~%] only"
+       )}
+    end
+  end
+
+  def validate_target({:condition, expr}) when is_binary(expr) and expr != "", do: :ok
+
+  def validate_target(other) do
+    {:error,
+     Response.error(
+       :fcm,
+       :invalid_request,
+       "Invalid FCM target #{inspect(other)}: expected a device token, {:topic, name} or {:condition, expr}"
+     )}
+  end
+
   defp merge_android(%Message{} = message, opts_android) do
     case {Message.to_fcm_android(message), opts_android} do
       {nil, opts_map} -> opts_map
@@ -577,8 +637,8 @@ defmodule PushX.FCM do
   defp get_access_token, do: fetch_access_token(PushX.Goth)
 
   @doc false
-  # Shared by the static path and PushX.Instance so the OAuth seam
-  # (`Config.fcm_token_fetcher/0`) cannot drift between them.
+  # Shared by the static path and PushX.Instance so the OAuth token source
+  # (`Config.fcm_token_fetcher/0` or Goth) cannot drift between them.
   @spec fetch_access_token(atom()) :: {:ok, String.t()} | {:error, term()}
   def fetch_access_token(goth_name) do
     result =
@@ -605,19 +665,19 @@ defmodule PushX.FCM do
 
   @doc false
   # Shared by the static and instance paths: maps an OAuth fetch failure to
-  # the right response. A missing Goth process is a configuration problem
-  # (:auth_error, not retryable); anything else is a transient token-endpoint
-  # failure (:connection_error, retryable).
+  # the right response. A missing Goth process is a deployment problem
+  # (:not_configured, never retried); anything else is a transient
+  # token-endpoint failure (:connection_error, retryable).
   @spec oauth_error_response(term()) :: {:error, Response.t()}
   def oauth_error_response({:oauth_not_running, goth_name}) do
     Logger.error(
-      "[PushX.FCM] OAuth process #{inspect(goth_name)} is not running — is FCM configured (:fcm_project_id and :fcm_credentials)?"
+      "[PushX.FCM] OAuth process #{inspect(goth_name)} is not running — is FCM configured (:fcm_project_id and :fcm_credentials, or :fcm_token_fetcher)?"
     )
 
     {:error,
      Response.error(
        :fcm,
-       :auth_error,
+       :not_configured,
        "FCM is not configured: OAuth process #{inspect(goth_name)} is not running"
      )}
   end

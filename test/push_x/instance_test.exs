@@ -428,6 +428,24 @@ defmodule PushX.InstanceTest do
                PushX.push(:apns_send, "token", "Hello", topic: "com.test.app")
     end
 
+    test "retry: :none makes a single attempt on the instance path", %{bypass: bypass} do
+      Application.put_env(:pushx, :retry_enabled, true)
+      Application.put_env(:pushx, :retry_base_delay_ms, 60_000)
+      on_exit(fn -> Application.delete_env(:pushx, :retry_base_delay_ms) end)
+
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      Bypass.expect(bypass, "POST", "/3/device/token", fn conn ->
+        Agent.update(counter, &(&1 + 1))
+        apns_error(conn, 500, "InternalServerError")
+      end)
+
+      assert {:error, %Response{status: :server_error}} =
+               PushX.push(:apns_send, "token", "Hello", topic: "com.test.app", retry: :none)
+
+      assert Agent.get(counter, & &1) == 1
+    end
+
     test "requires :topic without touching the network" do
       assert {:error, %Response{status: :invalid_request, reason: ":topic option is required"}} =
                PushX.push(:apns_send, "token", "Hello")
@@ -604,6 +622,15 @@ defmodule PushX.InstanceTest do
                PushX.push(:env_key, "token", "Hello", topic: "com.test.app")
     end
 
+    test "a private key of the wrong shape gets an actionable message" do
+      for bad <- [nil, 42, {:vault, "path"}] do
+        assert {:error, {:invalid_private_key, reason}} =
+                 Instance.start(:bad_key_shape, :apns, apns_config(private_key: bad))
+
+        assert reason =~ ":private_key must be a PEM string, {:file, path} or {:system"
+      end
+    end
+
     test "an unset {:system, var} is rejected at start" do
       System.delete_env("PUSHX_TEST_UNSET_KEY")
 
@@ -662,6 +689,29 @@ defmodule PushX.InstanceTest do
       end)
 
       assert {:ok, %Response{status: :sent, id: nil}} = PushX.push(:fcm_send, "t", "Hello")
+    end
+
+    test "topic and condition targets work on the instance path; APNS instances reject them", %{
+      bypass: bypass
+    } do
+      Bypass.expect_once(bypass, "POST", "/v1/projects/tenant-project/messages:send", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        assert JSON.decode!(body)["message"]["topic"] == "tenant-news"
+        fcm_ok(conn)
+      end)
+
+      assert {:ok, %Response{status: :sent}} =
+               PushX.push(:fcm_send, {:topic, "tenant-news"}, "Hi")
+
+      assert {:error, %Response{status: :invalid_request}} =
+               PushX.push(:fcm_send, {:topic, "/topics/x"}, "Hi")
+
+      start_and_cleanup(:apns_for_topics, :apns, apns_config())
+
+      assert {:error, %Response{status: :invalid_request, reason: reason}} =
+               PushX.push(:apns_for_topics, {:topic, "news"}, "Hi", topic: "com.test.app")
+
+      assert reason =~ "device tokens only"
     end
 
     test "push_data/4 sends a data-only message through the instance", %{bypass: bypass} do

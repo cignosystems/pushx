@@ -1,7 +1,7 @@
 defmodule PushX.MixProject do
   use Mix.Project
 
-  @version "0.12.0"
+  @version "0.13.0-dev"
   @source_url "https://github.com/cignosystems/pushx"
 
   def project do
@@ -63,8 +63,10 @@ defmodule PushX.MixProject do
 
   defp description do
     """
-    Modern push notifications for Elixir. Supports Apple APNS and Google FCM
-    with HTTP/2, JWT authentication, and a clean unified API.
+    Push notifications for Elixir with one API for Apple APNS and Google FCM —
+    automatic retries, circuit breaker, dead-token cleanup, telemetry, FCM
+    topics, and per-tenant runtime credentials, with nothing to add to your
+    supervision tree.
     """
   end
 

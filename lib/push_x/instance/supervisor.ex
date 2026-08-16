@@ -52,8 +52,8 @@ defmodule PushX.Instance.Supervisor do
   end
 
   defp maybe_add_goth(children, :fcm, config, goth_name) do
-    # With a custom token fetcher configured (test seam), the fetcher owns
-    # token acquisition and Goth — which would eagerly try to exchange the
+    # With a custom :fcm_token_fetcher configured, the fetcher owns token
+    # acquisition and Goth — which would eagerly try to exchange the
     # credentials with Google on start — is not started.
     if PushX.Config.fcm_token_fetcher() do
       children

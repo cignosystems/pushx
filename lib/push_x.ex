@@ -79,6 +79,8 @@ defmodule PushX do
   @type provider :: :apns | :fcm
   @type instance_name :: atom()
   @type token :: String.t()
+  @typedoc "A device token, or for FCM also `{:topic, name}` / `{:condition, expr}` — see `t:PushX.FCM.target/0`."
+  @type target :: token() | {:topic, String.t()} | {:condition, String.t()}
   @type message :: String.t() | map() | Message.t()
   @type option :: APNS.option() | FCM.option()
 
@@ -88,7 +90,10 @@ defmodule PushX do
   ## Arguments
 
     * `provider` - `:apns` for iOS or `:fcm` for Android
-    * `device_token` - The device's push token
+    * `device_token` - The device's push token. For FCM this may also be a
+      topic (`{:topic, "news"}`) or a condition
+      (`{:condition, "'news' in topics && 'sports' in topics"}`) — see
+      `t:PushX.FCM.target/0`.
     * `message` - A string, map, or `PushX.Message` struct
     * `opts` - Provider-specific options
 
@@ -106,6 +111,14 @@ defmodule PushX do
     * `:project_id` - Firebase project ID (default: from config)
     * `:data` - Custom data payload map
 
+  ### Common options
+
+    * `:retry` - `:blocking` (default) retries retryable failures in the
+      calling process with backoff; `:none` makes exactly one attempt and
+      returns retryable failures as-is (with `retry_after` when the provider
+      supplied it) so you can requeue on your own schedule. See "Blocking
+      and retries" below.
+
   ## Examples
 
       # Simple string message
@@ -113,6 +126,10 @@ defmodule PushX do
 
       # Map with title and body
       PushX.push(:fcm, token, %{title: "Alert", body: "Something happened"})
+
+      # FCM topic / condition instead of a device token
+      PushX.push(:fcm, {:topic, "news"}, "Breaking news")
+      PushX.push(:fcm, {:condition, "'news' in topics && 'sports' in topics"}, "Match report")
 
       # Using Message struct
       message = PushX.Message.new()
@@ -133,11 +150,14 @@ defmodule PushX do
   the default config (3 attempts, 10s base delay) a single call can block
   for ~30 seconds on repeated server errors, or ~60 seconds on a
   rate-limited response. Don't call this synchronously from a
-  latency-sensitive process (e.g. a Phoenix request) unless retries are
-  disabled (`retry_enabled: false`) or you wrap the call in your own task.
+  latency-sensitive process (e.g. a Phoenix request) unless you pass
+  `retry: :none`, disable retries globally (`retry_enabled: false`), or wrap
+  the call in your own task. Inside `push_batch/4` a retrying task holds one
+  of the batch's concurrency slots for the whole backoff, so for large
+  audiences prefer `retry: :none` and requeue failures yourself.
 
   """
-  @spec push(provider() | instance_name(), token(), message(), [option()]) ::
+  @spec push(provider() | instance_name(), target(), message(), [option()]) ::
           {:ok, Response.t()} | {:error, Response.t()}
   def push(provider, device_token, message, opts \\ [])
 
@@ -197,7 +217,7 @@ defmodule PushX do
       PushX.push_data(:my_fcm, token, %{action: "sync", id: 123})
 
   """
-  @spec push_data(provider() | instance_name(), token(), map(), [option()]) ::
+  @spec push_data(provider() | instance_name(), target(), map(), [option()]) ::
           {:ok, Response.t()} | {:error, Response.t()}
   def push_data(provider_or_instance, device_token, data, opts \\ [])
 
@@ -244,7 +264,7 @@ defmodule PushX do
       end
 
   """
-  @spec push!(provider(), token(), message(), [option()]) :: :ok | :error
+  @spec push!(provider() | instance_name(), target(), message(), [option()]) :: :ok | :error
   def push!(provider, device_token, message, opts \\ []) do
     case push(provider, device_token, message, opts) do
       {:ok, _} -> :ok
@@ -291,7 +311,8 @@ defmodule PushX do
   ## Arguments
 
     * `provider` - `:apns` for iOS or `:fcm` for Android
-    * `device_tokens` - List of device tokens
+    * `device_tokens` - Enumerable of device tokens (for FCM, topic/condition
+      targets are accepted too — see `t:target/0`)
     * `message` - A string, map, or `PushX.Message` struct
     * `opts` - Provider-specific options plus:
       * `:concurrency` - Max concurrent requests (default: 50)
@@ -339,10 +360,59 @@ defmodule PushX do
 
   A list of `{token, result}` tuples where result is `{:ok, Response.t()}` or `{:error, Response.t()}`.
 
+  ## Large audiences
+
+  The whole result list is held in memory, so for very large audiences (tens
+  of thousands of tokens and up) either chunk the input (`Enum.chunk_every/2`,
+  ~10k per call) or use `push_batch_stream/4`, which yields results lazily
+  with bounded memory. Also consider `retry: :none` (see `push/4`) so a
+  provider blip doesn't park batch tasks in backoff.
+
   """
-  @spec push_batch(provider() | instance_name(), [token()], message(), [option()]) ::
-          [{token(), {:ok, Response.t()} | {:error, Response.t()}}]
+  @spec push_batch(provider() | instance_name(), Enumerable.t(), message(), [option()]) ::
+          [{target(), {:ok, Response.t()} | {:error, Response.t()}}]
   def push_batch(provider, device_tokens, message, opts \\ []) do
+    provider
+    |> push_batch_stream(device_tokens, message, opts)
+    |> Enum.to_list()
+  end
+
+  @doc """
+  Lazy version of `push_batch/4`: returns a stream of `{token, result}` pairs
+  instead of a list.
+
+  Same options and semantics as `push_batch/4` — bounded concurrency,
+  per-task timeout, optional local token validation, one result per input in
+  input order — but nothing runs until the stream is enumerated, and results
+  are yielded as they complete rather than collected. Use it for large
+  audiences so memory stays bounded and you can act on results incrementally
+  (or stop early). `device_tokens` can be any enumerable, e.g. a database
+  stream.
+
+  The stream must be consumed in the process that will own the sends; the
+  batch tasks are started under `PushX.TaskSupervisor` when enumeration
+  begins.
+
+  ## Examples
+
+      MyApp.Repo.transaction(fn ->
+        MyApp.Repo.stream(from t in Token, where: t.provider == :fcm, select: t.value)
+        |> then(&PushX.push_batch_stream(:fcm, &1, "Server maintenance in 10m", concurrency: 100))
+        |> Stream.each(fn
+          {token, {:error, resp}} ->
+            if PushX.Response.should_remove_token?(resp), do: MyApp.Tokens.delete(token)
+
+          _ ->
+            :ok
+        end)
+        |> Stream.run()
+      end)
+
+  """
+  @doc since: "0.13.0"
+  @spec push_batch_stream(provider() | instance_name(), Enumerable.t(), message(), [option()]) ::
+          Enumerable.t()
+  def push_batch_stream(provider, device_tokens, message, opts \\ []) do
     concurrency = Keyword.get(opts, :concurrency, batch_concurrency())
     timeout = Keyword.get_lazy(opts, :timeout, &Config.batch_timeout_ms/0)
     validate = Keyword.get(opts, :validate_tokens, false)
@@ -351,11 +421,12 @@ defmodule PushX do
 
     # async_stream_nolink: a task that raises must report {:exit, reason}
     # below instead of taking down the caller through the task link.
-    Task.Supervisor.async_stream_nolink(
-      PushX.TaskSupervisor,
+    PushX.TaskSupervisor
+    |> Task.Supervisor.async_stream_nolink(
       device_tokens,
       fn token ->
-        if validate and provider in [:apns, :fcm] and not Token.valid?(provider, token) do
+        if validate and provider in [:apns, :fcm] and is_binary(token) and
+             not Token.valid?(provider, token) do
           {token, {:error, Response.error(provider, :invalid_token, "Invalid token format")}}
         else
           {token, push(provider, token, message, send_opts)}
@@ -365,8 +436,8 @@ defmodule PushX do
       timeout: timeout,
       on_timeout: :kill_task
     )
-    |> Enum.zip(device_tokens)
-    |> Enum.map(fn
+    |> Stream.zip(device_tokens)
+    |> Stream.map(fn
       {{:ok, result}, _token} ->
         result
 
@@ -450,24 +521,38 @@ defmodule PushX do
   # Health check
 
   @doc """
-  Returns health status for each configured provider.
+  Returns health status for the configured providers and every named instance.
 
-  Includes configuration status and circuit breaker state.
+  For the static `:apns`/`:fcm` configuration: whether credentials are
+  configured and the circuit breaker state. For each `PushX.Instance`
+  (keyed by name): its provider, whether it is enabled, and its own breaker
+  state — instance breakers are independent of the static ones and of each
+  other, so one tenant's outage is visible without hiding the rest.
 
   ## Examples
 
       PushX.health_check()
       #=> %{
       #=>   apns: %{configured: true, circuit: :closed},
-      #=>   fcm: %{configured: true, circuit: :closed}
+      #=>   fcm: %{configured: true, circuit: :closed},
+      #=>   instances: %{
+      #=>     tenant_42_apns: %{provider: :apns, enabled: true, circuit: :closed},
+      #=>     tenant_7_fcm: %{provider: :fcm, enabled: false, circuit: :open}
+      #=>   }
       #=> }
 
   """
-  @spec health_check() :: %{apns: map(), fcm: map()}
+  @spec health_check() :: %{apns: map(), fcm: map(), instances: %{atom() => map()}}
   def health_check do
+    instances =
+      Map.new(PushX.Instance.list(), fn %{name: name, provider: provider, enabled: enabled} ->
+        {name, %{provider: provider, enabled: enabled, circuit: CircuitBreaker.state(name)}}
+      end)
+
     %{
       apns: %{configured: Config.apns_configured?(), circuit: CircuitBreaker.state(:apns)},
-      fcm: %{configured: Config.fcm_configured?(), circuit: CircuitBreaker.state(:fcm)}
+      fcm: %{configured: Config.fcm_configured?(), circuit: CircuitBreaker.state(:fcm)},
+      instances: instances
     }
   end
 
@@ -512,7 +597,8 @@ defmodule PushX do
 
   # Private functions
 
-  defp maybe_notify_invalid_token(provider, token, {:error, %Response{} = response}) do
+  defp maybe_notify_invalid_token(provider, token, {:error, %Response{} = response})
+       when is_binary(token) do
     if Response.should_remove_token?(response) do
       case Config.on_invalid_token() do
         {mod, fun, args} ->

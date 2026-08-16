@@ -380,6 +380,20 @@ defmodule PushX.APNSTest do
     end
   end
 
+  describe "APNS not configured" do
+    test "send/3 returns :not_configured without signing or sending" do
+      original = Application.get_env(:pushx, :apns_key_id)
+      Application.delete_env(:pushx, :apns_key_id)
+      on_exit(fn -> Application.put_env(:pushx, :apns_key_id, original) end)
+
+      assert {:error, %Response{status: :not_configured, provider: :apns, reason: reason} = resp} =
+               APNS.send("token", %{"aps" => %{"alert" => "Hi"}}, topic: "com.test.app")
+
+      assert reason =~ ":apns_key_id"
+      refute Response.retryable?(resp)
+    end
+  end
+
   describe "client-side rate limit gate" do
     setup do
       Application.put_env(:pushx, :rate_limit_enabled, true)

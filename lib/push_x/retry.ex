@@ -37,6 +37,45 @@ defmodule PushX.Retry do
   @default_rate_limit_delay_ms 60_000
 
   @doc """
+  Runs `fun` under the retry policy selected by the caller's `:retry` option.
+
+  Every send function accepts `retry: :blocking | :none` (default `:blocking`):
+
+    * `:blocking` — `with_retry/2`: retryable failures are retried in the
+      calling process with backoff (subject to the `:retry_enabled` config).
+    * `:none` — a single attempt; retryable failures are returned as-is with
+      `retry_after` set when the provider supplied it, so the caller can
+      requeue on its own schedule. Useful for large batches, where a blocking
+      backoff would otherwise hold a concurrency slot for up to a minute.
+
+  Any other value returns `{:error, %Response{status: :invalid_request}}`
+  for `provider` without calling `fun`.
+  """
+  @spec maybe_with_retry(
+          :apns | :fcm,
+          keyword(),
+          (-> {:ok, Response.t()} | {:error, Response.t()}),
+          keyword()
+        ) :: {:ok, Response.t()} | {:error, Response.t()}
+  def maybe_with_retry(provider, send_opts, fun, retry_opts \\ []) do
+    case Keyword.get(send_opts, :retry, :blocking) do
+      :blocking ->
+        with_retry(fun, retry_opts)
+
+      :none ->
+        fun.()
+
+      other ->
+        {:error,
+         Response.error(
+           provider,
+           :invalid_request,
+           "Invalid :retry option #{inspect(other)} (expected :blocking or :none)"
+         )}
+    end
+  end
+
+  @doc """
   Executes a function with retry logic.
 
   The function should return `{:ok, response}` or `{:error, response}`.

@@ -3,8 +3,9 @@
 </p>
 
 <p align="center">
-  <strong>Modern push notifications for Elixir</strong><br>
-  Supports Apple APNS and Google FCM with HTTP/2, JWT authentication, and a clean unified API.
+  <strong>Push notifications for Elixir that just work: APNS and FCM in one call.</strong><br>
+  Retries, circuit breaker, dead-token cleanup and telemetry built in. Per-tenant credentials at runtime.<br>
+  Nothing to add to your supervision tree.
 </p>
 
 <p align="center">
@@ -46,10 +47,13 @@
 - **APNS** (Apple Push Notification Service) with JWT authentication
 - **FCM** (Firebase Cloud Messaging) with OAuth2 via Goth
 - **Web Push** — FCM for Chrome/Firefox/Edge, APNS for Safari
-- **Batch sending** — send to multiple tokens concurrently with configurable parallelism
+- **Batch sending** — send to multiple tokens concurrently with configurable parallelism, as a list or a lazy stream
+- **FCM topics & conditions** — fan out to `{:topic, "news"}` or `{:condition, "'a' in topics && 'b' in topics"}` with the same call
+- **Multi-tenant** — named runtime instances with their own credentials, pools and breakers
 - **Token validation** — validate token format before sending to catch errors early
 - **Rate limiting** — optional client-side rate limiting to avoid provider throttling
-- **Automatic retry** — exponential backoff for rate limits and server errors
+- **Automatic retry** — exponential backoff for rate limits and server errors (opt out per call with `retry: :none`)
+- **Circuit breaker & dead-token cleanup** — stop hammering a failing provider; get told which tokens to delete
 - **Telemetry** — built-in instrumentation for metrics and monitoring
 - **Message builder** — fluent API for constructing notifications
 - **Structured responses** — consistent error handling across providers
@@ -194,7 +198,10 @@ end
 | `:server_error` | Provider server error | Automatic retry with backoff |
 | `:connection_error` | Network failure | Automatic retry with backoff |
 | `:invalid_request` | Missing required option (e.g., no `:topic` for APNS) | Fix request parameters |
-| `:auth_error` | JWT/credential failure (e.g., invalid private key) | Check credentials |
+| `:auth_error` | JWT/credential failure (e.g., invalid private key, provider rejected the token) | Check credentials |
+| `:not_configured` | Provider has no credentials configured (e.g. `push(:fcm, ...)` without FCM config) | Fix deployment config |
+| `:circuit_open` | Circuit breaker is open — provider not called | Wait; check `PushX.health_check/0` |
+| `:provider_disabled` | Named instance is disabled | `PushX.Instance.enable/1` |
 | `:unknown_error` | Unrecognized error | Check `reason` field |
 
 **Helper functions:**
@@ -234,6 +241,34 @@ For aggregate counts, use the bang variant:
 %{success: 95, failure: 5, total: 100} =
   PushX.push_batch!(:fcm, tokens, "Hello!")
 ```
+
+**Large audiences.** `push_batch/4` holds every result in memory. For tens of thousands of tokens and up, use the lazy variant — it accepts any enumerable (a database stream works), yields `{token, result}` pairs as they complete, and keeps memory bounded:
+
+```elixir
+Repo.transaction(fn ->
+  Repo.stream(from t in Token, where: t.provider == :fcm, select: t.value)
+  |> then(&PushX.push_batch_stream(:fcm, &1, "Maintenance in 10m", concurrency: 100, retry: :none))
+  |> Stream.each(fn
+    {token, {:error, resp}} -> if PushX.Response.should_remove_token?(resp), do: Tokens.delete(token)
+    _ -> :ok
+  end)
+  |> Stream.run()
+end)
+```
+
+Two performance notes: a retrying task holds one of the batch's concurrency slots for its whole backoff (up to a minute on 429s), so pass `retry: :none` for big batches and requeue failures yourself; and if you stick with `push_batch/4`, chunk the input (`Enum.chunk_every(tokens, 10_000)`).
+
+### FCM Topics and Conditions
+
+FCM can fan out server-side. Pass a topic or condition where you would pass a device token — the rest of the API is unchanged, including named instances and `push_data/4`:
+
+```elixir
+PushX.push(:fcm, {:topic, "news"}, "Breaking news")
+PushX.push(:fcm, {:condition, "'news' in topics && 'sports' in topics"}, message)
+PushX.push_data(:my_fcm_tenant, {:topic, "sync"}, %{action: "refresh"})
+```
+
+Topic names are the bare name (no `/topics/` prefix), characters `[a-zA-Z0-9-_.~%]`; invalid targets are rejected locally with `:invalid_request`. Topics/conditions never trigger token cleanup, and APNS returns `:invalid_request` for them (topics are an FCM feature).
 
 ### Silent/Background Notification
 
@@ -421,6 +456,7 @@ config :pushx,
 |--------|------|-------------|
 | `:fcm_project_id` | `String.t()` | Firebase project ID |
 | `:fcm_credentials` | `map()` \| `{:file, path}` \| `{:json, string}` \| `{:system, env_var}` | Service account as map, file, JSON string, or env var |
+| `:fcm_token_fetcher` | `{module, function, args}` | *Optional, advanced.* Bring your own OAuth: replaces the Goth process PushX would start (e.g. `{Goth, :fetch, [MyApp.Goth]}` to reuse yours). Called as `apply(m, f, [goth_name \| args])`, must return `{:ok, %{token: t}}` \| `{:error, reason}`. See `PushX.Config.fcm_token_fetcher/0`. |
 
 ### Pool Sizing
 
@@ -444,12 +480,15 @@ PushX automatically retries transient failures with exponential backoff:
 - **Rate limited (429)** — uses `retry-after` header, or 60s default
 - **Permanent failures** — never retried (invalid token, payload too large, etc.)
 
-To skip retry for a specific call, use `send_once`:
+Retries block the calling process (`Process.sleep` backoff) — see "Delivery Semantics". To make exactly one attempt for a specific call, pass `retry: :none` (works on every send function, including `push_batch/4` and named instances) or call the `send_once` variants:
 
 ```elixir
+PushX.push(:apns, token, "Hi", topic: "com.example.app", retry: :none)
 PushX.APNS.send_once(token, payload, topic: "com.example.app")
 PushX.FCM.send_once(token, payload)
 ```
+
+With `retry: :none`, retryable failures come back immediately with `retry_after` set when the provider supplied it, so you can requeue on your own schedule.
 
 ### Timeouts
 
@@ -492,6 +531,8 @@ When enabled, rate limits are checked automatically before each `send` call.
 For applications that manage push credentials from a database or admin panel, PushX supports starting, stopping, and reconfiguring provider instances at runtime — no application restart needed.
 
 Each instance gets its own HTTP/2 connection pool, JWT cache (APNS), and OAuth process (FCM). Multiple instances can run concurrently (e.g., APNS sandbox + APNS prod + FCM).
+
+> **Instances live in memory only.** They are not persisted across node restarts and are per-VM (not cluster-wide). Start them on boot from your own source of truth — typically a worker after your `Repo` that loads tenant credentials and calls `PushX.Instance.start/3` for each — and again when a tenant is provisioned. `start/3` returns `{:error, :already_started}` for a running name, so re-running it is safe.
 
 ### Starting Instances
 
@@ -906,9 +947,15 @@ Check provider configuration and circuit breaker status:
 PushX.health_check()
 #=> %{
 #=>   apns: %{configured: true, circuit: :closed},
-#=>   fcm: %{configured: true, circuit: :closed}
+#=>   fcm: %{configured: true, circuit: :closed},
+#=>   instances: %{
+#=>     tenant_42_apns: %{provider: :apns, enabled: true, circuit: :closed},
+#=>     tenant_7_fcm: %{provider: :fcm, enabled: false, circuit: :open}
+#=>   }
 #=> }
 ```
+
+Named instances have their own circuit breakers (keyed by name), so one tenant's outage shows up under `:instances` without affecting the static providers or other tenants.
 
 ---
 
@@ -959,7 +1006,7 @@ If duplicates matter for your use case:
   `Message.collapse_key/2`) for the same effect on Android.
 - **App level:** include your own idempotency key in the payload `data` and
   de-duplicate in the app's notification handler.
-- Or disable retries (`retry_enabled: false`) and handle failures yourself.
+- Or skip retries (`retry: :none` per call, or `retry_enabled: false` globally) and handle failures yourself.
 
 ---
 

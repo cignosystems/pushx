@@ -21,9 +21,17 @@ defmodule PushX.Response do
     * `:server_error` - Provider server error
     * `:connection_error` - Network/connection failure
     * `:circuit_open` - Circuit breaker is open, provider temporarily blocked
+    * `:provider_disabled` - The named instance is disabled (`PushX.Instance.disable/1`)
     * `:invalid_request` - Missing or invalid request parameters (e.g., no `:topic` for APNS)
-    * `:auth_error` - Authentication failure (e.g., invalid private key, JWT generation failed)
+    * `:auth_error` - Authentication failure (e.g., invalid private key, JWT generation failed,
+      provider rejected the credentials)
+    * `:not_configured` - The provider has no credentials configured (e.g. `PushX.push(:fcm, ...)`
+      without `:fcm_project_id`/`:fcm_credentials`); a deployment problem, never retried
     * `:unknown_error` - Unrecognized error
+
+  Statuses are matched by callers, so this set only grows — new statuses are
+  called out as *Breaking (minor)* in the changelog because an exhaustive
+  `case` on `status` will not match them.
 
   """
 
@@ -40,6 +48,7 @@ defmodule PushX.Response do
           | :provider_disabled
           | :invalid_request
           | :auth_error
+          | :not_configured
           | :unknown_error
 
   @type t :: %__MODULE__{

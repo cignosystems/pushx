@@ -85,7 +85,8 @@ defmodule PushX.Application do
   end
 
   defp maybe_add_goth(children) do
-    if PushX.Config.fcm_configured?() do
+    # A custom :fcm_token_fetcher owns token acquisition — no Goth process.
+    if PushX.Config.fcm_credentials_configured?() and is_nil(PushX.Config.fcm_token_fetcher()) do
       goth_config = build_goth_config()
 
       children ++

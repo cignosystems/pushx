@@ -172,6 +172,59 @@ defmodule PushX.BatchTest do
       assert {:ok, %PushX.Response{status: :sent, id: "id-2"}} = result_map["good-token-2"]
     end
 
+    test "push_batch_stream/4 is lazy, yields in input order, and can stop early", %{
+      bypass: bypass
+    } do
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      Bypass.stub(bypass, "POST", "/3/device/t1", fn conn ->
+        Agent.update(counter, &(&1 + 1))
+        conn |> Plug.Conn.put_resp_header("apns-id", "one") |> Plug.Conn.resp(200, "")
+      end)
+
+      Bypass.stub(bypass, "POST", "/3/device/t2", fn conn ->
+        Agent.update(counter, &(&1 + 1))
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(400, ~s({"reason": "BadDeviceToken"}))
+      end)
+
+      stream =
+        PushX.push_batch_stream(:apns, ["t1", "t2", "t3"], "Hello",
+          topic: "com.test.app",
+          concurrency: 1
+        )
+
+      # Nothing has been sent yet.
+      assert Agent.get(counter, & &1) == 0
+
+      # Taking two results sends (at most) the first two with concurrency 1.
+      assert [
+               {"t1", {:ok, %PushX.Response{id: "one"}}},
+               {"t2", {:error, %PushX.Response{status: :invalid_token}}}
+             ] =
+               Enum.take(stream, 2)
+
+      assert Agent.get(counter, & &1) == 2
+    end
+
+    test "push_batch_stream/4 accepts any enumerable and matches push_batch/4", %{bypass: bypass} do
+      Bypass.stub(bypass, "POST", "/3/device/s1", fn conn ->
+        conn |> Plug.Conn.put_resp_header("apns-id", "s1") |> Plug.Conn.resp(200, "")
+      end)
+
+      Bypass.stub(bypass, "POST", "/3/device/s2", fn conn ->
+        conn |> Plug.Conn.put_resp_header("apns-id", "s2") |> Plug.Conn.resp(200, "")
+      end)
+
+      tokens = Stream.map(1..2, &"s#{&1}")
+
+      assert PushX.push_batch_stream(:apns, tokens, "Hello", topic: "com.test.app")
+             |> Enum.to_list() ==
+               PushX.push_batch(:apns, tokens, "Hello", topic: "com.test.app")
+    end
+
     test "handles all failures gracefully", %{bypass: bypass} do
       Bypass.expect(bypass, fn conn ->
         conn

@@ -31,10 +31,13 @@ anything to your application's supervision tree.
 ```
 single set of credentials in config?
 ├── yes → PushX.push(:apns | :fcm, token, msg, opts)
-│            └── many tokens at once?  → PushX.push_batch/4
+│            └── many tokens at once?  → PushX.push_batch/4 (list) or
+│            │                            PushX.push_batch_stream/4 (lazy; big audiences)
 │            └── only need :ok / :error? → PushX.push!/4
 │            └── data-only (silent, FCM)? → PushX.push_data(:fcm, ...)
 │            └── APNS silent push?       → PushX.push(:apns, ..., push_type: "background")
+│            └── FCM topic / condition?   → PushX.push(:fcm, {:topic, "news"}, msg)
+│            └── must not block on backoff? → add retry: :none to any call
 └── no — multiple tenants / per-customer credentials at runtime
          → PushX.Instance.start(name, :apns | :fcm, config)
            then PushX.push(name, token, msg, opts)
@@ -56,12 +59,27 @@ single set of credentials in config?
   i.e. `provider` and `token` come first, followed by your `args` list.
 - **Retries happen automatically** for connection errors, 5xx, and
   rate-limited responses. By default 3 attempts with exponential backoff
-  starting at 10s (Google's recommended minimum). Disable per-call with
-  `PushX.APNS.send_once/3` or `PushX.FCM.send_once/3`.
+  starting at 10s (Google's recommended minimum), **blocking the calling
+  process** (and, inside a batch, holding a concurrency slot). Disable
+  per-call with `retry: :none` on any send function (returns the retryable
+  failure immediately, with `retry_after` when known) — or use
+  `PushX.APNS.send_once/3` / `PushX.FCM.send_once/3`.
+- **FCM targets can be topics or conditions**: pass `{:topic, "news"}` or
+  `{:condition, "'a' in topics && 'b' in topics"}` where the token goes.
+  Bare topic name only (no `/topics/`); APNS rejects tuple targets with
+  `:invalid_request`; topics never trigger `:on_invalid_token`.
+- **Named instances are in-memory only** — not persisted across node
+  restarts and per-VM. Start them on boot from your DB (a worker after
+  `Repo`); `start/3` returns `{:error, :already_started}` on re-run.
+- **`:not_configured` vs `:auth_error`**: a send against a provider with no
+  credentials configured returns `status: :not_configured` (never retried);
+  `:auth_error` means credentials exist but signing/OAuth failed or the
+  provider rejected them.
 - **The circuit breaker can short-circuit you.** If a provider has been
   failing, the breaker opens and `push/4` returns
   `{:error, %Response{status: :circuit_open}}` *without* hitting the network.
-  Call `PushX.health_check/0` to inspect breaker state.
+  Call `PushX.health_check/0` to inspect breaker state (static providers
+  under `:apns`/`:fcm`, each named instance under `:instances`).
 - **HTTP/2 pools are long-lived** — set `finch_pool_size` low (2–5) for
   low-traffic apps to avoid stale-connection issues on cloud infra (Fly.io,
   AWS NLB, GCP), or call `PushX.reconnect/0` if you suspect zombie sockets.

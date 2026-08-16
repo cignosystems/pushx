@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - Unreleased
+
+The "last shape changes before 1.0" release: every public-API decision that
+would be breaking after 1.0 is made here, additively where possible. Two items
+are *Breaking (minor)* and are marked as such.
+
+### Added
+- **FCM topics and conditions** — pass `{:topic, "news"}` or `{:condition, "'news' in topics && 'sports' in topics"}` wherever a device token goes: `PushX.push/4`, `push_data/4`, `push_batch/4`, `PushX.FCM.send/3`/`send_data/3`, and named FCM instances (`t:PushX.FCM.target/0`). Topic names are validated locally (bare name, `[a-zA-Z0-9-_.~%]`; `:invalid_request` otherwise), telemetry labels them `topic:…`/`condition:…`, and they never trigger `:on_invalid_token`. APNS returns `:invalid_request` with a clear message for tuple targets instead of `:invalid_token`.
+- **`retry: :blocking | :none` per-call option** on every send function (static, batch, and instances). `:blocking` is the unchanged default; `:none` makes exactly one attempt and returns retryable failures immediately with `retry_after` set when the provider supplied it, so callers can requeue on their own schedule instead of parking a process — or a batch concurrency slot — in backoff. An invalid value returns `:invalid_request` without sending. Documented on `PushX.push/4` and in the README's retry section.
+- **`PushX.push_batch_stream/4`** — lazy `push_batch/4`: same options and semantics, but accepts any enumerable (e.g. a `Repo.stream`) and yields `{token, result}` pairs as they complete with bounded memory. `push_batch/4` is now `push_batch_stream/4 |> Enum.to_list()`, and its docs explain when to chunk or stream large audiences.
+- **`PushX.health_check/0` reports named instances** under a new `:instances` key — `%{name => %{provider, enabled, circuit}}` — with each instance's own circuit-breaker state, so a multi-tenant deployment can see one tenant's outage without it hiding behind the static providers.
+- **`:fcm_token_fetcher` is now a documented option** ("bring your own OAuth"): an `{module, function, args}` tuple that replaces the Goth process PushX would otherwise start — e.g. `{Goth, :fetch, [MyApp.Goth]}` to reuse an existing Goth. When set, PushX starts no Goth process (static or per instance) and `:fcm_credentials` becomes optional for the static configuration (`Config.fcm_configured?/0` accounts for it). Previously an undocumented test seam.
+- **`bench/send_bench.exs`** — manual micro-benchmark (per-send overhead over a raw HTTP request, batch throughput against a local stub) with the baseline recorded in its header (~6 µs PushX overhead per send; ~37k sends/s stub-bound). Run with `MIX_ENV=test mix run bench/send_bench.exs`.
+
+### Changed
+- **`:not_configured` response status (Breaking, minor)** — sending against a provider with no credentials configured now returns `{:error, %Response{status: :not_configured}}` (never retried) instead of `:auth_error`: `PushX.push(:apns, …)` without `:apns_key_id`/`:apns_team_id`/`:apns_private_key`, `PushX.push(:fcm, …)` without `:fcm_project_id`, or without any OAuth token source (no Goth process and no `:fcm_token_fetcher`). `:auth_error` now means "credentials exist but signing/OAuth failed or the provider rejected them". Callers with an exhaustive `case` on `status` need a new clause. `:provider_disabled` — long present in the typespec — is now listed in the `PushX.Response` docs and README table too, together with `:circuit_open`.
+- **`Response.status` growth policy documented** — the status set only grows, and any new atom is called out as *Breaking (minor)*; this is the last planned addition before 1.0.
+- **APNS delivers to device tokens only** — non-binary targets (topics/conditions are FCM features) now fail with `:invalid_request` and an explanatory reason on both the static and instance paths, rather than `:invalid_token`.
+- **Named-instance lifecycle documented** (`PushX.Instance` moduledoc, README): instances live in memory only — not persisted across node restarts, per-VM, start them on boot from your own source of truth; `start/3` returns `{:error, :already_started}` on re-run so that is safe. Behaviour is unchanged.
+- **Tagline and hex description rewritten** to say what PushX actually does for you ("APNS and FCM in one call; retries, circuit breaker, dead-token cleanup and telemetry built in; per-tenant credentials at runtime; nothing to add to your supervision tree") instead of listing HTTP/2 and JWT, which are table stakes.
+- **README performance guidance** — retries hold batch concurrency slots (use `retry: :none` for large audiences); chunk `push_batch/4` input above ~10k tokens or use `push_batch_stream/4`.
+- **`Instance.start/3` with a `:private_key` of the wrong shape** (`nil`, a number, an unknown tuple) now returns `{:error, {:invalid_private_key, ":private_key must be a PEM string, {:file, path} or {:system, \"ENV_VAR\"}, got: …"}}` instead of a `FunctionClauseError` message.
+- **Dependencies**: `finch` lock 0.21 → 0.23 (the `~> 0.21` requirement is unchanged and already allowed it; the suite and Dialyzer pass against 0.23's reworked HTTP/2 pool registration and error types), `ex_doc` 0.40.1 → 0.40.3. The two cowlib advisory ignores in CI remain — cowlib 2.19.0 is still the latest release.
+
 ## [0.12.0] - 2026-08-16
 
 ### Security
@@ -365,6 +389,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - HTTP/2 connections via Finch
 - Zero external JSON dependency (uses Elixir 1.18+ built-in JSON)
 
+[0.13.0]: https://github.com/cignosystems/pushx/compare/v0.12.0...HEAD
 [0.12.0]: https://github.com/cignosystems/pushx/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/cignosystems/pushx/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/cignosystems/pushx/compare/v0.9.0...v0.10.0

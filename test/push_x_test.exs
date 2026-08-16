@@ -378,13 +378,36 @@ defmodule PushXTest do
     test "reports configuration and breaker state per provider" do
       assert %{
                apns: %{configured: true, circuit: apns_state},
-               fcm: %{configured: fcm_configured, circuit: fcm_state}
+               fcm: %{configured: fcm_configured, circuit: fcm_state},
+               instances: instances
              } = PushX.health_check()
 
       assert apns_state in [:closed, :open, :half_open]
       assert fcm_state in [:closed, :open, :half_open]
-      # test_helper.exs sets fcm_project_id but no fcm_credentials.
+      # test_helper.exs sets fcm_project_id and a token fetcher (no credentials).
       assert fcm_configured == PushX.Config.fcm_configured?()
+      assert is_map(instances)
+    end
+
+    test "includes every named instance with its own breaker state" do
+      {:ok, _} =
+        PushX.Instance.start(:health_inst, :apns,
+          key_id: "K",
+          team_id: "T",
+          private_key: Application.get_env(:pushx, :apns_private_key),
+          mode: :sandbox
+        )
+
+      on_exit(fn ->
+        PushX.Instance.stop(:health_inst)
+        PushX.CircuitBreaker.reset(:health_inst)
+      end)
+
+      assert %{instances: %{health_inst: %{provider: :apns, enabled: true, circuit: :closed}}} =
+               PushX.health_check()
+
+      PushX.Instance.disable(:health_inst)
+      assert %{instances: %{health_inst: %{enabled: false}}} = PushX.health_check()
     end
   end
 end

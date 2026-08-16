@@ -21,6 +21,9 @@ defmodule PushX.Config do
       * `{:file, "/path/to/service-account.json"}`
       * `{:json, "...json string..."}`
       * `{:system, "ENV_VAR_NAME"}` (expects JSON string)
+    * `:fcm_token_fetcher` - *(optional, advanced)* bring your own OAuth:
+      an `{module, function, args}` tuple that replaces the Goth process PushX
+      would otherwise start. See `fcm_token_fetcher/0`.
 
   ### Finch Pool
 
@@ -178,16 +181,42 @@ defmodule PushX.Config do
   @spec fcm_configured?() :: boolean()
   def fcm_configured? do
     get(:fcm_project_id) != nil and
-      get(:fcm_credentials) != nil
+      (get(:fcm_credentials) != nil or get(:fcm_token_fetcher) != nil)
   end
 
   @doc false
-  # Test-only seam (like `:apns_url_override`): an `{module, function, args}`
-  # tuple that replaces `Goth.fetch/1` for FCM OAuth tokens. It is invoked as
-  # `apply(module, function, [goth_name | args])` and must return
-  # `{:ok, %{token: binary}}` or `{:error, reason}`. When set, PushX does not
-  # start a Goth process for named FCM instances — the fetcher owns token
-  # acquisition. Never set this in production config.
+  # Whether Goth-style credentials are present (as opposed to a token fetcher).
+  @spec fcm_credentials_configured?() :: boolean()
+  def fcm_credentials_configured? do
+    get(:fcm_project_id) != nil and get(:fcm_credentials) != nil
+  end
+
+  @doc """
+  Returns the custom FCM OAuth token fetcher, if one is configured.
+
+  By default PushX starts a [Goth](https://hexdocs.pm/goth) process from
+  `:fcm_credentials` and calls `Goth.fetch/1` before every FCM send. Set
+  `:fcm_token_fetcher` to an `{module, function, args}` tuple to supply the
+  OAuth access token yourself instead — for example to reuse a Goth process
+  your application already runs, or to fetch tokens from a secrets service:
+
+      config :pushx,
+        fcm_project_id: "my-project",
+        fcm_token_fetcher: {Goth, :fetch, [MyApp.Goth]}
+
+  The function is invoked as `apply(module, function, [goth_name | args])`,
+  where `goth_name` is the Goth process PushX *would* have used (`PushX.Goth`
+  for the static configuration, `:"PushX.Goth.<instance>"` for a named
+  instance) — a fetcher that reuses your own Goth simply ignores it. It must
+  return `{:ok, %{token: access_token}}` or `{:error, reason}`.
+
+  When a fetcher is set, PushX starts **no** Goth process — neither for the
+  static configuration nor for named FCM instances — and `:fcm_credentials`
+  becomes optional (`PushX.Instance.start/3` still requires and validates
+  `:credentials`, since an instance may be reconfigured back to Goth later).
+  The test suite uses this seam to exercise the real FCM send path without
+  Google.
+  """
   @spec fcm_token_fetcher() :: {module(), atom(), list()} | nil
   def fcm_token_fetcher, do: get(:fcm_token_fetcher)
 

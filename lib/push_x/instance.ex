@@ -45,6 +45,23 @@ defmodule PushX.Instance do
         private_key: new_key
       )
 
+  ## Lifecycle: instances live in memory only
+
+  Instances are registered in an ETS table and supervised under PushX's own
+  supervision tree. They are **not persisted**: after a node restart (deploy,
+  crash, scale-out to a new node) no instances exist until your application
+  starts them again. The idiomatic pattern is to load tenant credentials from
+  your database and call `start/3` for each on boot — e.g. from a small
+  worker in your supervision tree placed after your `Repo` — and again
+  whenever a tenant is provisioned. `start/3` is idempotent enough for this:
+  it returns `{:error, :already_started}` for a name that is running, so a
+  re-run is safe. Each node in a cluster starts its own instances (they are
+  per-VM processes, not cluster-wide).
+
+  Stopping an instance (`stop/1`) or reconfiguring it invalidates its cached
+  APNS JWT; per-instance circuit-breaker state is keyed by name and survives
+  a `reconfigure/2` (it is process-independent) but not a node restart.
+
   """
 
   require Logger
@@ -302,7 +319,9 @@ defmodule PushX.Instance do
   defp apns_send(info, device_token, payload, opts) do
     name = info.name
 
-    Retry.with_retry(
+    Retry.maybe_with_retry(
+      :apns,
+      opts,
       fn -> apns_send_once(info, device_token, payload, opts) end,
       reconnect_fn: fn -> reconnect(name) end,
       reconnect_key: name
@@ -338,6 +357,14 @@ defmodule PushX.Instance do
 
       Keyword.get(opts, :topic) in [nil, ""] ->
         {:error, Response.error(:apns, :invalid_request, ":topic option is required")}
+
+      not is_binary(device_token) ->
+        {:error,
+         Response.error(
+           :apns,
+           :invalid_request,
+           "APNS delivers to device tokens only (topics/conditions are FCM features)"
+         )}
 
       not safe_token?(device_token) ->
         {:error,
@@ -394,7 +421,6 @@ defmodule PushX.Instance do
   @safe_token_regex ~r/\A[A-Za-z0-9_\-]+\z/
 
   defp safe_token?(token) when is_binary(token), do: Regex.match?(@safe_token_regex, token)
-  defp safe_token?(_), do: false
 
   # Message delivery fields (priority/ttl/collapse_key) become send options;
   # explicit call-site opts win over struct-derived ones.
@@ -454,7 +480,9 @@ defmodule PushX.Instance do
   defp fcm_send(info, device_token, payload, opts) do
     name = info.name
 
-    Retry.with_retry(
+    Retry.maybe_with_retry(
+      :fcm,
+      opts,
       fn -> fcm_send_once(info, device_token, payload, opts) end,
       reconnect_fn: fn -> reconnect(name) end,
       reconnect_key: name
@@ -474,9 +502,9 @@ defmodule PushX.Instance do
   end
 
   defp do_fcm_send_once(info, device_token, payload, opts) do
-    message = build_fcm_message(device_token, payload, opts)
-
-    with {:ok, body} <- HTTP.safe_encode(message),
+    with :ok <- PushX.FCM.validate_target(device_token),
+         message = build_fcm_message(device_token, payload, opts),
+         {:ok, body} <- HTTP.safe_encode(message),
          :ok <- check_fcm_payload_size(body) do
       fcm_send_authenticated(info, device_token, body)
     else
@@ -759,6 +787,11 @@ defmodule PushX.Instance do
   end
 
   defp resolve_private_key(pem) when is_binary(pem), do: pem
+
+  defp resolve_private_key(other) do
+    raise ArgumentError,
+          ":private_key must be a PEM string, {:file, path} or {:system, \"ENV_VAR\"}, got: #{inspect(other)}"
+  end
 
   # -- FCM message builder --
 

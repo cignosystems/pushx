@@ -33,6 +33,10 @@ Notes for humans and AI assistants modifying this library itself. If you are
 - Coverage: `mix test --cover` — the threshold in `mix.exs` (`test_coverage`,
   currently 94%) is enforced locally and in CI; ratchet it up, never down
 - HTTP traffic is mocked via `bypass` — no network calls during tests
+- Benchmark (manual, not in CI): `MIX_ENV=test mix run bench/send_bench.exs` —
+  per-send overhead over a raw HTTP request and batch throughput against a
+  local stub; the baseline is recorded in the script header. Run it before
+  and after touching the send path, `Retry`, `SendGate`, or the JWT cache.
 - Property tests (`stream_data`) live in `test/push_x/properties_test.exs`;
   add one whenever you touch a pure function with an input space worth
   sweeping (validators, payload builders, parsers, classification tables)
