@@ -33,6 +33,9 @@ Notes for humans and AI assistants modifying this library itself. If you are
 - Coverage: `mix test --cover` — the threshold in `mix.exs` (`test_coverage`,
   currently 94%) is enforced locally and in CI; ratchet it up, never down
 - HTTP traffic is mocked via `bypass` — no network calls during tests
+- Property tests (`stream_data`) live in `test/push_x/properties_test.exs`;
+  add one whenever you touch a pure function with an input space worth
+  sweeping (validators, payload builders, parsers, classification tables)
 - Integration tests must call the **real** public functions (`PushX.push/4`,
   `PushX.APNS.send/3`, `PushX.FCM.send/3`, `PushX.Instance` via `PushX.push/4`)
   — never re-implement the send pipeline inside a test helper. Three
