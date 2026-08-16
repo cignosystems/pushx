@@ -30,13 +30,26 @@ Notes for humans and AI assistants modifying this library itself. If you are
 
 - All tests: `mix test`
 - Single file: `mix test test/push_x/apns_test.exs`
+- Coverage: `mix test --cover` — the threshold (90%) is enforced; keep it green
 - HTTP traffic is mocked via `bypass` — no network calls during tests
+- Integration tests must call the **real** public functions (`PushX.push/4`,
+  `PushX.APNS.send/3`, `PushX.FCM.send/3`, `PushX.Instance` via `PushX.push/4`)
+  — never re-implement the send pipeline inside a test helper. Three
+  test-only seams make that possible without touching the network:
+  - `:apns_url_override` / `:fcm_url_override` — point the real send path
+    at a local Bypass server (`PushX.URLs`)
+  - `:fcm_token_fetcher` — `{mod, fun, args}` replacing `Goth.fetch/1`
+    (`test_helper.exs` sets it to `PushX.TestOAuth`; when set, FCM instances
+    do not start a Goth process)
+  - Disable retries in HTTP tests (`Application.put_env(:pushx, :retry_enabled, false)`)
+    or retryable failures back off for 10–60 s
 
-## Format / docs / dialyzer
+## Format / credo / docs / dialyzer
 
 - `mix format --check-formatted`
+- `mix credo --strict` (runs in CI)
 - `mix docs` — hexdocs output to `doc/`
-- Dialyzer is not configured here; rely on type-spec coverage in PRs
+- `mix dialyzer` (runs in CI with a cached PLT)
 
 ## Coding conventions
 

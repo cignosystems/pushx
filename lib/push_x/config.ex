@@ -181,6 +181,16 @@ defmodule PushX.Config do
       get(:fcm_credentials) != nil
   end
 
+  @doc false
+  # Test-only seam (like `:apns_url_override`): an `{module, function, args}`
+  # tuple that replaces `Goth.fetch/1` for FCM OAuth tokens. It is invoked as
+  # `apply(module, function, [goth_name | args])` and must return
+  # `{:ok, %{token: binary}}` or `{:error, reason}`. When set, PushX does not
+  # start a Goth process for named FCM instances — the fetcher owns token
+  # acquisition. Never set this in production config.
+  @spec fcm_token_fetcher() :: {module(), atom(), list()} | nil
+  def fcm_token_fetcher, do: get(:fcm_token_fetcher)
+
   # Retry configuration
 
   @doc """

@@ -28,12 +28,47 @@ defmodule PushXTest do
     end
   end
 
+  # Receives :on_invalid_token callbacks so tests can assert they fired.
+  defmodule TokenSink do
+    def invalid(provider, token, pid), do: send(pid, {:invalid_token, provider, token})
+  end
+
+  # Points the real APNS/FCM send paths at a Bypass server (test-only URL
+  # overrides), stubs OAuth via :fcm_token_fetcher (test_helper.exs), and
+  # disables retries so retryable failures return immediately.
+  defp route_to_bypass(bypass) do
+    Application.put_env(:pushx, :apns_url_override, "http://localhost:#{bypass.port}")
+    Application.put_env(:pushx, :fcm_url_override, "http://localhost:#{bypass.port}")
+    Application.put_env(:pushx, :retry_enabled, false)
+    PushX.JWTCache.invalidate(:apns_jwt)
+
+    on_exit(fn ->
+      Application.delete_env(:pushx, :apns_url_override)
+      Application.delete_env(:pushx, :fcm_url_override)
+      Application.delete_env(:pushx, :retry_enabled)
+      PushX.JWTCache.invalidate(:apns_jwt)
+    end)
+  end
+
+  defp apns_ok(conn, id \\ "id") do
+    conn
+    |> Plug.Conn.put_resp_header("apns-id", id)
+    |> Plug.Conn.resp(200, "")
+  end
+
+  defp apns_error(conn, status, reason) do
+    conn
+    |> Plug.Conn.put_resp_content_type("application/json")
+    |> Plug.Conn.resp(status, ~s({"reason": "#{reason}"}))
+  end
+
   describe "normalize_payload (via push)" do
-    # We test normalize_payload indirectly through push/4
-    # since it's a private function
+    # normalize_payload/2 is private, so it is exercised through the real
+    # PushX.push/4 → PushX.APNS.send/3 path and asserted on the wire.
 
     setup do
       bypass = Bypass.open()
+      route_to_bypass(bypass)
       {:ok, bypass: bypass}
     end
 
@@ -46,14 +81,11 @@ defmodule PushXTest do
         assert payload["aps"]["alert"]["title"] == "Hello"
         assert payload["aps"]["alert"]["body"] == ""
 
-        conn
-        |> Plug.Conn.put_resp_header("apns-id", "id")
-        |> Plug.Conn.resp(200, "")
+        apns_ok(conn)
       end)
 
-      # Use helper to test via bypass
-      result = push_apns_via_bypass(bypass, "token", "Hello")
-      assert {:ok, _} = result
+      assert {:ok, %PushX.Response{status: :sent, id: "id"}} =
+               PushX.push(:apns, "token", "Hello", topic: "com.test.app")
     end
 
     test "passes through Message struct unchanged", %{bypass: bypass} do
@@ -65,17 +97,12 @@ defmodule PushXTest do
         assert payload["aps"]["alert"]["body"] == "Body"
         assert payload["aps"]["badge"] == 5
 
-        conn
-        |> Plug.Conn.put_resp_header("apns-id", "id")
-        |> Plug.Conn.resp(200, "")
+        apns_ok(conn)
       end)
 
-      message =
-        Message.new("Title", "Body")
-        |> Message.badge(5)
+      message = Message.new("Title", "Body") |> Message.badge(5)
 
-      result = push_apns_via_bypass(bypass, "token", message)
-      assert {:ok, _} = result
+      assert {:ok, _} = PushX.push(:apns, "token", message, topic: "com.test.app")
     end
 
     test "converts map with string keys to Message", %{bypass: bypass} do
@@ -87,14 +114,12 @@ defmodule PushXTest do
         assert payload["aps"]["alert"]["body"] == "Map Body"
         assert payload["aps"]["badge"] == 3
 
-        conn
-        |> Plug.Conn.put_resp_header("apns-id", "id")
-        |> Plug.Conn.resp(200, "")
+        apns_ok(conn)
       end)
 
       map_payload = %{"title" => "Map Title", "body" => "Map Body", "badge" => 3}
-      result = push_apns_via_bypass(bypass, "token", map_payload)
-      assert {:ok, _} = result
+
+      assert {:ok, _} = PushX.push(:apns, "token", map_payload, topic: "com.test.app")
     end
 
     test "converts map with atom keys to Message", %{bypass: bypass} do
@@ -106,14 +131,12 @@ defmodule PushXTest do
         assert payload["aps"]["alert"]["body"] == "Atom Body"
         assert payload["aps"]["sound"] == "ping.wav"
 
-        conn
-        |> Plug.Conn.put_resp_header("apns-id", "id")
-        |> Plug.Conn.resp(200, "")
+        apns_ok(conn)
       end)
 
       map_payload = %{title: "Atom Title", body: "Atom Body", sound: "ping.wav"}
-      result = push_apns_via_bypass(bypass, "token", map_payload)
-      assert {:ok, _} = result
+
+      assert {:ok, _} = PushX.push(:apns, "token", map_payload, topic: "com.test.app")
     end
 
     test "passes through raw APNS payload", %{bypass: bypass} do
@@ -125,9 +148,7 @@ defmodule PushXTest do
         assert payload["aps"]["content-available"] == 1
         assert payload["custom_key"] == "custom_value"
 
-        conn
-        |> Plug.Conn.put_resp_header("apns-id", "id")
-        |> Plug.Conn.resp(200, "")
+        apns_ok(conn)
       end)
 
       raw_payload = %{
@@ -135,8 +156,7 @@ defmodule PushXTest do
         "custom_key" => "custom_value"
       }
 
-      result = push_apns_via_bypass(bypass, "token", raw_payload)
-      assert {:ok, _} = result
+      assert {:ok, _} = PushX.push(:apns, "token", raw_payload, topic: "com.test.app")
     end
 
     test "includes data from map payload", %{bypass: bypass} do
@@ -147,9 +167,7 @@ defmodule PushXTest do
         assert payload["aps"]["alert"]["title"] == "Alert"
         assert payload["lock_id"] == "abc123"
 
-        conn
-        |> Plug.Conn.put_resp_header("apns-id", "id")
-        |> Plug.Conn.resp(200, "")
+        apns_ok(conn)
       end)
 
       map_payload = %{
@@ -158,72 +176,98 @@ defmodule PushXTest do
         data: %{"lock_id" => "abc123"}
       }
 
-      result = push_apns_via_bypass(bypass, "token", map_payload)
-      assert {:ok, _} = result
+      assert {:ok, _} = PushX.push(:apns, "token", map_payload, topic: "com.test.app")
     end
 
-    # Helper to test push via bypass
-    defp push_apns_via_bypass(bypass, device_token, payload) do
-      url = "http://localhost:#{bypass.port}/3/device/#{device_token}"
+    test "routes :fcm to PushX.FCM.send/3", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/v1/projects/test-project/messages:send", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        payload = JSON.decode!(body)
 
-      # Normalize payload same way PushX.push does
-      normalized =
-        case payload do
-          binary when is_binary(binary) ->
-            Message.new(binary, "")
+        assert payload["message"]["token"] == "fcm-token"
+        assert payload["message"]["notification"]["title"] == "Hello"
 
-          %Message{} = msg ->
-            msg
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, ~s({"name": "fcm-msg"}))
+      end)
 
-          %{"title" => _, "body" => _} = map ->
-            Message.new(map["title"], map["body"])
-            |> maybe_set(:badge, map["badge"])
-            |> maybe_set(:sound, map["sound"])
-            |> maybe_set(:data, map["data"])
+      assert {:ok, %PushX.Response{status: :sent, id: "fcm-msg", provider: :fcm}} =
+               PushX.push(:fcm, "fcm-token", "Hello")
+    end
+  end
 
-          %{title: _, body: _} = map ->
-            Message.new(map.title, map.body)
-            |> maybe_set(:badge, Map.get(map, :badge))
-            |> maybe_set(:sound, Map.get(map, :sound))
-            |> maybe_set(:data, Map.get(map, :data))
+  describe ":on_invalid_token callback" do
+    setup do
+      bypass = Bypass.open()
+      route_to_bypass(bypass)
 
-          map when is_map(map) ->
-            map
-        end
+      Application.put_env(:pushx, :on_invalid_token, {TokenSink, :invalid, [self()]})
+      on_exit(fn -> Application.delete_env(:pushx, :on_invalid_token) end)
 
-      body =
-        case normalized do
-          %Message{} = msg -> JSON.encode!(Message.to_apns_payload(msg))
-          map when is_map(map) -> JSON.encode!(map)
-        end
-
-      headers = [
-        {"authorization", "bearer test-token"},
-        {"apns-topic", "com.test.app"},
-        {"apns-push-type", "alert"},
-        {"apns-priority", "10"}
-      ]
-
-      case Finch.build(:post, url, headers, body)
-           |> Finch.request(PushX.Config.finch_name()) do
-        {:ok, %{status: 200}} ->
-          {:ok, :sent}
-
-        {:ok, %{status: status, body: body}} ->
-          {:error, {status, body}}
-
-        {:error, reason} ->
-          {:error, reason}
-      end
+      {:ok, bypass: bypass}
     end
 
-    defp maybe_set(message, _field, nil), do: message
-    defp maybe_set(message, :badge, value), do: Message.badge(message, value)
-    defp maybe_set(message, :sound, value), do: Message.sound(message, value)
-    defp maybe_set(message, :data, value), do: Message.data(message, value)
+    test "fires with provider and token when APNS reports the token as dead", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/3/device/dead-token", fn conn ->
+        apns_error(conn, 410, "Unregistered")
+      end)
+
+      assert {:error, %PushX.Response{status: :unregistered}} =
+               PushX.push(:apns, "dead-token", "Hello", topic: "com.test.app")
+
+      assert_receive {:invalid_token, :apns, "dead-token"}
+    end
+
+    test "fires for FCM push_data/4 too", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/v1/projects/test-project/messages:send", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(404, ~s({"error": {"status": "UNREGISTERED", "message": "gone"}}))
+      end)
+
+      assert {:error, %PushX.Response{status: :unregistered}} =
+               PushX.push_data(:fcm, "dead-fcm-token", %{action: "sync"})
+
+      assert_receive {:invalid_token, :fcm, "dead-fcm-token"}
+    end
+
+    test "does not fire for failures that are not token problems", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/3/device/token", fn conn ->
+        apns_error(conn, 500, "InternalServerError")
+      end)
+
+      assert {:error, %PushX.Response{status: :server_error}} =
+               PushX.push(:apns, "token", "Hello", topic: "com.test.app")
+
+      refute_receive {:invalid_token, _, _}, 100
+    end
   end
 
   describe "push_data/4" do
+    setup do
+      bypass = Bypass.open()
+      route_to_bypass(bypass)
+      {:ok, bypass: bypass}
+    end
+
+    test "sends a data-only FCM message", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/v1/projects/test-project/messages:send", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        payload = JSON.decode!(body)
+
+        assert payload["message"]["data"] == %{"action" => "sync"}
+        refute Map.has_key?(payload["message"], "notification")
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, ~s({"name": "data-msg"}))
+      end)
+
+      assert {:ok, %PushX.Response{status: :sent, id: "data-msg"}} =
+               PushX.push_data(:fcm, "token", %{action: "sync"})
+    end
+
     test "returns clear error for :apns provider" do
       result = PushX.push_data(:apns, "token", %{action: "sync"})
 
@@ -307,48 +351,40 @@ defmodule PushXTest do
   describe "push!/4" do
     setup do
       bypass = Bypass.open()
+      route_to_bypass(bypass)
       {:ok, bypass: bypass}
     end
 
     test "returns :ok on success", %{bypass: bypass} do
-      Bypass.expect_once(bypass, "POST", "/3/device/token", fn conn ->
-        conn
-        |> Plug.Conn.put_resp_header("apns-id", "id")
-        |> Plug.Conn.resp(200, "")
-      end)
+      Bypass.expect_once(bypass, "POST", "/3/device/token", fn conn -> apns_ok(conn) end)
 
-      result = push_bang_via_bypass(bypass, "token", "Hello")
-      assert result == :ok
+      assert :ok = PushX.push!(:apns, "token", "Hello", topic: "com.test.app")
     end
 
     test "returns :error on failure", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/3/device/token", fn conn ->
-        conn
-        |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(400, ~s({"reason": "BadDeviceToken"}))
+        apns_error(conn, 400, "BadDeviceToken")
       end)
 
-      result = push_bang_via_bypass(bypass, "token", "Hello")
-      assert result == :error
+      assert :error = PushX.push!(:apns, "token", "Hello", topic: "com.test.app")
     end
 
-    defp push_bang_via_bypass(bypass, device_token, message) do
-      url = "http://localhost:#{bypass.port}/3/device/#{device_token}"
-      msg = Message.new(message, "")
-      body = JSON.encode!(Message.to_apns_payload(msg))
+    test "push!/3 defaults opts (and therefore fails APNS topic validation locally)" do
+      assert :error = PushX.push!(:apns, "token", "Hello")
+    end
+  end
 
-      headers = [
-        {"authorization", "bearer test-token"},
-        {"apns-topic", "com.test.app"},
-        {"apns-push-type", "alert"},
-        {"apns-priority", "10"}
-      ]
+  describe "health_check/0" do
+    test "reports configuration and breaker state per provider" do
+      assert %{
+               apns: %{configured: true, circuit: apns_state},
+               fcm: %{configured: fcm_configured, circuit: fcm_state}
+             } = PushX.health_check()
 
-      case Finch.build(:post, url, headers, body)
-           |> Finch.request(PushX.Config.finch_name()) do
-        {:ok, %{status: 200}} -> :ok
-        _ -> :error
-      end
+      assert apns_state in [:closed, :open, :half_open]
+      assert fcm_state in [:closed, :open, :half_open]
+      # test_helper.exs sets fcm_project_id but no fcm_credentials.
+      assert fcm_configured == PushX.Config.fcm_configured?()
     end
   end
 end

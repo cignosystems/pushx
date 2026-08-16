@@ -576,13 +576,22 @@ defmodule PushX.FCM do
     {:error, Response.error(:fcm, error_status, error_message, body, retry_after)}
   end
 
-  defp get_access_token do
-    case Goth.fetch(PushX.Goth) do
-      {:ok, %{token: token}} ->
-        {:ok, token}
+  defp get_access_token, do: fetch_access_token(PushX.Goth)
 
-      {:error, reason} ->
-        {:error, reason}
+  @doc false
+  # Shared by the static path and PushX.Instance so the OAuth seam
+  # (`Config.fcm_token_fetcher/0`) cannot drift between them.
+  @spec fetch_access_token(atom()) :: {:ok, String.t()} | {:error, term()}
+  def fetch_access_token(goth_name) do
+    result =
+      case Config.fcm_token_fetcher() do
+        nil -> Goth.fetch(goth_name)
+        {mod, fun, args} -> apply(mod, fun, [goth_name | args])
+      end
+
+    case result do
+      {:ok, %{token: token}} -> {:ok, token}
+      {:error, reason} -> {:error, reason}
     end
   end
 end

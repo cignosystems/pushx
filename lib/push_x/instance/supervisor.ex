@@ -52,18 +52,26 @@ defmodule PushX.Instance.Supervisor do
   end
 
   defp maybe_add_goth(children, :fcm, config, goth_name) do
-    credentials = Keyword.fetch!(config, :credentials)
-
-    source =
-      case credentials do
-        %{} = map -> {:service_account, map}
-        json when is_binary(json) -> {:service_account, JSON.decode!(json)}
-      end
-
-    children ++ [{Goth, name: goth_name, source: source}]
+    # With a custom token fetcher configured (test seam), the fetcher owns
+    # token acquisition and Goth — which would eagerly try to exchange the
+    # credentials with Google on start — is not started.
+    if PushX.Config.fcm_token_fetcher() do
+      children
+    else
+      children ++ [{Goth, name: goth_name, source: goth_source(config)}]
+    end
   end
 
   defp maybe_add_goth(children, _provider, _config, _goth_name), do: children
+
+  @doc false
+  @spec goth_source(keyword()) :: {:service_account, map()}
+  def goth_source(config) do
+    case Keyword.fetch!(config, :credentials) do
+      %{} = map -> {:service_account, map}
+      json when is_binary(json) -> {:service_account, JSON.decode!(json)}
+    end
+  end
 
   defp http2_pool_opts(config) do
     [

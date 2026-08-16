@@ -20,6 +20,23 @@ J7BDAU8edFnAS0L40PGdujHkRdi2vKVCLA==
 
 Application.put_env(:pushx, :apns_private_key, test_private_key)
 
+# Stub OAuth token source for FCM. Replaces Goth.fetch/1 via the
+# :fcm_token_fetcher seam so the real FCM send paths (static and named
+# instances) can be exercised against Bypass without a Goth process or
+# service-account credentials. Tests that need the failure branch point the
+# seam at `fetch_error/1` for their duration.
+defmodule PushX.TestOAuth do
+  @token "test-oauth-token"
+
+  def token, do: @token
+
+  def fetch(_goth_name), do: {:ok, %{token: @token}}
+
+  def fetch_error(_goth_name), do: {:error, :oauth_down}
+end
+
+Application.put_env(:pushx, :fcm_token_fetcher, {PushX.TestOAuth, :fetch, []})
+
 # capture_log: the suite intentionally exercises failure paths (rate limits,
 # open breakers, retries, JWT rejections), so their warnings are expected
 # noise. Captured logs are still printed for failing tests.

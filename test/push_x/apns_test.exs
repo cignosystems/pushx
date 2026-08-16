@@ -160,19 +160,20 @@ defmodule PushX.APNSTest do
     end
   end
 
+  # Drives the real PushX.APNS.send/3 path against Bypass via the test-only
+  # :apns_url_override seam. Retries are disabled so retryable failures
+  # (5xx, 429, connection errors) return immediately instead of backing off.
   describe "send/3 HTTP integration" do
     setup do
       bypass = Bypass.open()
-      # Override the APNS mode to use our bypass server
-      original_mode = Application.get_env(:pushx, :apns_mode)
-      Application.put_env(:pushx, :apns_mode, :sandbox)
+      Application.put_env(:pushx, :apns_url_override, "http://localhost:#{bypass.port}")
+      Application.put_env(:pushx, :retry_enabled, false)
+      PushX.JWTCache.invalidate(:apns_jwt)
 
       on_exit(fn ->
-        if original_mode do
-          Application.put_env(:pushx, :apns_mode, original_mode)
-        else
-          Application.delete_env(:pushx, :apns_mode)
-        end
+        Application.delete_env(:pushx, :apns_url_override)
+        Application.delete_env(:pushx, :retry_enabled)
+        PushX.JWTCache.invalidate(:apns_jwt)
       end)
 
       {:ok, bypass: bypass}
@@ -180,13 +181,19 @@ defmodule PushX.APNSTest do
 
     test "returns success response on 200", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/3/device/test-device-token", fn conn ->
+        # The provider JWT signed with the configured key must reach the wire.
+        ["bearer " <> jwt] = Plug.Conn.get_req_header(conn, "authorization")
+        assert {:ok, %{"kid" => "TEST_KEY_ID"}} = Joken.peek_header(jwt)
+        assert {:ok, %{"iss" => "TEST_TEAM_ID"}} = Joken.peek_claims(jwt)
+        assert Plug.Conn.get_req_header(conn, "apns-topic") == ["com.test.app"]
+
         conn
         |> Plug.Conn.put_resp_header("apns-id", "apns-unique-id-123")
         |> Plug.Conn.resp(200, "")
       end)
 
-      # Build custom URL pointing to bypass
-      result = send_via_bypass(bypass, "test-device-token", %{"aps" => %{"alert" => "Hello"}})
+      result =
+        APNS.send("test-device-token", %{"aps" => %{"alert" => "Hello"}}, topic: "com.test.app")
 
       assert {:ok, %Response{status: :sent, id: "apns-unique-id-123", provider: :apns}} = result
     end
@@ -198,7 +205,7 @@ defmodule PushX.APNSTest do
         |> Plug.Conn.resp(400, ~s({"reason": "BadDeviceToken"}))
       end)
 
-      result = send_via_bypass(bypass, "bad-token", %{"aps" => %{"alert" => "Hello"}})
+      result = APNS.send("bad-token", %{"aps" => %{"alert" => "Hello"}}, topic: "com.test.app")
 
       assert {:error,
               %Response{status: :invalid_token, reason: "BadDeviceToken", provider: :apns}} =
@@ -212,7 +219,8 @@ defmodule PushX.APNSTest do
         |> Plug.Conn.resp(410, ~s({"reason": "Unregistered"}))
       end)
 
-      result = send_via_bypass(bypass, "unregistered-token", %{"aps" => %{"alert" => "Hello"}})
+      result =
+        APNS.send("unregistered-token", %{"aps" => %{"alert" => "Hello"}}, topic: "com.test.app")
 
       assert {:error, %Response{status: :unregistered, reason: "Unregistered"}} = result
     end
@@ -224,7 +232,8 @@ defmodule PushX.APNSTest do
         |> Plug.Conn.resp(410, ~s({"reason": "ExpiredToken"}))
       end)
 
-      result = send_via_bypass(bypass, "expired-token", %{"aps" => %{"alert" => "Hello"}})
+      result =
+        APNS.send("expired-token", %{"aps" => %{"alert" => "Hello"}}, topic: "com.test.app")
 
       assert {:error, %Response{status: :expired_token, reason: "ExpiredToken"}} = result
     end
@@ -236,7 +245,7 @@ defmodule PushX.APNSTest do
         |> Plug.Conn.resp(413, ~s({"reason": "PayloadTooLarge"}))
       end)
 
-      result = send_via_bypass(bypass, "token", %{"aps" => %{"alert" => "Hello"}})
+      result = APNS.send("token", %{"aps" => %{"alert" => "Hello"}}, topic: "com.test.app")
 
       assert {:error, %Response{status: :payload_too_large, reason: "PayloadTooLarge"}} = result
     end
@@ -248,7 +257,7 @@ defmodule PushX.APNSTest do
         |> Plug.Conn.resp(429, ~s({"reason": "TooManyRequests"}))
       end)
 
-      result = send_via_bypass(bypass, "token", %{"aps" => %{"alert" => "Hello"}})
+      result = APNS.send("token", %{"aps" => %{"alert" => "Hello"}}, topic: "com.test.app")
 
       assert {:error, %Response{status: :rate_limited, reason: "TooManyRequests"}} = result
     end
@@ -260,7 +269,7 @@ defmodule PushX.APNSTest do
         |> Plug.Conn.resp(500, ~s({"reason": "InternalServerError"}))
       end)
 
-      result = send_via_bypass(bypass, "token", %{"aps" => %{"alert" => "Hello"}})
+      result = APNS.send("token", %{"aps" => %{"alert" => "Hello"}}, topic: "com.test.app")
 
       assert {:error, %Response{status: :server_error, reason: "InternalServerError"}} = result
     end
@@ -268,7 +277,7 @@ defmodule PushX.APNSTest do
     test "handles connection errors gracefully", %{bypass: bypass} do
       Bypass.down(bypass)
 
-      result = send_via_bypass(bypass, "token", %{"aps" => %{"alert" => "Hello"}})
+      result = APNS.send("token", %{"aps" => %{"alert" => "Hello"}}, topic: "com.test.app")
 
       assert {:error, %Response{status: :connection_error, provider: :apns}} = result
     end
@@ -292,7 +301,7 @@ defmodule PushX.APNSTest do
         PushX.Message.new("Test Title", "Test Body")
         |> PushX.Message.badge(5)
 
-      result = send_via_bypass(bypass, "token", message)
+      result = APNS.send("token", message, topic: "com.test.app")
 
       assert {:ok, %Response{status: :sent}} = result
     end
@@ -310,10 +319,8 @@ defmodule PushX.APNSTest do
       end)
 
       result =
-        send_via_bypass(
-          bypass,
-          "token",
-          %{"aps" => %{"content-available" => 1}},
+        APNS.send("token", %{"aps" => %{"content-available" => 1}},
+          topic: "com.test.app",
           push_type: "background",
           priority: 5
         )
@@ -321,50 +328,80 @@ defmodule PushX.APNSTest do
       assert {:ok, %Response{status: :sent}} = result
     end
 
-    # Helper to send via bypass server
-    defp send_via_bypass(bypass, device_token, payload, opts \\ []) do
-      # We need to temporarily replace the APNS URL
-      # Since APNS module uses hardcoded URLs, we'll test via a custom Finch request
-      url = "http://localhost:#{bypass.port}/3/device/#{device_token}"
-      topic = Keyword.get(opts, :topic, "com.test.app")
+    test "falls back to the HTTP status when the error body is not JSON", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/3/device/token", fn conn ->
+        Plug.Conn.resp(conn, 502, "bad gateway")
+      end)
 
-      headers = [
-        {"authorization", "bearer test-jwt-token"},
-        {"apns-topic", topic},
-        {"apns-push-type", Keyword.get(opts, :push_type, "alert")},
-        {"apns-priority", to_string(Keyword.get(opts, :priority, 10))}
-      ]
+      assert {:error, %Response{status: :unknown_error, reason: "HTTP 502"}} =
+               APNS.send("token", %{"aps" => %{"alert" => "Hello"}}, topic: "com.test.app")
+    end
 
-      body =
-        case payload do
-          %PushX.Message{} = msg -> JSON.encode!(PushX.Message.to_apns_payload(msg))
-          map when is_map(map) -> JSON.encode!(map)
-        end
+    test "surfaces retry-after on 429", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/3/device/token", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.put_resp_header("retry-after", "30")
+        |> Plug.Conn.resp(429, ~s({"reason": "TooManyRequests"}))
+      end)
 
-      case Finch.build(:post, url, headers, body)
-           |> Finch.request(PushX.Config.finch_name()) do
-        {:ok, %{status: 200, headers: response_headers}} ->
-          apns_id =
-            case List.keyfind(response_headers, "apns-id", 0) do
-              {_, value} -> value
-              nil -> nil
-            end
+      assert {:error, %Response{status: :rate_limited, retry_after: 30}} =
+               APNS.send("token", %{"aps" => %{"alert" => "Hello"}}, topic: "com.test.app")
+    end
 
-          {:ok, Response.success(:apns, apns_id)}
+    test "send/2 and send_once/2 default opts and therefore require :topic" do
+      assert {:error, %Response{status: :invalid_request, reason: ":topic option is required"}} =
+               APNS.send("token", %{"aps" => %{"alert" => "Hello"}})
 
-        {:ok, %{status: _status, body: body}} ->
-          reason =
-            case JSON.decode(body) do
-              {:ok, %{"reason" => reason}} -> reason
-              _ -> "Unknown"
-            end
+      assert {:error, %Response{status: :invalid_request, reason: ":topic option is required"}} =
+               APNS.send_once("token", %{"aps" => %{"alert" => "Hello"}})
+    end
 
-          error_status = Response.apns_reason_to_status(reason)
-          {:error, Response.error(:apns, error_status, reason, body)}
+    test "emits a telemetry exception event and re-raises when the request itself raises" do
+      Application.put_env(:pushx, :apns_url_override, "bogus://nowhere")
 
-        {:error, _reason} ->
-          {:error, Response.error(:apns, :connection_error, "Connection failed")}
+      test_pid = self()
+      handler = "apns-exception-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler,
+        [:pushx, :push, :exception],
+        fn event, _measurements, metadata, _ -> send(test_pid, {event, metadata}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      assert_raise ArgumentError, fn ->
+        APNS.send_once("token", %{"aps" => %{"alert" => "Hello"}}, topic: "com.test.app")
       end
+
+      assert_receive {[:pushx, :push, :exception], %{provider: :apns, kind: :error}}
+    end
+  end
+
+  describe "client-side rate limit gate" do
+    setup do
+      Application.put_env(:pushx, :rate_limit_enabled, true)
+      Application.put_env(:pushx, :rate_limit_apns, 1)
+      Application.put_env(:pushx, :rate_limit_window_ms, 60_000)
+      PushX.RateLimiter.reset(:apns)
+
+      on_exit(fn ->
+        Application.delete_env(:pushx, :rate_limit_enabled)
+        Application.delete_env(:pushx, :rate_limit_apns)
+        Application.delete_env(:pushx, :rate_limit_window_ms)
+        PushX.RateLimiter.reset(:apns)
+      end)
+
+      :ok
+    end
+
+    test "send_once/3 is gated once the budget is spent" do
+      assert PushX.RateLimiter.check_and_increment(:apns) == :ok
+
+      assert {:error, %Response{status: :rate_limited, provider: :apns}} =
+               APNS.send_once("token", %{"aps" => %{"alert" => "Hi"}}, topic: "com.test.app")
     end
   end
 

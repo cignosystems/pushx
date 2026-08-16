@@ -31,9 +31,22 @@ defmodule PushX.FCMTest do
     end
   end
 
+  # These tests drive the *real* send path — PushX.FCM.send/3, send_once/3,
+  # send_data/3, send_web/5 — against a Bypass server via the test-only
+  # :fcm_url_override seam. OAuth is stubbed by :fcm_token_fetcher (see
+  # test_helper.exs). Retries are disabled so retryable failures (5xx, 429,
+  # connection errors) return immediately instead of backing off.
   describe "send/3 HTTP integration" do
     setup do
       bypass = Bypass.open()
+      Application.put_env(:pushx, :fcm_url_override, "http://localhost:#{bypass.port}")
+      Application.put_env(:pushx, :retry_enabled, false)
+
+      on_exit(fn ->
+        Application.delete_env(:pushx, :fcm_url_override)
+        Application.delete_env(:pushx, :retry_enabled)
+      end)
+
       {:ok, bypass: bypass}
     end
 
@@ -41,6 +54,12 @@ defmodule PushX.FCMTest do
       Bypass.expect_once(bypass, "POST", "/v1/projects/test-project/messages:send", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         payload = JSON.decode!(body)
+
+        # The OAuth token from the fetcher seam must reach the wire.
+        assert Plug.Conn.get_req_header(conn, "authorization") ==
+                 ["Bearer #{PushX.TestOAuth.token()}"]
+
+        assert Plug.Conn.get_req_header(conn, "content-type") == ["application/json"]
 
         # Verify request structure
         assert payload["message"]["token"] == "test-device-token"
@@ -51,8 +70,7 @@ defmodule PushX.FCMTest do
         |> Plug.Conn.resp(200, ~s({"name": "projects/test-project/messages/msg-123"}))
       end)
 
-      result =
-        send_via_bypass(bypass, "test-device-token", %{"title" => "Hello", "body" => "World"})
+      result = FCM.send("test-device-token", %{"title" => "Hello", "body" => "World"})
 
       assert {:ok,
               %Response{
@@ -69,9 +87,22 @@ defmodule PushX.FCMTest do
         |> Plug.Conn.resp(200, ~s({}))
       end)
 
-      result = send_via_bypass(bypass, "token", %{"title" => "Hi", "body" => "There"})
+      result = FCM.send("token", %{"title" => "Hi", "body" => "There"})
 
       assert {:ok, %Response{status: :sent, id: nil, provider: :fcm}} = result
+    end
+
+    test "honours :project_id override in the request URL", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/v1/projects/other-project/messages:send", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, ~s({"name": "msg-id"}))
+      end)
+
+      assert {:ok, %Response{status: :sent}} =
+               FCM.send("token", %{"title" => "Hi", "body" => "There"},
+                 project_id: "other-project"
+               )
     end
 
     test "returns invalid_request error on INVALID_ARGUMENT (must not remove tokens)", %{
@@ -86,7 +117,7 @@ defmodule PushX.FCMTest do
         )
       end)
 
-      result = send_via_bypass(bypass, "bad-token", %{"title" => "Hi", "body" => "There"})
+      result = FCM.send("bad-token", %{"title" => "Hi", "body" => "There"})
 
       assert {:error,
               %Response{status: :invalid_request, reason: "Invalid token", provider: :fcm} = resp} =
@@ -105,10 +136,12 @@ defmodule PushX.FCMTest do
         )
       end)
 
-      result =
-        send_via_bypass(bypass, "unregistered-token", %{"title" => "Hi", "body" => "There"})
+      result = FCM.send("unregistered-token", %{"title" => "Hi", "body" => "There"})
 
-      assert {:error, %Response{status: :unregistered, reason: "Token not registered"}} = result
+      assert {:error, %Response{status: :unregistered, reason: "Token not registered"} = resp} =
+               result
+
+      assert Response.should_remove_token?(resp)
     end
 
     test "returns unregistered when UNREGISTERED is in details array (NOT_FOUND wrapper)",
@@ -135,25 +168,30 @@ defmodule PushX.FCMTest do
         |> Plug.Conn.resp(404, error_body)
       end)
 
-      result = send_via_bypass(bypass, "old-token", %{"title" => "Hi", "body" => "There"})
+      result = FCM.send("old-token", %{"title" => "Hi", "body" => "There"})
 
       assert {:error, %Response{status: :unregistered, reason: "Requested entity was not found."}} =
                result
     end
 
-    test "returns rate_limited error on QUOTA_EXCEEDED", %{bypass: bypass} do
+    test "returns rate_limited error on QUOTA_EXCEEDED and surfaces retry-after", %{
+      bypass: bypass
+    } do
       Bypass.expect_once(bypass, "POST", "/v1/projects/test-project/messages:send", fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.put_resp_header("retry-after", "7")
         |> Plug.Conn.resp(
           429,
           ~s({"error": {"status": "QUOTA_EXCEEDED", "message": "Rate limit exceeded"}})
         )
       end)
 
-      result = send_via_bypass(bypass, "token", %{"title" => "Hi", "body" => "There"})
+      result = FCM.send("token", %{"title" => "Hi", "body" => "There"})
 
-      assert {:error, %Response{status: :rate_limited, reason: "Rate limit exceeded"}} = result
+      assert {:error,
+              %Response{status: :rate_limited, reason: "Rate limit exceeded", retry_after: 7}} =
+               result
     end
 
     test "returns server_error on UNAVAILABLE", %{bypass: bypass} do
@@ -166,7 +204,7 @@ defmodule PushX.FCMTest do
         )
       end)
 
-      result = send_via_bypass(bypass, "token", %{"title" => "Hi", "body" => "There"})
+      result = FCM.send("token", %{"title" => "Hi", "body" => "There"})
 
       assert {:error, %Response{status: :server_error, reason: "Service unavailable"}} = result
     end
@@ -178,17 +216,61 @@ defmodule PushX.FCMTest do
         |> Plug.Conn.resp(500, ~s({"error": {"status": "INTERNAL", "message": "Internal error"}}))
       end)
 
-      result = send_via_bypass(bypass, "token", %{"title" => "Hi", "body" => "There"})
+      result = FCM.send("token", %{"title" => "Hi", "body" => "There"})
 
       assert {:error, %Response{status: :server_error, reason: "Internal error"}} = result
+    end
+
+    test "returns unknown_error with raw body on a non-JSON error response", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/v1/projects/test-project/messages:send", fn conn ->
+        Plug.Conn.resp(conn, 502, "<html>Bad Gateway</html>")
+      end)
+
+      result = FCM.send_once("token", %{"title" => "Hi", "body" => "There"})
+
+      assert {:error, %Response{status: :unknown_error, reason: "HTTP 502"} = resp} = result
+      assert resp.raw == "<html>Bad Gateway</html>"
     end
 
     test "handles connection errors gracefully", %{bypass: bypass} do
       Bypass.down(bypass)
 
-      result = send_via_bypass(bypass, "token", %{"title" => "Hi", "body" => "There"})
+      result = FCM.send("token", %{"title" => "Hi", "body" => "There"})
 
       assert {:error, %Response{status: :connection_error, provider: :fcm}} = result
+    end
+
+    test "returns connection_error when the OAuth token cannot be fetched" do
+      # No request reaches the server: the token is fetched before sending, and
+      # an unexpected request would surface as a Bypass 500 / different status.
+      Application.put_env(:pushx, :fcm_token_fetcher, {PushX.TestOAuth, :fetch_error, []})
+
+      on_exit(fn ->
+        Application.put_env(:pushx, :fcm_token_fetcher, {PushX.TestOAuth, :fetch, []})
+      end)
+
+      assert {:error, %Response{status: :connection_error, provider: :fcm, reason: reason}} =
+               FCM.send_once("token", %{"title" => "Hi", "body" => "There"})
+
+      assert reason =~ "OAuth token error"
+      assert reason =~ "oauth_down"
+    end
+
+    test "rejects oversized payloads before fetching a token or sending" do
+      huge = String.duplicate("x", 5_000)
+
+      assert {:error, %Response{status: :payload_too_large, provider: :fcm, reason: reason}} =
+               FCM.send_once("token", %{"title" => "Hi", "body" => huge})
+
+      assert reason =~ "exceeds FCM limit"
+    end
+
+    test "returns invalid_request when the payload cannot be JSON-encoded" do
+      # A tuple has no JSON representation.
+      assert {:error, %Response{status: :invalid_request, provider: :fcm, reason: reason}} =
+               FCM.send_once("token", %{"title" => {:not, :json}, "body" => "There"})
+
+      assert reason =~ "Failed to encode payload"
     end
 
     test "sends with Message struct", %{bypass: bypass} do
@@ -206,7 +288,7 @@ defmodule PushX.FCMTest do
       end)
 
       message = PushX.Message.new("Test Title", "Test Body")
-      result = send_via_bypass(bypass, "token", message)
+      result = FCM.send("token", message)
 
       assert {:ok, %Response{status: :sent}} = result
     end
@@ -227,8 +309,7 @@ defmodule PushX.FCMTest do
         |> Plug.Conn.resp(200, ~s({"name": "msg-id"}))
       end)
 
-      result =
-        send_via_bypass(bypass, "token", %{"data" => %{action: "sync"}})
+      result = FCM.send("token", %{"data" => %{action: "sync"}})
 
       assert {:ok, %Response{status: :sent}} = result
     end
@@ -247,7 +328,7 @@ defmodule PushX.FCMTest do
       end)
 
       result =
-        send_via_bypass(bypass, "token", %{
+        FCM.send("token", %{
           "notification" => %{"title" => "Alert", "body" => "Something happened"},
           "data" => %{"event_id" => "1"}
         })
@@ -269,7 +350,7 @@ defmodule PushX.FCMTest do
       end)
 
       message = PushX.Message.new() |> PushX.Message.data(%{action: "sync"})
-      result = send_via_bypass(bypass, "token", message)
+      result = FCM.send("token", message)
 
       assert {:ok, %Response{status: :sent}} = result
     end
@@ -289,12 +370,7 @@ defmodule PushX.FCMTest do
       end)
 
       result =
-        send_via_bypass(
-          bypass,
-          "token",
-          %{"title" => "Hi", "body" => "There"},
-          data: %{key: "value", count: 42}
-        )
+        FCM.send("token", %{"title" => "Hi", "body" => "There"}, data: %{key: "value", count: 42})
 
       assert {:ok, %Response{status: :sent}} = result
     end
@@ -306,97 +382,68 @@ defmodule PushX.FCMTest do
         |> Plug.Conn.resp(400, ~s({"error": {"code": 400, "message": "Bad request"}}))
       end)
 
-      result = send_via_bypass(bypass, "token", %{"title" => "Hi", "body" => "There"})
+      result = FCM.send("token", %{"title" => "Hi", "body" => "There"})
 
       assert {:error, %Response{status: :unknown_error, reason: "Bad request"}} = result
     end
 
-    # Helper to send via bypass server
-    defp send_via_bypass(bypass, device_token, payload, opts \\ []) do
-      url = "http://localhost:#{bypass.port}/v1/projects/test-project/messages:send"
+    test "send_web/5 sends a webpush envelope with the link", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/v1/projects/test-project/messages:send", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        payload = JSON.decode!(body)
 
-      message = build_message(device_token, payload, opts)
+        assert payload["message"]["token"] == "web-token"
+        assert payload["message"]["notification"]["title"] == "New article"
+        assert payload["message"]["notification"]["icon"] == "/icon.png"
+        assert payload["message"]["webpush"]["fcm_options"]["link"] == "https://example.com/p/1"
 
-      headers = [
-        {"authorization", "Bearer test-oauth-token"},
-        {"content-type", "application/json"}
-      ]
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, ~s({"name": "web-msg"}))
+      end)
 
-      body = JSON.encode!(message)
+      link = "https://example.com/p/1"
 
-      case Finch.build(:post, url, headers, body)
-           |> Finch.request(PushX.Config.finch_name()) do
-        {:ok, %{status: 200, body: response_body}} ->
-          case JSON.decode(response_body) do
-            {:ok, %{"name" => message_id}} ->
-              {:ok, Response.success(:fcm, message_id)}
+      assert {:ok, %Response{status: :sent, id: "web-msg"}} =
+               FCM.send_web("web-token", "New article", "Just published", link, icon: "/icon.png")
+    end
 
-            _ ->
-              {:ok, Response.success(:fcm)}
-          end
+    test "emits a telemetry exception event and re-raises when the request itself raises" do
+      # An override with an unsupported scheme makes Finch.build/4 raise inside
+      # the instrumented block; the exception must be reported, then re-raised.
+      Application.put_env(:pushx, :fcm_url_override, "bogus://nowhere")
 
-        {:ok, %{status: _status, body: body}} ->
-          {error_code, error_message} =
-            case JSON.decode(body) do
-              {:ok, %{"error" => %{"status" => code, "message" => msg}} = decoded} ->
-                {Response.extract_fcm_error_code(decoded) || code, msg}
+      test_pid = self()
+      handler = "fcm-exception-#{System.unique_integer([:positive])}"
 
-              {:ok, %{"error" => %{"code" => code, "message" => msg}} = decoded} ->
-                {Response.extract_fcm_error_code(decoded) || to_string(code), msg}
+      :telemetry.attach(
+        handler,
+        [:pushx, :push, :exception],
+        fn event, _measurements, metadata, _ -> send(test_pid, {event, metadata}) end,
+        nil
+      )
 
-              _ ->
-                {"UNKNOWN", "Unknown error"}
-            end
+      on_exit(fn -> :telemetry.detach(handler) end)
 
-          error_status = Response.fcm_error_to_status(error_code)
-          {:error, Response.error(:fcm, error_status, error_message, body)}
-
-        {:error, _reason} ->
-          {:error, Response.error(:fcm, :connection_error, "Connection failed")}
+      assert_raise ArgumentError, fn ->
+        FCM.send_once("token", %{"title" => "Hi", "body" => "There"})
       end
-    end
 
-    defp build_message(token, %PushX.Message{} = message, opts) do
-      base =
-        %{"token" => token}
-        |> maybe_put("notification", PushX.Message.to_fcm_payload(message)["notification"])
-        |> maybe_put("data", stringify_map(Keyword.get(opts, :data) || message.data))
-
-      %{"message" => base}
-    end
-
-    defp build_message(token, payload, opts) when is_map(payload) do
-      base = %{"token" => token}
-
-      base =
-        if Map.has_key?(payload, "notification") or Map.has_key?(payload, "data") do
-          base
-          |> maybe_put("notification", payload["notification"])
-          |> maybe_put("data", stringify_map(Keyword.get(opts, :data) || payload["data"]))
-        else
-          base
-          |> Map.put("notification", payload)
-          |> maybe_put("data", stringify_map(Keyword.get(opts, :data)))
-        end
-
-      %{"message" => base}
-    end
-
-    defp maybe_put(map, _key, nil), do: map
-    defp maybe_put(map, _key, data) when data == %{}, do: map
-    defp maybe_put(map, key, value), do: Map.put(map, key, value)
-
-    defp stringify_map(nil), do: nil
-    defp stringify_map(map) when map == %{}, do: nil
-
-    defp stringify_map(map) when is_map(map) do
-      Map.new(map, fn {k, v} -> {to_string(k), to_string(v)} end)
+      assert_receive {[:pushx, :push, :exception], %{provider: :fcm, kind: :error}}
     end
   end
 
   describe "send_data/3 HTTP integration" do
     setup do
       bypass = Bypass.open()
+      Application.put_env(:pushx, :fcm_url_override, "http://localhost:#{bypass.port}")
+      Application.put_env(:pushx, :retry_enabled, false)
+
+      on_exit(fn ->
+        Application.delete_env(:pushx, :fcm_url_override)
+        Application.delete_env(:pushx, :retry_enabled)
+      end)
+
       {:ok, bypass: bypass}
     end
 
@@ -404,6 +451,9 @@ defmodule PushX.FCMTest do
       Bypass.expect_once(bypass, "POST", "/v1/projects/test-project/messages:send", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
         payload = JSON.decode!(body)
+
+        assert Plug.Conn.get_req_header(conn, "authorization") ==
+                 ["Bearer #{PushX.TestOAuth.token()}"]
 
         # Should have data but no notification
         assert payload["message"]["token"] == "token"
@@ -416,9 +466,19 @@ defmodule PushX.FCMTest do
         |> Plug.Conn.resp(200, ~s({"name": "data-msg-id"}))
       end)
 
-      result = send_data_via_bypass(bypass, "token", %{action: "sync", id: 123})
+      result = FCM.send_data("token", %{action: "sync", id: 123})
 
       assert {:ok, %Response{status: :sent, id: "data-msg-id"}} = result
+    end
+
+    test "returns success without an id when the response has no name", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/v1/projects/test-project/messages:send", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, ~s({}))
+      end)
+
+      assert {:ok, %Response{status: :sent, id: nil}} = FCM.send_data("token", %{a: 1})
     end
 
     test "stringifies all data values", %{bypass: bypass} do
@@ -436,46 +496,97 @@ defmodule PushX.FCMTest do
         |> Plug.Conn.resp(200, ~s({"name": "msg-id"}))
       end)
 
-      result = send_data_via_bypass(bypass, "token", %{number: 42, boolean: true, string: "text"})
+      result = FCM.send_data("token", %{number: 42, boolean: true, string: "text"})
 
       assert {:ok, %Response{status: :sent}} = result
     end
 
-    # Helper for send_data tests
-    defp send_data_via_bypass(bypass, device_token, data) do
-      url = "http://localhost:#{bypass.port}/v1/projects/test-project/messages:send"
+    test "maps FCM error responses like the notification path", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/v1/projects/test-project/messages:send", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          404,
+          ~s({"error": {"status": "UNREGISTERED", "message": "Token not registered"}})
+        )
+      end)
 
-      message = %{
-        "message" => %{
-          "token" => device_token,
-          "data" => Map.new(data, fn {k, v} -> {to_string(k), to_string(v)} end)
-        }
-      }
+      assert {:error, %Response{status: :unregistered, reason: "Token not registered"}} =
+               FCM.send_data("dead-token", %{action: "sync"})
+    end
 
-      headers = [
-        {"authorization", "Bearer test-oauth-token"},
-        {"content-type", "application/json"}
-      ]
+    test "returns connection_error when the server is down", %{bypass: bypass} do
+      Bypass.down(bypass)
 
-      body = JSON.encode!(message)
+      assert {:error, %Response{status: :connection_error, provider: :fcm}} =
+               FCM.send_data("token", %{action: "sync"})
+    end
 
-      case Finch.build(:post, url, headers, body)
-           |> Finch.request(PushX.Config.finch_name()) do
-        {:ok, %{status: 200, body: response_body}} ->
-          case JSON.decode(response_body) do
-            {:ok, %{"name" => message_id}} ->
-              {:ok, Response.success(:fcm, message_id)}
+    test "returns connection_error when the OAuth token cannot be fetched" do
+      Application.put_env(:pushx, :fcm_token_fetcher, {PushX.TestOAuth, :fetch_error, []})
 
-            _ ->
-              {:ok, Response.success(:fcm)}
-          end
+      on_exit(fn ->
+        Application.put_env(:pushx, :fcm_token_fetcher, {PushX.TestOAuth, :fetch, []})
+      end)
 
-        {:ok, %{status: _status, body: body}} ->
-          {:error, Response.error(:fcm, :unknown_error, body)}
+      assert {:error, %Response{status: :connection_error, reason: reason}} =
+               FCM.send_data_once("token", %{action: "sync"})
 
-        {:error, _reason} ->
-          {:error, Response.error(:fcm, :connection_error, "Connection failed")}
-      end
+      assert reason =~ "OAuth token error"
+    end
+
+    test "rejects oversized data payloads locally" do
+      assert {:error, %Response{status: :payload_too_large}} =
+               FCM.send_data_once("token", %{blob: String.duplicate("x", 5_000)})
+    end
+
+    test "emits a telemetry exception event and re-raises when the request itself raises" do
+      Application.put_env(:pushx, :fcm_url_override, "bogus://nowhere")
+
+      test_pid = self()
+      handler = "fcm-data-exception-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler,
+        [:pushx, :push, :exception],
+        fn event, _measurements, metadata, _ -> send(test_pid, {event, metadata}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      assert_raise ArgumentError, fn -> FCM.send_data_once("token", %{a: 1}) end
+
+      assert_receive {[:pushx, :push, :exception], %{provider: :fcm, kind: :error}}
+    end
+  end
+
+  describe "client-side rate limit gate" do
+    setup do
+      Application.put_env(:pushx, :rate_limit_enabled, true)
+      Application.put_env(:pushx, :rate_limit_fcm, 1)
+      Application.put_env(:pushx, :rate_limit_window_ms, 60_000)
+      PushX.RateLimiter.reset(:fcm)
+
+      on_exit(fn ->
+        Application.delete_env(:pushx, :rate_limit_enabled)
+        Application.delete_env(:pushx, :rate_limit_fcm)
+        Application.delete_env(:pushx, :rate_limit_window_ms)
+        PushX.RateLimiter.reset(:fcm)
+      end)
+
+      :ok
+    end
+
+    test "send_once/3 and send_data_once/3 are gated once the budget is spent" do
+      # Spend the single slot without touching the network.
+      assert PushX.RateLimiter.check_and_increment(:fcm) == :ok
+
+      assert {:error, %Response{status: :rate_limited, provider: :fcm}} =
+               FCM.send_once("token", %{"title" => "Hi", "body" => "There"})
+
+      assert {:error, %Response{status: :rate_limited, provider: :fcm}} =
+               FCM.send_data_once("token", %{action: "sync"})
     end
   end
 

@@ -483,8 +483,8 @@ defmodule PushX.Instance do
   end
 
   defp fcm_send_authenticated(info, device_token, body) do
-    case Goth.fetch(info.goth_name) do
-      {:ok, %{token: access_token}} ->
+    case PushX.FCM.fetch_access_token(info.goth_name) do
+      {:ok, access_token} ->
         project_id = Keyword.fetch!(info.config, :project_id)
         url = URLs.fcm_send_url(project_id)
 

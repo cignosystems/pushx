@@ -125,8 +125,20 @@ defmodule PushX.BatchTest do
   end
 
   describe "batch with mixed results via HTTP" do
+    # Drives the real PushX.push_batch/4 → PushX.APNS.send/3 path against
+    # Bypass via the test-only :apns_url_override seam.
     setup do
       bypass = Bypass.open()
+      Application.put_env(:pushx, :apns_url_override, "http://localhost:#{bypass.port}")
+      Application.put_env(:pushx, :retry_enabled, false)
+      PushX.JWTCache.invalidate(:apns_jwt)
+
+      on_exit(fn ->
+        Application.delete_env(:pushx, :apns_url_override)
+        Application.delete_env(:pushx, :retry_enabled)
+        PushX.JWTCache.invalidate(:apns_jwt)
+      end)
+
       {:ok, bypass: bypass}
     end
 
@@ -150,7 +162,7 @@ defmodule PushX.BatchTest do
       end)
 
       tokens = ["good-token-1", "bad-token", "good-token-2"]
-      results = batch_send_via_bypass(bypass, tokens)
+      results = PushX.push_batch(:apns, tokens, "Hello", topic: "com.test.app")
 
       assert length(results) == 3
 
@@ -168,59 +180,67 @@ defmodule PushX.BatchTest do
       end)
 
       tokens = ["token-1", "token-2"]
-      results = batch_send_via_bypass(bypass, tokens)
+      results = PushX.push_batch(:apns, tokens, "Hello", topic: "com.test.app")
 
       assert length(results) == 2
       assert Enum.all?(results, fn {_token, result} -> match?({:error, _}, result) end)
     end
 
-    defp batch_send_via_bypass(bypass, tokens) do
-      tokens
-      |> Task.async_stream(
-        fn token ->
-          url = "http://localhost:#{bypass.port}/3/device/#{token}"
+    test "reports a task that exceeds :timeout as a connection_error timeout" do
+      # A bare TCP listener that never answers: the send blocks in the HTTP
+      # client until the batch's per-task :timeout kills it.
+      {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+      {:ok, port} = :inet.port(listener)
+      on_exit(fn -> :gen_tcp.close(listener) end)
+      Application.put_env(:pushx, :apns_url_override, "http://localhost:#{port}")
+      Application.put_env(:pushx, :fcm_url_override, "http://localhost:#{port}")
+      on_exit(fn -> Application.delete_env(:pushx, :fcm_url_override) end)
 
-          headers = [
-            {"authorization", "bearer test-jwt"},
-            {"apns-topic", "com.test.app"},
-            {"apns-push-type", "alert"},
-            {"apns-priority", "10"}
-          ]
+      assert [{"slow-token", {:error, %PushX.Response{} = apns_err}}] =
+               PushX.push_batch(:apns, ["slow-token"], "Hello",
+                 topic: "com.test.app",
+                 timeout: 50
+               )
 
-          body = JSON.encode!(%{"aps" => %{"alert" => "Hello"}})
+      assert %{status: :connection_error, reason: "timeout", provider: :apns} = apns_err
 
-          result =
-            case Finch.build(:post, url, headers, body)
-                 |> Finch.request(PushX.Config.finch_name()) do
-              {:ok, %{status: 200, headers: response_headers}} ->
-                apns_id =
-                  case List.keyfind(response_headers, "apns-id", 0) do
-                    {_, value} -> value
-                    nil -> nil
-                  end
+      assert [{"slow-token", {:error, %PushX.Response{} = apns_batch_err}}] =
+               PushX.APNS.send_batch(["slow-token"], %{"aps" => %{"alert" => "Hi"}},
+                 topic: "com.test.app",
+                 timeout: 50
+               )
 
-                {:ok, PushX.Response.success(:apns, apns_id)}
+      assert %{status: :connection_error, reason: "timeout", provider: :apns} = apns_batch_err
 
-              {:ok, %{status: _status, body: resp_body}} ->
-                reason =
-                  case JSON.decode(resp_body) do
-                    {:ok, %{"reason" => r}} -> r
-                    _ -> "Unknown"
-                  end
+      assert [{"slow-token", {:error, %PushX.Response{} = fcm_err}}] =
+               PushX.FCM.send_batch(["slow-token"], %{"title" => "Hi", "body" => "x"},
+                 timeout: 50
+               )
 
-                status = PushX.Response.apns_reason_to_status(reason)
-                {:error, PushX.Response.error(:apns, status, reason, resp_body)}
+      assert %{status: :connection_error, reason: "timeout", provider: :fcm} = fcm_err
 
-              {:error, _reason} ->
-                {:error, PushX.Response.error(:apns, :connection_error, "Connection failed")}
-            end
+      # Named instances: the facade cannot know the provider for a timed-out
+      # task, so the error is stamped :unknown.
+      {:ok, _} =
+        PushX.Instance.start(:batch_timeout_inst, :apns,
+          key_id: "TEST_KEY_ID",
+          team_id: "TEST_TEAM_ID",
+          private_key: Application.get_env(:pushx, :apns_private_key),
+          mode: :sandbox
+        )
 
-          {token, result}
-        end,
-        max_concurrency: 50,
-        timeout: 5000
-      )
-      |> Enum.map(fn {:ok, result} -> result end)
+      on_exit(fn ->
+        PushX.Instance.stop(:batch_timeout_inst)
+        PushX.JWTCache.invalidate({:apns_jwt, :batch_timeout_inst})
+      end)
+
+      assert [{"slow-token", {:error, %PushX.Response{} = inst_err}}] =
+               PushX.push_batch(:batch_timeout_inst, ["slow-token"], "Hello",
+                 topic: "com.test.app",
+                 timeout: 50
+               )
+
+      assert %{status: :connection_error, reason: "timeout", provider: :unknown} = inst_err
     end
   end
 

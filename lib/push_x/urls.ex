@@ -32,7 +32,14 @@ defmodule PushX.URLs do
   def apns_sandbox, do: @apns_sandbox
 
   @spec fcm_send_url(String.t()) :: String.t()
-  def fcm_send_url(project_id), do: "#{@fcm_base}/#{project_id}/messages:send"
+  def fcm_send_url(project_id) do
+    # :fcm_url_override is test-only (see :apns_url_override above) — it lets
+    # the suite point the real FCM send path at a local Bypass server.
+    case Application.get_env(:pushx, :fcm_url_override) do
+      nil -> "#{@fcm_base}/#{project_id}/messages:send"
+      override when is_binary(override) -> "#{override}/v1/projects/#{project_id}/messages:send"
+    end
+  end
 
   @spec fcm_origin() :: String.t()
   def fcm_origin, do: "https://fcm.googleapis.com"

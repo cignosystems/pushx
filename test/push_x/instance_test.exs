@@ -251,87 +251,505 @@ defmodule PushX.InstanceTest do
     end
   end
 
-  describe "APNS instance Finch pool" do
+  # -- Real send paths ------------------------------------------------------
+  # These drive PushX.push/4 → Instance.send/4 end-to-end against Bypass via
+  # the test-only URL overrides. FCM OAuth is stubbed through
+  # :fcm_token_fetcher (test_helper.exs), which also means no Goth process is
+  # started for FCM instances in the suite. Retries are disabled so retryable
+  # failures return immediately.
+
+  defp route_to_bypass(bypass) do
+    Application.put_env(:pushx, :apns_url_override, "http://localhost:#{bypass.port}")
+    Application.put_env(:pushx, :fcm_url_override, "http://localhost:#{bypass.port}")
+    Application.put_env(:pushx, :retry_enabled, false)
+
+    on_exit(fn ->
+      Application.delete_env(:pushx, :apns_url_override)
+      Application.delete_env(:pushx, :fcm_url_override)
+      Application.delete_env(:pushx, :retry_enabled)
+    end)
+  end
+
+  defp fcm_config(overrides \\ []) do
+    Keyword.merge(
+      [project_id: "tenant-project", credentials: %{"type" => "service_account"}],
+      overrides
+    )
+  end
+
+  defp apns_ok(conn, id \\ "instance-apns-id") do
+    conn
+    |> Plug.Conn.put_resp_header("apns-id", id)
+    |> Plug.Conn.resp(200, "")
+  end
+
+  defp apns_error(conn, status, reason) do
+    conn
+    |> Plug.Conn.put_resp_content_type("application/json")
+    |> Plug.Conn.resp(status, ~s({"reason": "#{reason}"}))
+  end
+
+  defp fcm_ok(conn, name \\ "projects/tenant-project/messages/m-1") do
+    conn
+    |> Plug.Conn.put_resp_content_type("application/json")
+    |> Plug.Conn.resp(200, ~s({"name": "#{name}"}))
+  end
+
+  describe "APNS instance send path" do
     setup do
       bypass = Bypass.open()
-      start_and_cleanup(:apns_pool, :apns, apns_config())
+      route_to_bypass(bypass)
+      start_and_cleanup(:apns_send, :apns, apns_config())
+      on_exit(fn -> PushX.JWTCache.invalidate({:apns_jwt, :apns_send}) end)
       {:ok, bypass: bypass}
     end
 
-    test "creates a working Finch pool", %{bypass: bypass} do
+    test "signs with the instance credentials and returns the apns-id", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/3/device/test-token", fn conn ->
-        conn
-        |> Plug.Conn.put_resp_header("apns-id", "instance-apns-id")
-        |> Plug.Conn.resp(200, "")
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        assert JSON.decode!(body)["aps"]["alert"]["title"] == "Hello"
+
+        ["bearer " <> jwt] = Plug.Conn.get_req_header(conn, "authorization")
+
+        assert Joken.peek_header(jwt) ==
+                 {:ok, %{"alg" => "ES256", "kid" => "TEST_KEY_ID", "typ" => "JWT"}}
+
+        assert {:ok, %{"iss" => "TEST_TEAM_ID", "iat" => _}} = Joken.peek_claims(jwt)
+
+        assert Plug.Conn.get_req_header(conn, "apns-topic") == ["com.test.app"]
+        assert Plug.Conn.get_req_header(conn, "apns-push-type") == ["alert"]
+        assert Plug.Conn.get_req_header(conn, "apns-priority") == ["10"]
+
+        apns_ok(conn)
       end)
 
-      {:ok, info} = Instance.resolve(:apns_pool)
-
-      url = "http://localhost:#{bypass.port}/3/device/test-token"
-
-      headers = [
-        {"authorization", "bearer test-token"},
-        {"apns-topic", "com.test.app"},
-        {"apns-push-type", "alert"},
-        {"apns-priority", "10"}
-      ]
-
-      body = JSON.encode!(%{"aps" => %{"alert" => "Hello"}})
-
-      result =
-        Finch.build(:post, url, headers, body)
-        |> Finch.request(info.finch_name)
-
-      assert {:ok, %{status: 200}} = result
+      assert {:ok, %Response{status: :sent, id: "instance-apns-id", provider: :apns}} =
+               PushX.push(:apns_send, "test-token", "Hello", topic: "com.test.app")
     end
 
-    test "handles error responses via Finch pool", %{bypass: bypass} do
+    test "maps APNS error reasons and keeps the raw body", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/3/device/bad-token", fn conn ->
-        conn
-        |> Plug.Conn.put_resp_content_type("application/json")
-        |> Plug.Conn.resp(400, ~s({"reason": "BadDeviceToken"}))
+        apns_error(conn, 400, "BadDeviceToken")
       end)
 
-      {:ok, info} = Instance.resolve(:apns_pool)
+      assert {:error, %Response{status: :invalid_token, reason: "BadDeviceToken", raw: raw}} =
+               PushX.push(:apns_send, "bad-token", "Hello", topic: "com.test.app")
 
-      url = "http://localhost:#{bypass.port}/3/device/bad-token"
-
-      headers = [
-        {"authorization", "bearer test-token"},
-        {"apns-topic", "com.test.app"},
-        {"apns-push-type", "alert"},
-        {"apns-priority", "10"}
-      ]
-
-      body = JSON.encode!(%{"aps" => %{"alert" => "Hello"}})
-
-      result =
-        Finch.build(:post, url, headers, body)
-        |> Finch.request(info.finch_name)
-
-      assert {:ok, %{status: 400, body: resp_body}} = result
-      assert %{"reason" => "BadDeviceToken"} = JSON.decode!(resp_body)
+      assert raw =~ "BadDeviceToken"
     end
 
-    test "handles connection errors via Finch pool", %{bypass: bypass} do
+    test "falls back to the HTTP status when the error body is not JSON", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/3/device/token", fn conn ->
+        Plug.Conn.resp(conn, 502, "gateway blew up")
+      end)
+
+      assert {:error, %Response{status: :unknown_error, reason: "HTTP 502"}} =
+               PushX.push(:apns_send, "token", "Hello", topic: "com.test.app")
+    end
+
+    test "surfaces retry-after on 429", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/3/device/token", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_header("retry-after", "12")
+        |> apns_error(429, "TooManyRequests")
+      end)
+
+      assert {:error, %Response{status: :rate_limited, retry_after: 12}} =
+               PushX.push(:apns_send, "token", "Hello", topic: "com.test.app")
+    end
+
+    test "returns connection_error when the server is down", %{bypass: bypass} do
       Bypass.down(bypass)
 
-      {:ok, info} = Instance.resolve(:apns_pool)
+      assert {:error, %Response{status: :connection_error, provider: :apns}} =
+               PushX.push(:apns_send, "token", "Hello", topic: "com.test.app")
+    end
 
-      url = "http://localhost:#{bypass.port}/3/device/token"
+    test "requires :topic without touching the network" do
+      assert {:error, %Response{status: :invalid_request, reason: ":topic option is required"}} =
+               PushX.push(:apns_send, "token", "Hello")
+    end
 
-      headers = [
-        {"authorization", "bearer test-token"},
-        {"apns-topic", "com.test.app"}
-      ]
+    test "rejects an invalid :mode" do
+      assert {:error, %Response{status: :invalid_request, reason: reason}} =
+               PushX.push(:apns_send, "token", "Hello", topic: "com.test.app", mode: :staging)
 
-      body = JSON.encode!(%{"aps" => %{"alert" => "Hello"}})
+      assert reason =~ "Invalid :mode :staging"
+    end
 
-      result =
-        Finch.build(:post, url, headers, body)
-        |> Finch.request(info.finch_name)
+    test "rejects device tokens with unsafe characters" do
+      assert {:error, %Response{status: :invalid_token}} =
+               PushX.push(:apns_send, "../evil token", "Hello", topic: "com.test.app")
+    end
 
-      assert {:error, _reason} = result
+    test "rejects oversized payloads, with the larger limit for voip", %{bypass: bypass} do
+      # ~4.5 KB: over the 4096-byte alert limit, under the 5120-byte voip limit.
+      big = %{"aps" => %{"alert" => String.duplicate("x", 4_500)}}
+
+      assert {:error, %Response{status: :payload_too_large, reason: reason}} =
+               PushX.push(:apns_send, "token", big, topic: "com.test.app")
+
+      assert reason =~ "exceeds APNS limit of 4096"
+
+      Bypass.expect_once(bypass, "POST", "/3/device/token", fn conn ->
+        assert Plug.Conn.get_req_header(conn, "apns-push-type") == ["voip"]
+        apns_ok(conn)
+      end)
+
+      assert {:ok, %Response{status: :sent}} =
+               PushX.push(:apns_send, "token", big, topic: "com.test.app", push_type: "voip")
+    end
+
+    test "returns invalid_request when the payload cannot be JSON-encoded" do
+      assert {:error, %Response{status: :invalid_request, reason: reason}} =
+               PushX.push(:apns_send, "token", %{"aps" => {:not, :json}}, topic: "com.test.app")
+
+      assert reason =~ "Failed to encode payload"
+    end
+
+    test "Message delivery fields become APNS headers; explicit opts win", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/3/device/token", fn conn ->
+        assert Plug.Conn.get_req_header(conn, "apns-priority") == ["5"]
+        assert Plug.Conn.get_req_header(conn, "apns-collapse-id") == ["thread-9"]
+        assert Plug.Conn.get_req_header(conn, "apns-topic") == ["com.override.app"]
+        apns_ok(conn)
+      end)
+
+      message =
+        PushX.Message.new("Title", "Body")
+        |> PushX.Message.priority(:normal)
+        |> PushX.Message.collapse_key("thread-9")
+
+      assert {:ok, _} = PushX.push(:apns_send, "token", message, topic: "com.override.app")
+    end
+
+    test "background pushes default to apns-priority 5", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/3/device/token", fn conn ->
+        assert Plug.Conn.get_req_header(conn, "apns-push-type") == ["background"]
+        assert Plug.Conn.get_req_header(conn, "apns-priority") == ["5"]
+        apns_ok(conn)
+      end)
+
+      assert {:ok, _} =
+               PushX.push(:apns_send, "token", %{"aps" => %{"content-available" => 1}},
+                 topic: "com.test.app",
+                 push_type: "background"
+               )
+    end
+
+    test "ExpiredProviderToken invalidates the instance JWT and retries once", %{bypass: bypass} do
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      Bypass.expect(bypass, "POST", "/3/device/token", fn conn ->
+        case Agent.get_and_update(counter, fn n -> {n + 1, n + 1} end) do
+          1 -> apns_error(conn, 403, "ExpiredProviderToken")
+          _ -> apns_ok(conn, "after-refresh")
+        end
+      end)
+
+      assert {:ok, %Response{status: :sent, id: "after-refresh"}} =
+               PushX.push(:apns_send, "token", "Hello", topic: "com.test.app")
+
+      assert Agent.get(counter, & &1) == 2
+    end
+
+    test "a second stale-JWT rejection is returned as auth_error, not retried again", %{
+      bypass: bypass
+    } do
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      Bypass.expect(bypass, "POST", "/3/device/token", fn conn ->
+        Agent.update(counter, &(&1 + 1))
+        apns_error(conn, 403, "InvalidProviderToken")
+      end)
+
+      assert {:error, %Response{status: :auth_error, reason: "InvalidProviderToken"}} =
+               PushX.push(:apns_send, "token", "Hello", topic: "com.test.app")
+
+      assert Agent.get(counter, & &1) == 2
+    end
+
+    test "TooManyProviderTokenUpdates is auth_error and does not regenerate", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/3/device/token", fn conn ->
+        apns_error(conn, 429, "TooManyProviderTokenUpdates")
+      end)
+
+      assert {:error, %Response{status: :auth_error, reason: "TooManyProviderTokenUpdates"}} =
+               PushX.push(:apns_send, "token", "Hello", topic: "com.test.app")
+    end
+  end
+
+  describe "APNS instance private key sources" do
+    setup do
+      bypass = Bypass.open()
+      route_to_bypass(bypass)
+      {:ok, bypass: bypass}
+    end
+
+    test "{:file, path} is read at start and at signing time", %{bypass: bypass} do
+      path =
+        Path.join(
+          System.tmp_dir!(),
+          "pushx-instance-key-#{System.unique_integer([:positive])}.p8"
+        )
+
+      File.write!(path, test_private_key())
+      on_exit(fn -> File.rm(path) end)
+
+      start_and_cleanup(:file_key, :apns, apns_config(private_key: {:file, path}))
+      on_exit(fn -> PushX.JWTCache.invalidate({:apns_jwt, :file_key}) end)
+
+      Bypass.expect_once(bypass, "POST", "/3/device/token", fn conn -> apns_ok(conn) end)
+
+      assert {:ok, %Response{status: :sent}} =
+               PushX.push(:file_key, "token", "Hello", topic: "com.test.app")
+    end
+
+    test "a key file that disappears after start yields auth_error, not a crash" do
+      path =
+        Path.join(
+          System.tmp_dir!(),
+          "pushx-instance-key-#{System.unique_integer([:positive])}.p8"
+        )
+
+      File.write!(path, test_private_key())
+      start_and_cleanup(:vanishing_key, :apns, apns_config(private_key: {:file, path}))
+      on_exit(fn -> PushX.JWTCache.invalidate({:apns_jwt, :vanishing_key}) end)
+      File.rm!(path)
+
+      assert {:error, %Response{status: :auth_error, reason: reason}} =
+               PushX.push(:vanishing_key, "token", "Hello", topic: "com.test.app")
+
+      assert reason =~ "JWT generation failed"
+    end
+
+    test "{:system, var} is resolved from the environment", %{bypass: bypass} do
+      System.put_env("PUSHX_TEST_INSTANCE_KEY", test_private_key())
+      on_exit(fn -> System.delete_env("PUSHX_TEST_INSTANCE_KEY") end)
+
+      start_and_cleanup(
+        :env_key,
+        :apns,
+        apns_config(private_key: {:system, "PUSHX_TEST_INSTANCE_KEY"})
+      )
+
+      on_exit(fn -> PushX.JWTCache.invalidate({:apns_jwt, :env_key}) end)
+
+      Bypass.expect_once(bypass, "POST", "/3/device/token", fn conn -> apns_ok(conn) end)
+
+      assert {:ok, %Response{status: :sent}} =
+               PushX.push(:env_key, "token", "Hello", topic: "com.test.app")
+    end
+
+    test "an unset {:system, var} is rejected at start" do
+      System.delete_env("PUSHX_TEST_UNSET_KEY")
+
+      assert {:error, {:invalid_private_key, reason}} =
+               Instance.start(
+                 :unset_env_key,
+                 :apns,
+                 apns_config(private_key: {:system, "PUSHX_TEST_UNSET_KEY"})
+               )
+
+      assert reason =~ "PUSHX_TEST_UNSET_KEY not set"
+    end
+  end
+
+  describe "FCM instance send path" do
+    setup do
+      bypass = Bypass.open()
+      route_to_bypass(bypass)
+      start_and_cleanup(:fcm_send, :fcm, fcm_config())
+      {:ok, bypass: bypass}
+    end
+
+    test "does not start a Goth process when a token fetcher is configured" do
+      # test_helper.exs configures :fcm_token_fetcher for the whole suite.
+      assert Process.whereis(:"PushX.Goth.fcm_send") == nil
+      assert Process.whereis(:"PushX.Finch.fcm_send") != nil
+    end
+
+    test "sends to the instance's project with the fetched OAuth token", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/v1/projects/tenant-project/messages:send", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        payload = JSON.decode!(body)
+
+        assert Plug.Conn.get_req_header(conn, "authorization") ==
+                 ["Bearer #{PushX.TestOAuth.token()}"]
+
+        assert payload["message"]["token"] == "fcm-token"
+        assert payload["message"]["notification"]["title"] == "Hello"
+
+        fcm_ok(conn)
+      end)
+
+      assert {:ok,
+              %Response{
+                status: :sent,
+                id: "projects/tenant-project/messages/m-1",
+                provider: :fcm
+              }} = PushX.push(:fcm_send, "fcm-token", "Hello")
+    end
+
+    test "returns success without an id when the response has no name", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/v1/projects/tenant-project/messages:send", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, "{}")
+      end)
+
+      assert {:ok, %Response{status: :sent, id: nil}} = PushX.push(:fcm_send, "t", "Hello")
+    end
+
+    test "push_data/4 sends a data-only message through the instance", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/v1/projects/tenant-project/messages:send", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        payload = JSON.decode!(body)
+
+        assert payload["message"]["data"] == %{"action" => "sync", "id" => "7"}
+        refute Map.has_key?(payload["message"], "notification")
+
+        fcm_ok(conn, "data-1")
+      end)
+
+      assert {:ok, %Response{status: :sent, id: "data-1"}} =
+               PushX.push_data(:fcm_send, "t", %{action: "sync", id: 7})
+    end
+
+    test "Message delivery fields and the apns override reach the wire", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/v1/projects/tenant-project/messages:send", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        payload = JSON.decode!(body)
+
+        assert payload["message"]["android"] == %{
+                 "priority" => "NORMAL",
+                 "ttl" => "3600s",
+                 "collapse_key" => "updates"
+               }
+
+        assert payload["message"]["apns"]["headers"]["apns-priority"] == "5"
+
+        fcm_ok(conn)
+      end)
+
+      message =
+        PushX.Message.new("Title", "Body")
+        |> PushX.Message.priority(:normal)
+        |> PushX.Message.ttl(3600)
+        |> PushX.Message.collapse_key("updates")
+
+      assert {:ok, _} =
+               PushX.push(:fcm_send, "t", message,
+                 apns: %{"headers" => %{"apns-priority" => "5"}}
+               )
+    end
+
+    test "maps FCM error codes, including UNREGISTERED nested in details", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/v1/projects/tenant-project/messages:send", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          404,
+          JSON.encode!(%{
+            "error" => %{
+              "code" => 404,
+              "message" => "Requested entity was not found.",
+              "status" => "NOT_FOUND",
+              "details" => [
+                %{
+                  "@type" => "type.googleapis.com/google.firebase.fcm.v1.FcmError",
+                  "errorCode" => "UNREGISTERED"
+                }
+              ]
+            }
+          })
+        )
+      end)
+
+      assert {:error, %Response{status: :unregistered} = resp} =
+               PushX.push(:fcm_send, "dead", "Hello")
+
+      assert Response.should_remove_token?(resp)
+    end
+
+    test "handles error bodies with a numeric code and non-JSON bodies", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/v1/projects/tenant-project/messages:send", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(400, ~s({"error": {"code": 400, "message": "Bad request"}}))
+      end)
+
+      assert {:error, %Response{status: :unknown_error, reason: "Bad request"}} =
+               PushX.push(:fcm_send, "t", "Hello")
+
+      Bypass.expect_once(bypass, "POST", "/v1/projects/tenant-project/messages:send", fn conn ->
+        Plug.Conn.resp(conn, 503, "unavailable")
+      end)
+
+      assert {:error, %Response{status: :unknown_error, reason: "HTTP 503"}} =
+               PushX.push(:fcm_send, "t", "Hello")
+    end
+
+    test "surfaces retry-after on QUOTA_EXCEEDED", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/v1/projects/tenant-project/messages:send", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.put_resp_header("retry-after", "3")
+        |> Plug.Conn.resp(
+          429,
+          ~s({"error": {"status": "QUOTA_EXCEEDED", "message": "slow down"}})
+        )
+      end)
+
+      assert {:error, %Response{status: :rate_limited, retry_after: 3}} =
+               PushX.push(:fcm_send, "t", "Hello")
+    end
+
+    test "returns connection_error when the server is down", %{bypass: bypass} do
+      Bypass.down(bypass)
+
+      assert {:error, %Response{status: :connection_error, provider: :fcm}} =
+               PushX.push(:fcm_send, "t", "Hello")
+    end
+
+    test "returns connection_error when the OAuth token cannot be fetched" do
+      Application.put_env(:pushx, :fcm_token_fetcher, {PushX.TestOAuth, :fetch_error, []})
+
+      on_exit(fn ->
+        Application.put_env(:pushx, :fcm_token_fetcher, {PushX.TestOAuth, :fetch, []})
+      end)
+
+      assert {:error, %Response{status: :connection_error, reason: reason}} =
+               PushX.push(:fcm_send, "t", "Hello")
+
+      assert reason =~ "OAuth token error"
+    end
+
+    test "rejects oversized payloads locally" do
+      assert {:error, %Response{status: :payload_too_large}} =
+               PushX.push(:fcm_send, "t", %{
+                 "title" => "Hi",
+                 "body" => String.duplicate("x", 5_000)
+               })
+    end
+
+    test "returns invalid_request when the payload cannot be JSON-encoded" do
+      assert {:error, %Response{status: :invalid_request, reason: reason}} =
+               PushX.push(:fcm_send, "t", %{"notification" => %{"title" => {:not, :json}}})
+
+      assert reason =~ "Failed to encode payload"
+    end
+  end
+
+  describe "Instance.Supervisor.goth_source/1" do
+    test "accepts decoded credentials or a JSON string" do
+      creds = %{"type" => "service_account", "project_id" => "p"}
+
+      assert PushX.Instance.Supervisor.goth_source(credentials: creds) ==
+               {:service_account, creds}
+
+      assert PushX.Instance.Supervisor.goth_source(credentials: JSON.encode!(creds)) ==
+               {:service_account, creds}
     end
   end
 
@@ -452,6 +870,22 @@ defmodule PushX.InstanceTest do
 
       # The static :apns budget is untouched by the instance key.
       assert PushX.RateLimiter.check_and_increment(:apns) == :ok
+    end
+
+    test "an exhausted instance budget short-circuits sends before the network" do
+      # A client-side rate limit is retryable; disable retries so the gated
+      # result comes back immediately instead of after a 60 s backoff.
+      Application.put_env(:pushx, :retry_enabled, false)
+      on_exit(fn -> Application.delete_env(:pushx, :retry_enabled) end)
+      start_and_cleanup(:tenant_x, :apns, apns_config())
+
+      # Consume the budget (limit 2) directly, then the real send path must
+      # be gated without building a request.
+      assert PushX.RateLimiter.check_and_increment(:tenant_x, :apns) == :ok
+      assert PushX.RateLimiter.check_and_increment(:tenant_x, :apns) == :ok
+
+      assert {:error, %Response{status: :rate_limited, provider: :apns}} =
+               PushX.push(:tenant_x, "token", "Hello", topic: "com.test.app")
     end
   end
 end

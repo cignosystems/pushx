@@ -168,6 +168,21 @@ defmodule PushX.ConfigTest do
 
   describe "fcm_configured?/0" do
     test "returns true when FCM config is present" do
+      original_id = Application.get_env(:pushx, :fcm_project_id)
+      original_creds = Application.get_env(:pushx, :fcm_credentials)
+
+      on_exit(fn ->
+        # Restore rather than leak: the FCM integration tests rely on the
+        # project id configured in test_helper.exs.
+        if original_id,
+          do: Application.put_env(:pushx, :fcm_project_id, original_id),
+          else: Application.delete_env(:pushx, :fcm_project_id)
+
+        if original_creds,
+          do: Application.put_env(:pushx, :fcm_credentials, original_creds),
+          else: Application.delete_env(:pushx, :fcm_credentials)
+      end)
+
       Application.put_env(:pushx, :fcm_project_id, "test")
       Application.put_env(:pushx, :fcm_credentials, %{})
       assert Config.fcm_configured?() == true
