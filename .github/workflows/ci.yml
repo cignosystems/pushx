@@ -33,7 +33,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Elixir
         uses: erlef/setup-beam@v1
@@ -42,7 +42,7 @@ jobs:
           otp-version: ${{ env.OTP_VERSION }}
 
       - name: Cache deps
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         id: cache-deps
         with:
           path: |
@@ -103,7 +103,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Elixir
         uses: erlef/setup-beam@v1
@@ -112,7 +112,7 @@ jobs:
           otp-version: ${{ matrix.otp }}
 
       - name: Cache deps
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             deps
@@ -140,7 +140,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Elixir
         uses: erlef/setup-beam@v1
@@ -149,7 +149,7 @@ jobs:
           otp-version: ${{ env.OTP_VERSION }}
 
       - name: Cache deps
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             deps
@@ -166,7 +166,7 @@ jobs:
 
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-html
           path: cover/
@@ -183,7 +183,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Elixir
         uses: erlef/setup-beam@v1
@@ -192,7 +192,7 @@ jobs:
           otp-version: ${{ env.OTP_VERSION }}
 
       - name: Cache deps
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             deps
@@ -202,7 +202,7 @@ jobs:
             ${{ runner.os }}-mix-dialyzer-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-
 
       - name: Cache PLT
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: priv/plts
           key: ${{ runner.os }}-plt-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('**/mix.lock') }}
@@ -225,7 +225,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Elixir
         uses: erlef/setup-beam@v1
@@ -234,7 +234,7 @@ jobs:
           otp-version: ${{ env.OTP_VERSION }}
 
       - name: Cache deps
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             deps

@@ -3,20 +3,16 @@ Application.put_env(:pushx, :apns_key_id, "TEST_KEY_ID")
 Application.put_env(:pushx, :apns_team_id, "TEST_TEAM_ID")
 Application.put_env(:pushx, :fcm_project_id, "test-project")
 
-# INTENTIONALLY COMMITTED TEST KEY - NOT A REAL SECRET
-# This is a randomly generated P-256 EC private key for testing JWT signing
-# only (APNS ES256 requires the P-256 curve — a key on any other curve cannot
-# sign and is rejected by Instance credential validation). It is NOT
-# associated with any Apple Developer account and cannot be used to send real
-# push notifications. This pattern is standard practice for testing
-# cryptographic operations in open-source libraries.
-test_private_key = """
------BEGIN EC PRIVATE KEY-----
-MHcCAQEEIBqYTnB1ScQtMW4isi0bp6n41uusdwHAjIFlUXEyvHjHoAoGCCqGSM49
-AwEHoUQDQgAEQUmMA/btEreya8c3XdFuHXHpc39lsn9FZQHYYVYps36KXTTWaVAC
-J7BDAU8edFnAS0L40PGdujHkRdi2vKVCLA==
------END EC PRIVATE KEY-----
-"""
+# Throwaway APNS signing key, generated fresh for every test run. APNS ES256
+# requires a P-256 (prime256v1) EC key, and Instance credential validation
+# rejects any other curve. Generating it here (rather than committing a PEM)
+# keeps secret scanners quiet and guarantees the key is tied to nothing.
+test_private_key =
+  {:namedCurve, :secp256r1}
+  |> :public_key.generate_key()
+  |> then(&:public_key.pem_entry_encode(:ECPrivateKey, &1))
+  |> List.wrap()
+  |> :public_key.pem_encode()
 
 Application.put_env(:pushx, :apns_private_key, test_private_key)
 
