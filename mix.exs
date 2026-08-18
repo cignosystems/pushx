@@ -103,7 +103,8 @@ defmodule PushX.MixProject do
         Providers: [PushX.APNS, PushX.FCM],
         "Runtime Instances": [PushX.Instance],
         Infrastructure: [PushX.Config, PushX.Retry, PushX.Token],
-        Observability: [PushX.Telemetry, PushX.CircuitBreaker, PushX.RateLimiter]
+        Observability: [PushX.Telemetry, PushX.CircuitBreaker, PushX.RateLimiter],
+        Testing: [PushX.Test, PushX.Test.Assertions, PushX.Test.Push]
       ]
     ]
   end

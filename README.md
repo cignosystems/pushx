@@ -35,6 +35,7 @@
 - [Health Check](#health-check)
 - [Token Cleanup Callback](#token-cleanup-callback)
 - [Delivery Semantics](#delivery-semantics)
+- [Testing Your App](#testing-your-app)
 - [Troubleshooting](#troubleshooting)
 - [Contributing](#contributing)
 - [License](#license)
@@ -461,6 +462,12 @@ config :pushx,
 | `:fcm_project_id` | `String.t()` | Firebase project ID |
 | `:fcm_credentials` | `map()` \| `{:file, path}` \| `{:json, string}` \| `{:system, env_var}` | Service account as map, file, JSON string, or env var |
 | `:fcm_token_fetcher` | `{module, function, args}` | *Optional, advanced.* Bring your own OAuth for the static config: replaces the `PushX.Goth` process PushX would start. Called as `apply(m, f, [goth_name \| args])` (so to reuse your own Goth, wrap it: `def fetch(_), do: Goth.fetch(MyApp.Goth)`), must return `{:ok, %{token: t}}` \| `{:error, reason}`; raises/exits/errors are contained. Named instances use their own `:token_fetcher` config key instead. See `PushX.Config.fcm_token_fetcher/0`. |
+
+#### Testing
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `:delivery` | `:live` \| `:test` | `:test` records sends locally instead of contacting the providers — see [Testing Your App](#testing-your-app) and `PushX.Test` |
 
 ### Pool Sizing
 
@@ -1011,6 +1018,46 @@ If duplicates matter for your use case:
 - **App level:** include your own idempotency key in the payload `data` and
   de-duplicate in the app's notification handler.
 - Or skip retries (`retry: :none` per call, or `retry_enabled: false` globally) and handle failures yourself.
+
+---
+
+## Testing Your App
+
+Set test delivery mode and every send is validated exactly as in production (required `:topic`, target format, payload size…) but then **recorded and answered locally** instead of contacting Apple or Google. No credentials needed, no retries, no network:
+
+```elixir
+# config/test.exs
+config :pushx, delivery: :test
+```
+
+```elixir
+defmodule MyApp.OrdersTest do
+  use ExUnit.Case, async: true
+  import PushX.Test.Assertions
+
+  test "shipping an order notifies the customer" do
+    MyApp.Orders.ship(order)
+
+    push = assert_pushed(%{provider: :apns, target: ^device_token})
+    assert push.payload["aps"]["alert"]["title"] == "Order shipped"
+    assert push.opts[:topic] == "com.example.app"
+    refute_pushed(%{provider: :fcm})
+  end
+
+  test "dead tokens get cleaned up" do
+    PushX.Test.stub(fn
+      %{target: "dead-token"} -> {:error, :unregistered}   # what APNS would say
+      _push -> :ok
+    end)
+
+    MyApp.Notifier.broadcast("Hi")
+
+    refute MyApp.Tokens.exists?("dead-token")              # your :on_invalid_token ran
+  end
+end
+```
+
+Recorded pushes are scoped to the test process (and processes it spawns, including `push_batch/4` workers), so `async: true` is fine. `PushX.Test.pushes/0` gives you the raw list; `PushX.Test.stub/1` scripts provider responses per test; `PushX.Test.apns_private_key/0` / `fcm_credentials/0` provide throwaway keys for starting named instances in tests. See `PushX.Test` for the details and what test mode does *not* simulate.
 
 ---
 

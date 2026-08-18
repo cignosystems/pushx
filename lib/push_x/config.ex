@@ -25,6 +25,11 @@ defmodule PushX.Config do
       an `{module, function, args}` tuple that replaces the Goth process PushX
       would otherwise start. See `fcm_token_fetcher/0`.
 
+  ### Testing
+
+    * `:delivery` - `:live` (default) or `:test` — record sends locally
+      instead of contacting APNS/FCM; see `PushX.Test`
+
   ### Finch Pool
 
     * `:finch_name` - Name of the Finch pool (default: `PushX.Finch`)
@@ -183,6 +188,13 @@ defmodule PushX.Config do
     get(:fcm_project_id) != nil and
       (get(:fcm_credentials) != nil or get(:fcm_token_fetcher) != nil)
   end
+
+  @doc """
+  Delivery mode: `:live` (default) sends to the providers; `:test` records
+  sends locally instead — see `PushX.Test`.
+  """
+  @spec delivery() :: :live | :test
+  def delivery, do: get(:delivery, :live)
 
   @doc false
   # Whether Goth-style credentials are present (as opposed to a token fetcher).

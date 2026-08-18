@@ -108,7 +108,7 @@ defmodule PushX.InstanceTest do
       assert {:error, {:invalid_credentials, reason}} =
                Instance.start(:bad_fcm4, :fcm,
                  project_id: "p",
-                 credentials: %{"private_key" => PushX.TestCredentials.fcm_private_key_pem()}
+                 credentials: %{"private_key" => PushX.Test.fcm_credentials()["private_key"]}
                )
 
       assert reason =~ ~s(missing "client_email")
@@ -117,7 +117,7 @@ defmodule PushX.InstanceTest do
     end
 
     test "rejects FCM credentials whose private key cannot sign RS256" do
-      base = PushX.TestCredentials.fcm()
+      base = PushX.Test.fcm_credentials()
 
       assert {:error, {:invalid_credentials, "\"private_key\" is not a valid PEM"}} =
                Instance.start(:bad_fcm5, :fcm,
@@ -144,7 +144,7 @@ defmodule PushX.InstanceTest do
     end
 
     test "accepts FCM credentials as a JSON string" do
-      json = JSON.encode!(PushX.TestCredentials.fcm())
+      json = JSON.encode!(PushX.Test.fcm_credentials())
       start_and_cleanup(:json_creds, :fcm, project_id: "p", credentials: json)
       assert {:ok, %{provider: :fcm}} = Instance.status(:json_creds)
     end
@@ -344,7 +344,7 @@ defmodule PushX.InstanceTest do
     Keyword.merge(
       [
         project_id: "tenant-project",
-        credentials: PushX.TestCredentials.fcm(),
+        credentials: PushX.Test.fcm_credentials(),
         token_fetcher: {PushX.TestOAuth, :fetch, []},
         connect_timeout: 1
       ],

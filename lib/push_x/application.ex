@@ -7,6 +7,9 @@ defmodule PushX.Application do
   def start(_type, _args) do
     # Initialize ETS table for named instances (fast reads on push path)
     :ets.new(:pushx_instances, [:named_table, :public, :set])
+    # Recorded pushes / stubs for `delivery: :test` (see PushX.Test); always
+    # present so test mode can also be enabled at runtime.
+    PushX.Test.init_tables()
 
     children =
       [

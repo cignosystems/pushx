@@ -63,7 +63,14 @@ defmodule PushX.Retry do
           keyword()
         ) :: {:ok, Response.t()} | {:error, Response.t()}
   def maybe_with_retry(provider, send_opts, fun, retry_opts \\ []) do
-    case Keyword.get(send_opts, :retry, :blocking) do
+    # Test delivery mode (see PushX.Test): never sleep in a user's test suite
+    # because a stubbed response happened to be retryable.
+    policy = if PushX.Test.active?(), do: :test, else: Keyword.get(send_opts, :retry, :blocking)
+
+    case policy do
+      :test ->
+        fun.()
+
       blocking when blocking in [:blocking, true] ->
         with_retry(fun, retry_opts)
 

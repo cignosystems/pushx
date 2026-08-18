@@ -139,7 +139,9 @@ defmodule PushX.FCM do
          message = build_message(device_token, payload, opts),
          {:ok, body} <- HTTP.safe_encode(message),
          :ok <- check_payload_size(body) do
-      do_send_authenticated(device_token, body, opts)
+      if PushX.Test.active?(),
+        do: PushX.Test.deliver(:fcm, device_token, body, opts, nil),
+        else: do_send_authenticated(device_token, body, opts)
     else
       {:error, reason} when is_binary(reason) ->
         {:error, Response.error(:fcm, :invalid_request, "Failed to encode payload: #{reason}")}
@@ -398,7 +400,9 @@ defmodule PushX.FCM do
          },
          {:ok, body} <- HTTP.safe_encode(message),
          :ok <- check_payload_size(body) do
-      do_send_data_authenticated(device_token, body, opts)
+      if PushX.Test.active?(),
+        do: PushX.Test.deliver(:fcm, device_token, body, opts, nil),
+        else: do_send_data_authenticated(device_token, body, opts)
     else
       {:error, reason} when is_binary(reason) ->
         {:error, Response.error(:fcm, :invalid_request, "Failed to encode payload: #{reason}")}

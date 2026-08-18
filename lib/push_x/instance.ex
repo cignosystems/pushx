@@ -382,7 +382,9 @@ defmodule PushX.Instance do
       true ->
         with {:ok, body} <- encode_apns_payload_safe(payload),
              :ok <- check_apns_payload_size(body, opts) do
-          apns_send_authenticated(info, device_token, body, opts, mode)
+          if PushX.Test.active?(),
+            do: PushX.Test.deliver(:apns, device_token, body, opts, info.name),
+            else: apns_send_authenticated(info, device_token, body, opts, mode)
         else
           {:error, reason} when is_binary(reason) ->
             {:error,
@@ -515,7 +517,9 @@ defmodule PushX.Instance do
          message = build_fcm_message(device_token, payload, opts),
          {:ok, body} <- HTTP.safe_encode(message),
          :ok <- check_fcm_payload_size(body) do
-      fcm_send_authenticated(info, device_token, body)
+      if PushX.Test.active?(),
+        do: PushX.Test.deliver(:fcm, device_token, body, opts, info.name),
+        else: fcm_send_authenticated(info, device_token, body)
     else
       {:error, reason} when is_binary(reason) ->
         {:error, Response.error(:fcm, :invalid_request, "Failed to encode payload: #{reason}")}

@@ -21,6 +21,7 @@ automatically. Concretely, what's in the box:
 | Result | `PushX.Response` | Normalized result with semantic `:status` |
 | Multi-tenant | `PushX.Instance` | Named runtime instances with their own credentials |
 | Health/ops | `PushX.health_check/0`, `PushX.reconnect/0`, `PushX.CircuitBreaker` | |
+| Testing | `PushX.Test`, `PushX.Test.Assertions` | `delivery: :test` records sends instead of sending |
 
 There is **no setup beyond config + deps**. PushX starts its own HTTP/2 pools
 (Finch) and OAuth processes (Goth) under its own supervisor — you do not add
@@ -80,6 +81,11 @@ single set of credentials in config?
   `{:error, %Response{status: :circuit_open}}` *without* hitting the network.
   Call `PushX.health_check/0` to inspect breaker state (static providers
   under `:apns`/`:fcm`, each named instance under `:instances`).
+- **Test your app with `config :pushx, delivery: :test`** — sends are
+  validated then recorded, not sent; assert with
+  `import PushX.Test.Assertions` → `assert_pushed(%{provider: :apns, target: ^token})`,
+  script provider errors with `PushX.Test.stub/1`. Don't mock `PushX.push/4`
+  yourself and don't put real credentials in test config.
 - **HTTP/2 pools are long-lived** — set `finch_pool_size` low (2–5) for
   low-traffic apps to avoid stale-connection issues on cloud infra (Fly.io,
   AWS NLB, GCP), or call `PushX.reconnect/0` if you suspect zombie sockets.

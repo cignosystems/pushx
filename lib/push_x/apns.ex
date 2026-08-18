@@ -124,7 +124,8 @@ defmodule PushX.APNS do
     mode = Keyword.get(opts, :mode, Config.apns_mode())
 
     cond do
-      not Config.apns_configured?() ->
+      # Test delivery mode needs no credentials (see PushX.Test).
+      not Config.apns_configured?() and not PushX.Test.active?() ->
         {:error,
          Response.error(
            :apns,
@@ -160,7 +161,9 @@ defmodule PushX.APNS do
         # oversized or un-encodable payload doesn't waste an ES256 signing.
         with {:ok, body} <- encode_payload_safe(payload),
              :ok <- check_payload_size(body, opts) do
-          do_send_authenticated(device_token, body, opts, mode)
+          if PushX.Test.active?(),
+            do: PushX.Test.deliver(:apns, device_token, body, opts, nil),
+            else: do_send_authenticated(device_token, body, opts, mode)
         else
           {:error, reason} when is_binary(reason) ->
             {:error,
