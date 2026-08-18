@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- **CI toolchain and matrix brought up to date** — the primary toolchain (quality, coverage, Dialyzer, docs, and the release workflow) is now Elixir 1.20 / OTP 29, and the test matrix spans the supported floor to the latest stable: 1.20/29, 1.20/28, 1.19/28, 1.19/27, 1.18/26 (previously topped out at 1.19/28). No code changes were needed; the supported range (`elixir: "~> 1.18"`, OTP 26+) is unchanged and now stated in the README.
+- **CI toolchain and matrix brought up to date** — the primary toolchain (quality, coverage, Dialyzer, docs, and the release workflow) is now Elixir 1.20 / OTP 29, and the test matrix spans the supported floor to the latest stable: 1.20/29, 1.20/28, 1.19/28, 1.19/27, 1.18/26 (previously topped out at 1.19/28). No code changes were needed; the supported range (`elixir: "~> 1.18"`, OTP 26+) is unchanged and now stated in the README. CI also sets `ERL_COMPILER_OPTIONS="[nowarn_deprecated_catch]"` to silence OTP 29's old-style `catch` deprecation warnings coming from `yamerl` 0.10.0 (an Erlang dependency of `mix_audit`, dev/test only, no fixed release available); it only affects Erlang-source compilation, so PushX's own warnings-as-errors gate is unchanged.
 
 ## [0.13.0] - 2026-08-18
 

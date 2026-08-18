@@ -27,6 +27,13 @@ env:
   # floor (mix.exs `elixir: "~> 1.18"`, OTP 26) to this.
   ELIXIR_VERSION: "1.20"
   OTP_VERSION: "29"
+  # OTP 29 deprecates old-style `catch Expr` in Erlang sources; the only hits
+  # are in yamerl 0.10.0 (an Erlang dep of mix_audit -> yaml_elixir, dev/test
+  # only, no newer release exists). This env var is read only by the Erlang
+  # compiler — Elixir compiles via compile:noenv_forms and ignores it — so
+  # PushX's own --warnings-as-errors gate is unaffected. Remove when yamerl
+  # ships a fix.
+  ERL_COMPILER_OPTIONS: "[nowarn_deprecated_catch]"
 
 jobs:
   # Quality checks - only run once, not for every matrix combination

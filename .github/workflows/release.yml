@@ -9,6 +9,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # See ci.yml: silences OTP 29 `catch Expr` deprecation warnings from the
+  # yamerl Erlang dep (dev/test only). Remove when yamerl ships a fix.
+  ERL_COMPILER_OPTIONS: "[nowarn_deprecated_catch]"
+
 jobs:
   # Never publish untested code: the tag must match mix.exs and the full
   # suite (with the coverage gate) must pass on the release toolchain.
