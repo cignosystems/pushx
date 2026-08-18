@@ -22,8 +22,11 @@ concurrency:
 
 env:
   MIX_ENV: test
-  ELIXIR_VERSION: "1.19"
-  OTP_VERSION: "28"
+  # Primary toolchain (quality, coverage, dialyzer, docs): latest stable.
+  # Bump both when new majors ship; the test matrix below spans the supported
+  # floor (mix.exs `elixir: "~> 1.18"`, OTP 26) to this.
+  ELIXIR_VERSION: "1.20"
+  OTP_VERSION: "29"
 
 jobs:
   # Quality checks - only run once, not for every matrix combination
@@ -90,14 +93,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Latest versions
+          # Latest
+          - elixir: "1.20"
+            otp: "29"
+          - elixir: "1.20"
+            otp: "28"
+          # Previous Elixir on its common OTPs
           - elixir: "1.19"
             otp: "28"
           - elixir: "1.19"
             otp: "27"
-          # Minimum supported versions
-          - elixir: "1.18"
-            otp: "27"
+          # Minimum supported (mix.exs `~> 1.18`; JSON module needs 1.18)
           - elixir: "1.18"
             otp: "26"
 

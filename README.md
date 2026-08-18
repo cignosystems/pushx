@@ -61,8 +61,12 @@
 
 ### Requirements
 
-- Elixir 1.18+ (for built-in JSON module)
+- Elixir 1.18+ (for the built-in `JSON` module)
 - OTP 26+
+
+CI runs the suite on Elixir 1.20/OTP 29, 1.20/28, 1.19/28, 1.19/27 and 1.18/26,
+so anything in that range is exercised on every push; the release itself is
+built with the latest stable pair.
 
 Tested on Elixir 1.18/1.19 with OTP 26, 27, and 28.
 

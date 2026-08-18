@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **CI toolchain and matrix brought up to date** — the primary toolchain (quality, coverage, Dialyzer, docs, and the release workflow) is now Elixir 1.20 / OTP 29, and the test matrix spans the supported floor to the latest stable: 1.20/29, 1.20/28, 1.19/28, 1.19/27, 1.18/26 (previously topped out at 1.19/28). No code changes were needed; the supported range (`elixir: "~> 1.18"`, OTP 26+) is unchanged and now stated in the README.
+
 ## [0.13.0] - 2026-08-18
 
 The "last shape changes before 1.0" release: every public-API decision that
@@ -391,6 +396,7 @@ are *Breaking (minor)* and are marked as such.
 - HTTP/2 connections via Finch
 - Zero external JSON dependency (uses Elixir 1.18+ built-in JSON)
 
+[Unreleased]: https://github.com/cignosystems/pushx/compare/v0.13.0...HEAD
 [0.13.0]: https://github.com/cignosystems/pushx/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/cignosystems/pushx/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/cignosystems/pushx/compare/v0.10.0...v0.11.0
