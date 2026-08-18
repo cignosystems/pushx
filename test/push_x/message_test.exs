@@ -267,4 +267,115 @@ defmodule PushX.MessageTest do
                %{"priority" => "HIGH"}
     end
   end
+
+  describe "iOS-specific fields and localization" do
+    test "map to the APNS aps/alert dictionaries" do
+      payload =
+        Message.new("Title", "Body")
+        |> Message.subtitle("Sub")
+        |> Message.mutable_content()
+        |> Message.content_available()
+        |> Message.interruption_level(:time_sensitive)
+        |> Message.relevance_score(0.8)
+        |> Message.localized_title("T_KEY", ["a"])
+        |> Message.localized_subtitle("S_KEY")
+        |> Message.localized_body("B_KEY", ["x", "y"])
+        |> Message.to_apns_payload()
+
+      assert payload["aps"]["alert"] == %{
+               "title" => "Title",
+               "subtitle" => "Sub",
+               "body" => "Body",
+               "title-loc-key" => "T_KEY",
+               "title-loc-args" => ["a"],
+               "subtitle-loc-key" => "S_KEY",
+               "loc-key" => "B_KEY",
+               "loc-args" => ["x", "y"]
+             }
+
+      assert payload["aps"]["mutable-content"] == 1
+      assert payload["aps"]["content-available"] == 1
+      assert payload["aps"]["interruption-level"] == "time-sensitive"
+      assert payload["aps"]["relevance-score"] == 0.8
+    end
+
+    test "defaults are inert: an unset message produces the same aps as before" do
+      assert Message.new("Hi", "There") |> Message.to_apns_payload() ==
+               %{
+                 "aps" => %{
+                   "alert" => %{"title" => "Hi", "body" => "There"},
+                   "sound" => "default"
+                 }
+               }
+
+      assert Message.new() |> Message.to_fcm_apns() == nil
+      assert Message.new() |> Message.to_fcm_android() == nil
+    end
+
+    test "localization-only alerts (no literal title/body) still produce an alert dictionary" do
+      payload = Message.new() |> Message.localized_body("B_KEY") |> Message.to_apns_payload()
+      assert payload["aps"]["alert"] == %{"loc-key" => "B_KEY"}
+      # No title → no default sound injected.
+      refute Map.has_key?(payload["aps"], "sound")
+    end
+
+    test "interruption levels are validated; relevance score is 0..1" do
+      assert Message.new()
+             |> Message.interruption_level(:critical)
+             |> Message.to_apns_payload()
+             |> get_in(["aps", "interruption-level"]) == "critical"
+
+      # Bind through a variable so the deliberately bad calls aren't flagged
+      # by the compiler's type checker as constant mismatches.
+      bad_level = Enum.random([:loud])
+      bad_score = Enum.random([1.5])
+
+      assert_raise FunctionClauseError, fn ->
+        Message.interruption_level(Message.new(), bad_level)
+      end
+
+      assert_raise FunctionClauseError, fn ->
+        Message.relevance_score(Message.new(), bad_score)
+      end
+
+      assert %Message{relevance_score: 1.0} = Message.new() |> Message.relevance_score(1)
+    end
+
+    test "to_fcm_apns/1 carries the iOS-only keys, not title/body (FCM sends those)" do
+      message =
+        Message.new("Title", "Body")
+        |> Message.subtitle("Sub")
+        |> Message.mutable_content()
+        |> Message.interruption_level(:passive)
+        |> Message.localized_body("B_KEY", ["1"])
+
+      assert Message.to_fcm_apns(message) == %{
+               "payload" => %{
+                 "aps" => %{
+                   "mutable-content" => 1,
+                   "interruption-level" => "passive",
+                   "alert" => %{"subtitle" => "Sub", "loc-key" => "B_KEY", "loc-args" => ["1"]}
+                 }
+               }
+             }
+    end
+
+    test "to_fcm_android/1 carries localization under android.notification" do
+      android =
+        Message.new("T", "B")
+        |> Message.priority(:high)
+        |> Message.localized_title("T_KEY", ["a"])
+        |> Message.localized_body("B_KEY")
+        |> Message.to_fcm_android()
+
+      assert android == %{
+               "priority" => "HIGH",
+               "notification" => %{
+                 "title_loc_key" => "T_KEY",
+                 "title_loc_args" => ["a"],
+                 "body_loc_key" => "B_KEY"
+               }
+             }
+    end
+  end
 end

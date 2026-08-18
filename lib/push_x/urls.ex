@@ -41,6 +41,19 @@ defmodule PushX.URLs do
     end
   end
 
+  # Instance ID API (topic subscription management). Shares :fcm_url_override.
+  @iid_base "https://iid.googleapis.com"
+
+  @spec fcm_topic_url(:subscribe | :unsubscribe) :: String.t()
+  def fcm_topic_url(action) do
+    method = if action == :subscribe, do: "batchAdd", else: "batchRemove"
+
+    case Application.get_env(:pushx, :fcm_url_override) do
+      nil -> "#{@iid_base}/iid/v1:#{method}"
+      override when is_binary(override) -> "#{override}/iid/v1:#{method}"
+    end
+  end
+
   @spec fcm_origin() :: String.t()
   def fcm_origin, do: "https://fcm.googleapis.com"
 end

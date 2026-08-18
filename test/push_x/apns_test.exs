@@ -328,6 +328,34 @@ defmodule PushX.APNSTest do
       assert {:ok, %Response{status: :sent}} = result
     end
 
+    test ":apns_id is sent as the apns-id header and validated locally", %{bypass: bypass} do
+      uuid = "123e4567-e89b-12d3-a456-426614174000"
+
+      Bypass.expect_once(bypass, "POST", "/3/device/token", fn conn ->
+        assert Plug.Conn.get_req_header(conn, "apns-id") == [uuid]
+
+        conn
+        |> Plug.Conn.put_resp_header("apns-id", uuid)
+        |> Plug.Conn.resp(200, "")
+      end)
+
+      assert {:ok, %Response{status: :sent, id: ^uuid}} =
+               APNS.send("token", %{"aps" => %{"alert" => "Hi"}},
+                 topic: "com.test.app",
+                 apns_id: uuid
+               )
+
+      for bad <- ["not-a-uuid", "123e4567e89b12d3a456426614174000", 42] do
+        assert {:error, %Response{status: :invalid_request, reason: reason}} =
+                 APNS.send("token", %{"aps" => %{"alert" => "Hi"}},
+                   topic: "com.test.app",
+                   apns_id: bad
+                 )
+
+        assert reason =~ ":apns_id"
+      end
+    end
+
     test "falls back to the HTTP status when the error body is not JSON", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/3/device/token", fn conn ->
         Plug.Conn.resp(conn, 502, "bad gateway")

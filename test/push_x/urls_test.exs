@@ -32,6 +32,16 @@ defmodule PushX.URLsTest do
     assert URLs.fcm_origin() == "https://fcm.googleapis.com"
   end
 
+  test "topic-management URLs hit the Instance ID API and honour the FCM override" do
+    Application.delete_env(:pushx, :fcm_url_override)
+    assert URLs.fcm_topic_url(:subscribe) == "https://iid.googleapis.com/iid/v1:batchAdd"
+    assert URLs.fcm_topic_url(:unsubscribe) == "https://iid.googleapis.com/iid/v1:batchRemove"
+
+    Application.put_env(:pushx, :fcm_url_override, "http://localhost:4002")
+    on_exit(fn -> Application.delete_env(:pushx, :fcm_url_override) end)
+    assert URLs.fcm_topic_url(:subscribe) == "http://localhost:4002/iid/v1:batchAdd"
+  end
+
   test ":fcm_url_override replaces the origin but keeps the v1 path" do
     Application.put_env(:pushx, :fcm_url_override, "http://localhost:4002")
     on_exit(fn -> Application.delete_env(:pushx, :fcm_url_override) end)

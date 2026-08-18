@@ -38,6 +38,8 @@ single set of credentials in config?
 │            └── data-only (silent, FCM)? → PushX.push_data(:fcm, ...)
 │            └── APNS silent push?       → PushX.push(:apns, ..., push_type: "background")
 │            └── FCM topic / condition?   → PushX.push(:fcm, {:topic, "news"}, msg)
+│            │     manage subscriptions   → PushX.subscribe/4, PushX.unsubscribe/4
+│            └── verify a token, no send?  → PushX.push(:fcm, token, msg, validate_only: true)
 │            └── must not block on backoff? → add retry: :none to any call
 └── no — multiple tenants / per-customer credentials at runtime
          → PushX.Instance.start(name, :apns | :fcm, config)
@@ -221,6 +223,13 @@ not the iOS bundle ID.
 
 ## Decision helpers
 
+- **iOS specifics on `Message`:** `subtitle/2`, `mutable_content/1`,
+  `content_available/1`, `interruption_level/2`, `relevance_score/2`,
+  `localized_title/3`/`localized_body/3` — all reach iOS via APNS *and* via
+  FCM (automatic `apns` override), so don't hand-write `"aps"` maps for these.
+- **Trace an APNS push:** pass `apns_id: <uuid>`; Apple echoes it back as
+  `response.id`. Metrics: `PushX.Telemetry.metrics/0` (needs the optional
+  `telemetry_metrics` dep) — don't tag anything by token.
 - **`push/4` vs `push!/4`:** use `push/4` whenever you might want to act on
   the response (token cleanup, logging the APNS message ID, etc.). Use
   `push!/4` only for fire-and-forget (e.g., low-priority marketing).

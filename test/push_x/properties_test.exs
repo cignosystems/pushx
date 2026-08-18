@@ -76,6 +76,19 @@ defmodule PushX.PropertiesTest do
           priority <- one_of([constant(nil), member_of([:high, :normal])]),
           ttl <- one_of([constant(nil), non_negative_integer()]),
           collapse <- one_of([constant(nil), string(:alphanumeric, min_length: 1)]),
+          subtitle <- one_of([constant(nil), string(:printable, min_length: 1, max_length: 20)]),
+          mutable <- boolean(),
+          content_avail <- boolean(),
+          level <-
+            one_of([constant(nil), member_of([:passive, :active, :time_sensitive, :critical])]),
+          score <- one_of([constant(nil), float(min: 0.0, max: 1.0)]),
+          body_loc <-
+            one_of([
+              constant(nil),
+              tuple(
+                {string(:alphanumeric, min_length: 1), list_of(string(:printable), max_length: 3)}
+              )
+            ]),
           data <- data_map()
         ) do
       base = if title, do: Message.new(title, body || ""), else: Message.new()
@@ -88,6 +101,17 @@ defmodule PushX.PropertiesTest do
       |> then(fn m -> if priority, do: Message.priority(m, priority), else: m end)
       |> then(fn m -> if ttl, do: Message.ttl(m, ttl), else: m end)
       |> then(fn m -> if collapse, do: Message.collapse_key(m, collapse), else: m end)
+      |> then(fn m -> if subtitle, do: Message.subtitle(m, subtitle), else: m end)
+      |> Message.mutable_content(mutable)
+      |> Message.content_available(content_avail)
+      |> then(fn m -> if level, do: Message.interruption_level(m, level), else: m end)
+      |> then(fn m -> if score, do: Message.relevance_score(m, score), else: m end)
+      |> then(fn m ->
+        case body_loc do
+          nil -> m
+          {key, args} -> Message.localized_body(m, key, args)
+        end
+      end)
       |> Message.data(data)
     end
   end
@@ -179,6 +203,19 @@ defmodule PushX.PropertiesTest do
         end
 
         if message.badge, do: assert(payload["aps"]["badge"] == message.badge)
+        # Boolean flags are the APNS integer form or absent, never false/0 noise.
+        assert payload["aps"]["mutable-content"] in [nil, 1]
+        assert payload["aps"]["content-available"] in [nil, 1]
+
+        assert payload["aps"]["interruption-level"] in [
+                 nil,
+                 "passive",
+                 "active",
+                 "time-sensitive",
+                 "critical"
+               ]
+
+        if message.subtitle, do: assert(payload["aps"]["alert"]["subtitle"] == message.subtitle)
 
         # Every non-aps top-level key comes from data, verbatim.
         for {key, value} <- payload, key != "aps" do
@@ -229,6 +266,14 @@ defmodule PushX.PropertiesTest do
             assert map_size(data) == map_size(message.data)
             assert Enum.all?(data, fn {k, v} -> is_binary(k) and is_binary(v) end)
         end
+
+        # The apns override is JSON-safe and only present when iOS fields are set.
+        ios_fields? =
+          message.mutable_content or message.content_available or
+            not is_nil(message.interruption_level) or not is_nil(message.relevance_score) or
+            not is_nil(message.subtitle) or not is_nil(message.body_loc_key)
+
+        assert is_map(built["apns"]) == ios_fields?
 
         if built["android"] do
           assert built["android"]["priority"] in [nil, "HIGH", "NORMAL"]

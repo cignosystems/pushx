@@ -1,6 +1,7 @@
 defmodule PushX.TelemetryTest do
   use ExUnit.Case
 
+  alias Elixir.Telemetry.Metrics.ConsoleReporter
   alias PushX.{Response, Telemetry}
 
   doctest PushX.Telemetry
@@ -145,6 +146,74 @@ defmodule PushX.TelemetryTest do
 
       assert PushX.Telemetry.truncate_token({:condition, "'a' in topics && 'b' in topics"}) ==
                "condition:'a' in t...pics"
+    end
+  end
+
+  describe "metrics/0" do
+    test "returns Telemetry.Metrics definitions bound to the documented events, never tagged by token" do
+      metrics = PushX.Telemetry.metrics()
+      assert length(metrics) == 7
+
+      for m <- metrics do
+        assert m.event_name in [
+                 [:pushx, :push, :stop],
+                 [:pushx, :push, :error],
+                 [:pushx, :push, :exception],
+                 [:pushx, :retry, :attempt]
+               ]
+
+        refute :token in m.tags
+        assert m.description != nil
+      end
+
+      names = Enum.map(metrics, &Enum.join(&1.name, "."))
+      assert "pushx.push.sent.count" in names
+      assert "pushx.push.error.count" in names
+      assert "pushx.push.duration" in names
+      assert "pushx.retry.attempt.count" in names
+
+      duration = Enum.find(metrics, &(Enum.join(&1.name, ".") == "pushx.push.duration"))
+      assert %Elixir.Telemetry.Metrics.Distribution{unit: :millisecond} = duration
+      assert duration.reporter_options[:buckets] != nil
+    end
+
+    test "the metrics actually fire from real events (ConsoleReporter smoke test)" do
+      # A stopped push and an error must each be picked up by a reporter built
+      # from metrics/0 — proves the event/measurement/tag wiring is right.
+      {:ok, io} = StringIO.open("")
+
+      {:ok, pid} =
+        ConsoleReporter.start_link(
+          metrics: PushX.Telemetry.metrics(),
+          device: io
+        )
+
+      response = PushX.Response.success(:apns, "id")
+      PushX.Telemetry.start(:apns, "tok")
+      PushX.Telemetry.stop(:apns, "tok", System.monotonic_time() - 1_000_000, response)
+
+      PushX.Telemetry.error(
+        :fcm,
+        "tok",
+        System.monotonic_time(),
+        PushX.Response.error(:fcm, :rate_limited, "x")
+      )
+
+      PushX.Telemetry.retry_attempt(:fcm, :rate_limited, 1, 10_000)
+
+      # ConsoleReporter writes synchronously in the handler; give the device a moment.
+      Process.sleep(20)
+      {_in, out} = StringIO.contents(io)
+      GenServer.stop(pid)
+
+      # ConsoleReporter prints per event; the counters must now have a value
+      # (no "metric skipped") and the distributions must carry provider tags.
+      assert out =~ "Event name: pushx.push.stop"
+      assert out =~ "Event name: pushx.push.error"
+      assert out =~ "Event name: pushx.retry.attempt"
+      refute out =~ "metric skipped"
+      assert out =~ "Tag values: %{provider: :apns}"
+      assert out =~ "status: :rate_limited"
     end
   end
 end

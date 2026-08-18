@@ -157,6 +157,16 @@ PushX.push(:apns, token, message, topic: "com.example.app")
 | `priority(msg, :high \| :normal)` | Set delivery priority |
 | `ttl(msg, seconds)` | Set time-to-live |
 | `collapse_key(msg, string)` | Set collapse key (FCM) |
+| `subtitle(msg, string)` | Subtitle (iOS; delivered to iOS via FCM too) |
+| `mutable_content(msg)` | `mutable-content: 1` — lets a Notification Service Extension modify it (rich media) |
+| `content_available(msg)` | `content-available: 1` — wake the app to fetch data |
+| `interruption_level(msg, level)` | `:passive`, `:active`, `:time_sensitive`, `:critical` (iOS 15+) |
+| `relevance_score(msg, 0.0..1.0)` | Ordering in the iOS notification summary |
+| `localized_title(msg, key, args)` | Localized title (`title-loc-key`; FCM `title_loc_key`) |
+| `localized_body(msg, key, args)` | Localized body (`loc-key`; FCM `body_loc_key`) |
+| `localized_subtitle(msg, key, args)` | Localized subtitle (iOS) |
+
+Every field maps to both providers where the concept exists — the iOS-specific ones reach iOS devices addressed through FCM via an automatic `apns` override (`PushX.Message.to_fcm_apns/1`), merged under any explicit `:apns` option you pass.
 
 You can also pass a plain string, a `%{title: ..., body: ...}` map, or a raw APNS/FCM payload map directly to `push/4`.
 
@@ -274,6 +284,19 @@ PushX.push_data(:my_fcm_tenant, {:topic, "sync"}, %{action: "refresh"})
 ```
 
 Topic names are the bare name (no `/topics/` prefix), characters `[a-zA-Z0-9-_.~%]`; invalid targets are rejected locally with `:invalid_request`. Topics/conditions never trigger token cleanup, and APNS returns `:invalid_request` for them (topics are an FCM feature).
+
+Manage subscriptions from the server too (Instance ID API; auto-chunked at Google's 1 000 tokens per request; per-token results in input order):
+
+```elixir
+{:ok, results} = PushX.subscribe(:fcm, tokens, "news")        # or a named FCM instance
+for {token, {:error, "NOT_FOUND"}} <- results, do: MyApp.Tokens.delete(token)
+{:ok, _} = PushX.unsubscribe(:fcm, tokens, "news")
+```
+
+### Dry Runs and Tracing
+
+- **FCM dry run** — `validate_only: true` asks FCM to validate a message (token registration, payload) without delivering it; a `{:ok, %Response{status: :sent}}` means "would have been accepted", errors are the real ones. Handy for checking stored tokens before a campaign: `PushX.push(:fcm, token, msg, validate_only: true)`.
+- **APNS tracing** — pass your own UUID as `apns_id:`; Apple echoes it in `response.id` and shows it in delivery logs and the Push Notifications Console, so a push can be traced end-to-end: `PushX.push(:apns, token, msg, topic: "...", apns_id: Ecto.UUID.generate())`.
 
 ### Silent/Background Notification
 
@@ -877,6 +900,12 @@ PushX emits telemetry events for monitoring and metrics:
 | `[:pushx, :retry, :attempt]` | Retry attempted | `delay_ms`, `attempt` | `provider`, `status` |
 
 > Tokens are automatically truncated in telemetry metadata for privacy (first 8 + last 4 characters).
+
+**Ready-made metrics.** With the optional `telemetry_metrics` dependency, `PushX.Telemetry.metrics/0` returns a curated, low-cardinality `Telemetry.Metrics` list (sends by provider, errors by status, exceptions, latency distributions with provider-tuned buckets, retry attempts and delays — never tagged by token) that drops straight into LiveDashboard, PromEx, or `TelemetryMetricsPrometheus`:
+
+```elixir
+def metrics, do: MyApp.metrics() ++ PushX.Telemetry.metrics()
+```
 
 ### Example: Attach a Logger
 

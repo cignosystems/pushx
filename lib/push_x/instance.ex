@@ -313,6 +313,27 @@ defmodule PushX.Instance do
     end
   end
 
+  # -- FCM topic management --
+
+  @doc false
+  # Called by PushX.subscribe/4 / unsubscribe/4 for named FCM instances.
+  def manage_topic(%{provider: :fcm} = info, action, tokens, topic, opts) do
+    PushX.FCM.manage_topic(action, tokens, topic, opts, %{
+      goth_name: info.goth_name,
+      token_fetcher: Keyword.get(info.config, :token_fetcher),
+      finch_name: info.finch_name,
+      request_opts: [
+        receive_timeout: Keyword.get(info.config, :receive_timeout, 15_000),
+        pool_timeout: Keyword.get(info.config, :pool_timeout, 5_000)
+      ]
+    })
+  end
+
+  def manage_topic(%{provider: :apns}, _action, _tokens, _topic, _opts) do
+    {:error,
+     Response.error(:apns, :invalid_request, "Topics are an FCM feature; this instance is APNS")}
+  end
+
   # -- Send --
 
   @doc false
@@ -380,7 +401,8 @@ defmodule PushX.Instance do
          Response.error(:apns, :invalid_token, "Device token contains invalid characters")}
 
       true ->
-        with {:ok, body} <- encode_apns_payload_safe(payload),
+        with :ok <- PushX.APNS.validate_apns_id(opts),
+             {:ok, body} <- encode_apns_payload_safe(payload),
              :ok <- check_apns_payload_size(body, opts) do
           if PushX.Test.active?(),
             do: PushX.Test.deliver(:apns, device_token, body, opts, info.name),

@@ -129,7 +129,8 @@ defmodule PushX.Test do
 
   @doc """
   All pushes recorded for the current test process (and processes it spawned),
-  oldest first.
+  in recording order — for concurrent batch workers that is completion order,
+  not input order.
   """
   @spec pushes() :: [Push.t()]
   def pushes do

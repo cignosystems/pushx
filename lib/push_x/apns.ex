@@ -69,6 +69,7 @@ defmodule PushX.APNS do
           | {:priority, 5 | 10}
           | {:expiration, non_neg_integer()}
           | {:collapse_id, String.t()}
+          | {:apns_id, String.t()}
           | {:retry, :blocking | :none}
 
   @doc """
@@ -85,6 +86,10 @@ defmodule PushX.APNS do
     * `:priority` - 5 or 10 (default: 10)
     * `:expiration` - Unix timestamp when notification expires
     * `:collapse_id` - Group notifications with the same ID
+    * `:apns_id` - Your own canonical UUID for this notification (`apns-id`
+      header). Apple echoes it back (`response.id`) and uses it in delivery
+      logs and the Push Notifications Console, so it is the handle for tracing
+      a push end-to-end. Without it Apple generates one.
     * `:retry` - `:blocking` (default; retry with backoff in the calling process,
       subject to the `:retry_enabled` config) or `:none` (single attempt; a
       connection error still triggers the automatic pool reconnect). `true`/`false`
@@ -159,7 +164,8 @@ defmodule PushX.APNS do
       true ->
         # Validate the payload (encode + size) before acquiring a JWT, so an
         # oversized or un-encodable payload doesn't waste an ES256 signing.
-        with {:ok, body} <- encode_payload_safe(payload),
+        with :ok <- validate_apns_id(opts),
+             {:ok, body} <- encode_payload_safe(payload),
              :ok <- check_payload_size(body, opts) do
           if PushX.Test.active?(),
             do: PushX.Test.deliver(:apns, device_token, body, opts, nil),
@@ -441,6 +447,41 @@ defmodule PushX.APNS do
     ]
     |> HTTP.maybe_add_header("apns-expiration", Keyword.get(opts, :expiration))
     |> HTTP.maybe_add_header("apns-collapse-id", Keyword.get(opts, :collapse_id))
+    |> HTTP.maybe_add_header("apns-id", Keyword.get(opts, :apns_id))
+  end
+
+  # Apple requires apns-id to be a canonical UUID (8-4-4-4-12 hex); anything
+  # else is a BadMessageId round trip, so reject it locally.
+  @apns_id_regex ~r/\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z/
+
+  @doc false
+  # Shared with PushX.Instance.
+  @spec validate_apns_id(keyword()) :: :ok | {:error, Response.t()}
+  def validate_apns_id(opts) do
+    case Keyword.get(opts, :apns_id) do
+      nil ->
+        :ok
+
+      id when is_binary(id) ->
+        if Regex.match?(@apns_id_regex, id) do
+          :ok
+        else
+          {:error,
+           Response.error(
+             :apns,
+             :invalid_request,
+             "Invalid :apns_id #{inspect(id)}: must be a canonical UUID (8-4-4-4-12 hex)"
+           )}
+        end
+
+      other ->
+        {:error,
+         Response.error(
+           :apns,
+           :invalid_request,
+           "Invalid :apns_id #{inspect(other)}: must be a UUID string"
+         )}
+    end
   end
 
   # Apple requires apns-priority 5 for background pushes — 10 is rejected

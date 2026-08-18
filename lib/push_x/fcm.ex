@@ -86,6 +86,7 @@ defmodule PushX.FCM do
           | {:android, map()}
           | {:apns, map()}
           | {:webpush, map()}
+          | {:validate_only, boolean()}
           | {:retry, :blocking | :none}
 
   @doc """
@@ -101,6 +102,11 @@ defmodule PushX.FCM do
     * `:android` - Android-specific configuration
     * `:apns` - APNS configuration (for iOS via FCM)
     * `:webpush` - Web push configuration
+    * `:validate_only` - `true` asks FCM to validate the message (token
+      registration, payload) **without delivering it** — a dry run. A
+      successful `{:ok, %Response{status: :sent}}` then means "FCM would have
+      accepted this"; errors (`:unregistered`, `:invalid_request`, ...) are the
+      real ones. Useful for verifying a stored token before a campaign.
     * `:retry` - `:blocking` (default) or `:none` (single attempt); see `PushX.push/4`
 
   ## Returns
@@ -268,6 +274,169 @@ defmodule PushX.FCM do
     |> Enum.to_list()
   end
 
+  # -- Topic subscription management (Instance ID API) ------------------------
+
+  @typedoc "Per-token outcome of `subscribe/3` / `unsubscribe/3`."
+  @type topic_result :: {token(), :ok | {:error, String.t()}}
+
+  @doc """
+  Subscribes device tokens to an FCM topic (`{:topic, name}` targets in
+  `send/3` then reach them).
+
+  Uses the Instance ID API (`iid/v1:batchAdd`) with the same OAuth token as
+  sends. Google accepts at most 1 000 tokens per request; larger lists are
+  chunked and sent sequentially. Returns one outcome per token, in input
+  order — `:ok`, or `{:error, code}` with Google's per-token error string
+  (`"NOT_FOUND"` for an unregistered token, `"INVALID_ARGUMENT"`,
+  `"TOO_MANY_TOPICS"`, ...). A request-level failure (OAuth, network, non-2xx)
+  is returned as `{:error, %PushX.Response{}}` for the whole batch.
+
+  Options: `:project_id` is not needed (topics are per project of the OAuth
+  credentials); `:retry` and `:receive_timeout`/`:pool_timeout` apply as for
+  `send/3`. In `delivery: :test` mode nothing is contacted and every token
+  is reported `:ok`.
+
+  ## Examples
+
+      {:ok, results} = PushX.FCM.subscribe(tokens, "news")
+      for {token, {:error, "NOT_FOUND"}} <- results, do: MyApp.Tokens.delete(token)
+
+  """
+  @spec subscribe([token()], String.t(), keyword()) ::
+          {:ok, [topic_result()]} | {:error, Response.t()}
+  def subscribe(tokens, topic, opts \\ []), do: manage_topic(:subscribe, tokens, topic, opts)
+
+  @doc "Unsubscribes device tokens from an FCM topic (`iid/v1:batchRemove`). See `subscribe/3`."
+  @spec unsubscribe([token()], String.t(), keyword()) ::
+          {:ok, [topic_result()]} | {:error, Response.t()}
+  def unsubscribe(tokens, topic, opts \\ []), do: manage_topic(:unsubscribe, tokens, topic, opts)
+
+  defp manage_topic(action, tokens, topic, opts) do
+    manage_topic(
+      action,
+      tokens,
+      topic,
+      opts,
+      %{
+        goth_name: PushX.Goth,
+        token_fetcher: Config.fcm_token_fetcher(),
+        finch_name: Config.finch_name(),
+        request_opts: Config.finch_request_opts()
+      }
+    )
+  end
+
+  @topic_batch_limit 1_000
+
+  @doc false
+  # Core shared with PushX.Instance: `ctx` supplies the OAuth source and the
+  # Finch pool of the caller (static configuration or a named instance).
+  @spec manage_topic(:subscribe | :unsubscribe, [token()], String.t(), keyword(), map()) ::
+          {:ok, [topic_result()]} | {:error, Response.t()}
+  def manage_topic(action, tokens, topic, opts, ctx) do
+    with :ok <- validate_target({:topic, topic}),
+         :ok <- validate_token_list(tokens) do
+      cond do
+        tokens == [] ->
+          {:ok, []}
+
+        PushX.Test.active?() ->
+          {:ok, Enum.map(tokens, &{&1, :ok})}
+
+        true ->
+          tokens
+          |> Enum.chunk_every(@topic_batch_limit)
+          |> Enum.reduce_while({:ok, []}, &topic_chunk(action, &1, topic, opts, ctx, &2))
+      end
+    end
+  end
+
+  # One chunk (<= 1000 tokens) under the caller's retry policy; halts the
+  # reduce on a request-level failure so the error covers the whole batch.
+  defp topic_chunk(action, chunk, topic, opts, ctx, {:ok, acc}) do
+    case Retry.maybe_with_retry(:fcm, opts, fn ->
+           topic_request(action, chunk, topic, opts, ctx)
+         end) do
+      {:ok, results} -> {:cont, {:ok, acc ++ results}}
+      {:error, %Response{}} = error -> {:halt, error}
+    end
+  end
+
+  defp validate_token_list(tokens) when is_list(tokens) do
+    if Enum.all?(tokens, &(is_binary(&1) and &1 != "")) do
+      :ok
+    else
+      {:error,
+       Response.error(
+         :fcm,
+         :invalid_request,
+         "tokens must be a list of non-empty device token strings"
+       )}
+    end
+  end
+
+  defp validate_token_list(_),
+    do: {:error, Response.error(:fcm, :invalid_request, "tokens must be a list")}
+
+  # One IID request for <= 1000 tokens. Returns {:ok, results} on 200, or
+  # {:error, %Response{}} shaped like a send failure so Retry can act on it.
+  defp topic_request(action, tokens, topic, opts, ctx) do
+    case fetch_access_token(ctx.goth_name, ctx.token_fetcher) do
+      {:error, reason} ->
+        oauth_error_response(reason)
+
+      {:ok, access_token} ->
+        topic_http_request(action, tokens, topic, opts, ctx, access_token)
+    end
+  end
+
+  defp topic_http_request(action, tokens, topic, opts, ctx, access_token) do
+    body = JSON.encode!(%{"to" => "/topics/#{topic}", "registration_tokens" => tokens})
+
+    headers = [
+      {"authorization", "Bearer #{access_token}"},
+      {"access_token_auth", "true"},
+      {"content-type", "application/json"}
+    ]
+
+    request_opts =
+      Keyword.merge(ctx.request_opts, Keyword.take(opts, [:receive_timeout, :pool_timeout]))
+
+    case HTTP.finch_request(
+           Finch.build(:post, URLs.fcm_topic_url(action), headers, body),
+           ctx.finch_name,
+           request_opts,
+           "PushX.FCM"
+         ) do
+      {:ok, %{status: 200, body: resp_body}} ->
+        {:ok, zip_topic_results(tokens, resp_body)}
+
+      {:ok, %{status: status, headers: resp_headers, body: resp_body}} ->
+        {:error, response} = handle_error_response(status, resp_body, resp_headers)
+        {:error, response}
+
+      {:error, reason} ->
+        Logger.error("[PushX.FCM] Topic #{action} connection error: #{inspect(reason)}")
+        {:error, Response.error(:fcm, :connection_error, inspect(reason))}
+    end
+  end
+
+  # {"results": [{}, {"error": "NOT_FOUND"}, ...]} — one entry per token, in order.
+  defp zip_topic_results(tokens, resp_body) do
+    results =
+      case JSON.decode(resp_body) do
+        {:ok, %{"results" => results}} when is_list(results) -> results
+        _ -> []
+      end
+
+    tokens
+    |> Enum.zip(Stream.concat(results, Stream.repeatedly(fn -> %{} end)))
+    |> Enum.map(fn
+      {token, %{"error" => code}} -> {token, {:error, to_string(code)}}
+      {token, _ok} -> {token, :ok}
+    end)
+  end
+
   @doc """
   Creates a simple notification payload.
 
@@ -395,9 +564,8 @@ defmodule PushX.FCM do
 
   defp do_send_data(device_token, data, opts) do
     with :ok <- validate_target(device_token),
-         message = %{
-           "message" => Map.put(target_field(device_token), "data", HTTP.stringify_map(data))
-         },
+         message =
+           envelope(Map.put(target_field(device_token), "data", HTTP.stringify_map(data)), opts),
          {:ok, body} <- HTTP.safe_encode(message),
          :ok <- check_payload_size(body) do
       if PushX.Test.active?(),
@@ -509,10 +677,10 @@ defmodule PushX.FCM do
       |> HTTP.maybe_put("notification", Message.to_fcm_payload(message)["notification"])
       |> HTTP.maybe_put("data", HTTP.stringify_map(Keyword.get(opts, :data) || message.data))
       |> HTTP.maybe_put("android", merge_android(message, Keyword.get(opts, :android)))
-      |> HTTP.maybe_put("apns", Keyword.get(opts, :apns))
+      |> HTTP.maybe_put("apns", merge_apns(message, Keyword.get(opts, :apns)))
       |> HTTP.maybe_put("webpush", Keyword.get(opts, :webpush))
 
-    %{"message" => base}
+    envelope(base, opts)
   end
 
   def build_message(token, payload, opts) when is_map(payload) do
@@ -538,7 +706,14 @@ defmodule PushX.FCM do
     |> HTTP.maybe_put("android", Keyword.get(opts, :android) || payload["android"])
     |> HTTP.maybe_put("apns", Keyword.get(opts, :apns) || payload["apns"])
     |> HTTP.maybe_put("webpush", Keyword.get(opts, :webpush) || payload["webpush"])
-    |> then(&%{"message" => &1})
+    |> envelope(opts)
+  end
+
+  # FCM v1 request body: {"message": ..., "validate_only": true?}
+  defp envelope(message, opts) do
+    if Keyword.get(opts, :validate_only, false) == true,
+      do: %{"validate_only" => true, "message" => message},
+      else: %{"message" => message}
   end
 
   # Message delivery fields (priority/ttl/collapse_key) feed the android
@@ -585,8 +760,26 @@ defmodule PushX.FCM do
     case {Message.to_fcm_android(message), opts_android} do
       {nil, opts_map} -> opts_map
       {msg_map, nil} -> msg_map
-      {msg_map, opts_map} -> Map.merge(msg_map, opts_map)
+      {msg_map, opts_map} -> deep_merge(msg_map, opts_map)
     end
+  end
+
+  # Message-derived iOS override (`Message.to_fcm_apns/1`) under an explicit
+  # `:apns` option: explicit keys win, nested maps are merged so a caller's
+  # `apns: %{"headers" => ...}` doesn't wipe the payload block and vice versa.
+  defp merge_apns(%Message{} = message, opts_apns) do
+    case {Message.to_fcm_apns(message), opts_apns} do
+      {nil, opts_map} -> opts_map
+      {msg_map, nil} -> msg_map
+      {msg_map, opts_map} -> deep_merge(msg_map, opts_map)
+    end
+  end
+
+  defp deep_merge(base, override) when is_map(base) and is_map(override) do
+    Map.merge(base, override, fn
+      _k, b, o when is_map(b) and is_map(o) -> deep_merge(b, o)
+      _k, _b, o -> o
+    end)
   end
 
   defp handle_error_response(status, body, response_headers) do

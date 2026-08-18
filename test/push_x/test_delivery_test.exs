@@ -115,8 +115,9 @@ defmodule PushX.TestDeliveryTest do
       results = PushX.push_batch(:apns, ["t1", "t2", "t3"], "Hi", topic: "t", concurrency: 2)
       assert Enum.all?(results, &match?({_, {:ok, %Response{status: :sent}}}, &1))
 
-      assert length(Test.pushes()) == 3
-      assert Enum.map(Test.pushes(), & &1.target) == ["t1", "t2", "t3"]
+      # Batch workers run concurrently, so recording order across them is
+      # completion order — compare as a set.
+      assert Test.pushes() |> Enum.map(& &1.target) |> Enum.sort() == ["t1", "t2", "t3"]
 
       # A stream consumed here also lands here.
       PushX.push_batch_stream(:fcm, ["s1"], "Hi") |> Stream.run()

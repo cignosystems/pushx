@@ -429,6 +429,32 @@ defmodule PushX.FCMTest do
       assert {:error, %Response{status: :unknown_error, reason: "Bad request"}} = result
     end
 
+    test "validate_only: true is a dry run at the envelope level, on all builders", %{
+      bypass: bypass
+    } do
+      Bypass.expect(bypass, "POST", "/v1/projects/test-project/messages:send", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        payload = JSON.decode!(body)
+        assert payload["validate_only"] == true
+        assert is_map(payload["message"])
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, ~s({"name": "projects/test-project/messages/fake_message_id"}))
+      end)
+
+      assert {:ok, %Response{status: :sent}} =
+               FCM.send("token", %{"title" => "Hi", "body" => "There"}, validate_only: true)
+
+      assert {:ok, _} = FCM.send("token", PushX.Message.new("Hi", "There"), validate_only: true)
+      assert {:ok, _} = FCM.send_data("token", %{a: 1}, validate_only: true)
+      assert {:ok, _} = PushX.push(:fcm, "token", "Hi", validate_only: true)
+
+      # Not a dry run unless explicitly true.
+      %{"message" => _} = built = FCM.build_message("t", %{"title" => "x"}, validate_only: false)
+      refute Map.has_key?(built, "validate_only")
+    end
+
     test "send_web/5 sends a webpush envelope with the link", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/v1/projects/test-project/messages:send", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
@@ -555,6 +581,114 @@ defmodule PushX.FCMTest do
       # No Bypass expectation: force the local validation error path.
       assert {:error, _} = PushX.push(:fcm, {:topic, "bad topic"}, "Hi")
       refute_receive {:invalid_token, _, _}, 50
+    end
+  end
+
+  describe "topic subscription management" do
+    setup do
+      bypass = Bypass.open()
+      Application.put_env(:pushx, :fcm_url_override, "http://localhost:#{bypass.port}")
+      Application.put_env(:pushx, :retry_enabled, false)
+
+      on_exit(fn ->
+        Application.delete_env(:pushx, :fcm_url_override)
+        Application.delete_env(:pushx, :retry_enabled)
+      end)
+
+      {:ok, bypass: bypass}
+    end
+
+    test "subscribe/3 posts to iid/v1:batchAdd and maps per-token results in order", %{
+      bypass: bypass
+    } do
+      Bypass.expect_once(bypass, "POST", "/iid/v1:batchAdd", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        payload = JSON.decode!(body)
+
+        assert payload == %{"to" => "/topics/news", "registration_tokens" => ["t1", "t2", "t3"]}
+
+        assert Plug.Conn.get_req_header(conn, "authorization") == [
+                 "Bearer #{PushX.TestOAuth.token()}"
+               ]
+
+        assert Plug.Conn.get_req_header(conn, "access_token_auth") == ["true"]
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, ~s({"results": [{}, {"error": "NOT_FOUND"}, {}]}))
+      end)
+
+      assert {:ok, [{"t1", :ok}, {"t2", {:error, "NOT_FOUND"}}, {"t3", :ok}]} =
+               FCM.subscribe(["t1", "t2", "t3"], "news")
+    end
+
+    test "unsubscribe/3 uses batchRemove; the facade routes :fcm and rejects :apns", %{
+      bypass: bypass
+    } do
+      Bypass.expect_once(bypass, "POST", "/iid/v1:batchRemove", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, ~s({"results": [{}]}))
+      end)
+
+      assert {:ok, [{"t1", :ok}]} = PushX.unsubscribe(:fcm, ["t1"], "news")
+
+      assert {:error, %Response{status: :invalid_request}} =
+               PushX.subscribe(:apns, ["t1"], "news")
+
+      assert {:error, %Response{status: :unknown_error}} =
+               PushX.subscribe(:no_such_instance, ["t1"], "news")
+    end
+
+    test "chunks at 1000 tokens per request and concatenates results", %{bypass: bypass} do
+      {:ok, sizes} = Agent.start_link(fn -> [] end)
+
+      Bypass.expect(bypass, "POST", "/iid/v1:batchAdd", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        n = length(JSON.decode!(body)["registration_tokens"])
+        Agent.update(sizes, &(&1 ++ [n]))
+        results = List.duplicate(%{}, n) |> JSON.encode!()
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, ~s({"results": #{results}}))
+      end)
+
+      tokens = for i <- 1..2_500, do: "tok-#{i}"
+      assert {:ok, results} = FCM.subscribe(tokens, "big")
+      assert length(results) == 2_500
+      assert Enum.all?(results, &match?({_, :ok}, &1))
+      assert Agent.get(sizes, & &1) == [1_000, 1_000, 500]
+    end
+
+    test "validates the topic and the token list locally; empty list is a no-op" do
+      assert {:error, %Response{status: :invalid_request}} = FCM.subscribe(["t"], "/topics/x")
+      assert {:error, %Response{status: :invalid_request}} = FCM.subscribe(["t", 42], "news")
+      assert {:error, %Response{status: :invalid_request}} = FCM.subscribe("t", "news")
+      assert {:ok, []} = FCM.subscribe([], "news")
+    end
+
+    test "request-level failures come back as a Response for the whole batch", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/iid/v1:batchAdd", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          401,
+          ~s({"error": {"status": "UNAUTHENTICATED", "message": "bad token"}})
+        )
+      end)
+
+      assert {:error, %Response{provider: :fcm, reason: "bad token"}} =
+               FCM.subscribe(["t1"], "news")
+
+      Bypass.down(bypass)
+      assert {:error, %Response{status: :connection_error}} = FCM.subscribe(["t1"], "news")
+    end
+
+    test "test delivery mode reports every token :ok without contacting anything" do
+      Application.put_env(:pushx, :delivery, :test)
+      on_exit(fn -> Application.delete_env(:pushx, :delivery) end)
+      assert {:ok, [{"a", :ok}, {"b", :ok}]} = FCM.subscribe(["a", "b"], "news")
     end
   end
 
@@ -848,6 +982,49 @@ defmodule PushX.FCMTest do
         FCM.build_message("tok", message, android: %{"priority" => "HIGH"})
 
       assert built["android"]["priority"] == "HIGH"
+    end
+
+    test "Message iOS fields become an apns override, deep-merged under explicit :apns opts" do
+      message =
+        PushX.Message.new("Title", "Body")
+        |> PushX.Message.mutable_content()
+        |> PushX.Message.subtitle("Sub")
+
+      %{"message" => built} = FCM.build_message("tok", message, [])
+
+      assert built["apns"] == %{
+               "payload" => %{
+                 "aps" => %{"mutable-content" => 1, "alert" => %{"subtitle" => "Sub"}}
+               }
+             }
+
+      # Explicit headers are kept alongside the derived payload; explicit
+      # payload keys win over derived ones.
+      %{"message" => built} =
+        FCM.build_message("tok", message,
+          apns: %{
+            "headers" => %{"apns-priority" => "5"},
+            "payload" => %{"aps" => %{"mutable-content" => 0}}
+          }
+        )
+
+      assert built["apns"] == %{
+               "headers" => %{"apns-priority" => "5"},
+               "payload" => %{
+                 "aps" => %{"mutable-content" => 0, "alert" => %{"subtitle" => "Sub"}}
+               }
+             }
+
+      # Localization lands under android.notification and merges with :android opts.
+      %{"message" => built} =
+        FCM.build_message("tok", PushX.Message.new("T", "B") |> PushX.Message.localized_body("K"),
+          android: %{"notification" => %{"channel_id" => "orders"}, "priority" => "HIGH"}
+        )
+
+      assert built["android"] == %{
+               "priority" => "HIGH",
+               "notification" => %{"body_loc_key" => "K", "channel_id" => "orders"}
+             }
     end
 
     test "no android block when nothing is set" do

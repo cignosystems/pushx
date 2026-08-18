@@ -105,11 +105,14 @@ defmodule PushX do
     * `:mode` - `:prod` or `:sandbox` (default: from config)
     * `:push_type` - "alert", "background", "voip" (default: "alert")
     * `:priority` - 5 or 10 (default: 10)
+    * `:apns_id` - your own UUID for the notification, echoed back by Apple
+      (see `PushX.APNS.send/3`)
 
   ### FCM Options
 
     * `:project_id` - Firebase project ID (default: from config)
     * `:data` - Custom data payload map
+    * `:validate_only` - dry run: FCM validates without delivering (see `PushX.FCM.send/3`)
 
   ### Common options
 
@@ -249,6 +252,56 @@ defmodule PushX do
 
       _ ->
         push(instance_name, device_token, %{"data" => data}, opts)
+    end
+  end
+
+  @doc """
+  Subscribes device tokens to an FCM topic, through the static `:fcm`
+  configuration or a named FCM instance.
+
+  Delegates to `PushX.FCM.subscribe/3` (see there for results, chunking and
+  options). Named APNS instances return `{:error, %Response{status: :invalid_request}}`.
+
+  ## Examples
+
+      {:ok, results} = PushX.subscribe(:fcm, tokens, "news")
+      {:ok, results} = PushX.subscribe(:tenant_fcm, tokens, "news")
+
+  """
+  @doc since: "0.14.0"
+  @spec subscribe(:fcm | instance_name(), [token()], String.t(), [option()]) ::
+          {:ok, [PushX.FCM.topic_result()]} | {:error, Response.t()}
+  def subscribe(target, tokens, topic, opts \\ []),
+    do: manage_topic(:subscribe, target, tokens, topic, opts)
+
+  @doc "Unsubscribes device tokens from an FCM topic. See `subscribe/4`."
+  @doc since: "0.14.0"
+  @spec unsubscribe(:fcm | instance_name(), [token()], String.t(), [option()]) ::
+          {:ok, [PushX.FCM.topic_result()]} | {:error, Response.t()}
+  def unsubscribe(target, tokens, topic, opts \\ []),
+    do: manage_topic(:unsubscribe, target, tokens, topic, opts)
+
+  defp manage_topic(action, :fcm, tokens, topic, opts) do
+    if action == :subscribe,
+      do: FCM.subscribe(tokens, topic, opts),
+      else: FCM.unsubscribe(tokens, topic, opts)
+  end
+
+  defp manage_topic(_action, :apns, _tokens, _topic, _opts) do
+    {:error, Response.error(:apns, :invalid_request, "Topics are an FCM feature")}
+  end
+
+  defp manage_topic(action, instance_name, tokens, topic, opts) when is_atom(instance_name) do
+    case PushX.Instance.resolve(instance_name) do
+      {:ok, info} ->
+        PushX.Instance.manage_topic(info, action, tokens, topic, opts)
+
+      {:error, :not_found} ->
+        {:error, Response.error(:unknown, :unknown_error, "Instance #{instance_name} not found")}
+
+      {:error, :disabled} ->
+        {:error,
+         Response.error(:unknown, :provider_disabled, "Instance #{instance_name} is disabled")}
     end
   end
 

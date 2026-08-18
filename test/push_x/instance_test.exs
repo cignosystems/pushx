@@ -516,6 +516,21 @@ defmodule PushX.InstanceTest do
       assert {:ok, _} = PushX.push(:apns_send, "token", message, topic: "com.override.app")
     end
 
+    test ":apns_id is validated and sent on the instance path", %{bypass: bypass} do
+      uuid = "123e4567-e89b-12d3-a456-426614174000"
+
+      Bypass.expect_once(bypass, "POST", "/3/device/token", fn conn ->
+        assert Plug.Conn.get_req_header(conn, "apns-id") == [uuid]
+        apns_ok(conn, uuid)
+      end)
+
+      assert {:ok, %Response{id: ^uuid}} =
+               PushX.push(:apns_send, "token", "Hello", topic: "com.test.app", apns_id: uuid)
+
+      assert {:error, %Response{status: :invalid_request}} =
+               PushX.push(:apns_send, "token", "Hello", topic: "com.test.app", apns_id: "nope")
+    end
+
     test "background pushes default to apns-priority 5", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/3/device/token", fn conn ->
         assert Plug.Conn.get_req_header(conn, "apns-push-type") == ["background"]
@@ -776,6 +791,28 @@ defmodule PushX.InstanceTest do
                PushX.push(:apns_for_topics, {:topic, "news"}, "Hi", topic: "com.test.app")
 
       assert reason =~ "device tokens only"
+    end
+
+    test "topic subscriptions go through the instance's OAuth and pool", %{bypass: bypass} do
+      Bypass.expect_once(bypass, "POST", "/iid/v1:batchAdd", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        assert JSON.decode!(body)["to"] == "/topics/tenant-news"
+
+        assert Plug.Conn.get_req_header(conn, "authorization") == [
+                 "Bearer #{PushX.TestOAuth.token()}"
+               ]
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(200, ~s({"results": [{}]}))
+      end)
+
+      assert {:ok, [{"t1", :ok}]} = PushX.subscribe(:fcm_send, ["t1"], "tenant-news")
+
+      start_and_cleanup(:apns_for_sub, :apns, apns_config())
+
+      assert {:error, %Response{status: :invalid_request}} =
+               PushX.subscribe(:apns_for_sub, ["t1"], "x")
     end
 
     test "push_data/4 sends a data-only message through the instance", %{bypass: bypass} do

@@ -34,6 +34,8 @@ defmodule PushX.MixProject do
       {:joken, "~> 2.6"},
       {:goth, "~> 1.4"},
       {:telemetry, "~> 1.4"},
+      # Optional: enables PushX.Telemetry.metrics/0 (a ready-made metric list)
+      {:telemetry_metrics, "~> 1.0", optional: true},
 
       # Dev/Test
       {:ex_doc, "~> 0.40", only: :dev, runtime: false},
