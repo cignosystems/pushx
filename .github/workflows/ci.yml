@@ -74,13 +74,12 @@ jobs:
       - name: Compile with warnings as errors
         run: mix compile --warnings-as-errors
 
-      # mix_audit instead of hex.audit so unfixable advisories can be pinned.
-      # The two ignored IDs are cowlib 2.19.0 advisories (test-only dep, via
-      # Bypass) with no fixed cowlib release published; the response-splitting
-      # one is mitigated downstream by cowboy >= 2.16 (we lock 2.18). Remove
-      # the ignores when a fixed cowlib ships.
+      # mix_audit (GitHub advisory DB) rather than hex.audit: the latter still
+      # lists three EEF-CVEs against cowlib 2.19.0 (a test-only dep via Bypass;
+      # latest release, no fix published) with no way to acknowledge them.
+      # No advisories are ignored here — if this step goes red, look, don't pin.
       - name: Check for security vulnerabilities
-        run: mix deps.audit --ignore-advisory-ids GHSA-w4f7-4cxr-rv3c,GHSA-g2wm-735q-3f56
+        run: mix deps.audit
 
       - name: Run Credo
         run: mix credo --strict
