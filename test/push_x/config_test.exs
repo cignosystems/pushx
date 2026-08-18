@@ -132,6 +132,19 @@ defmodule PushX.ConfigTest do
   end
 
   describe "fcm_credentials/0" do
+    setup do
+      # Restore rather than leak: other suites assert on FCM being unconfigured.
+      original = Application.get_env(:pushx, :fcm_credentials)
+
+      on_exit(fn ->
+        if original,
+          do: Application.put_env(:pushx, :fcm_credentials, original),
+          else: Application.delete_env(:pushx, :fcm_credentials)
+      end)
+
+      :ok
+    end
+
     test "returns {:file, path} when configured with file" do
       Application.put_env(:pushx, :fcm_credentials, {:file, "/path/to/creds.json"})
       assert Config.fcm_credentials() == {:file, "/path/to/creds.json"}

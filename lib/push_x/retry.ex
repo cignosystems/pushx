@@ -46,10 +46,15 @@ defmodule PushX.Retry do
     * `:none` — a single attempt; retryable failures are returned as-is with
       `retry_after` set when the provider supplied it, so the caller can
       requeue on its own schedule. Useful for large batches, where a blocking
-      backoff would otherwise hold a concurrency slot for up to a minute.
+      backoff would otherwise hold a concurrency slot for up to a minute. A
+      `:connection_error` still triggers the (coalesced) automatic pool
+      reconnect, exactly as the first retry of the blocking path would — only
+      the retry itself is skipped.
 
-  Any other value returns `{:error, %Response{status: :invalid_request}}`
-  for `provider` without calling `fun`.
+  `true` / `false` are accepted as aliases for `:blocking` / `:none` (older
+  docs described the option as a boolean). Any other value returns
+  `{:error, %Response{status: :invalid_request}}` for `provider` without
+  calling `fun`.
   """
   @spec maybe_with_retry(
           :apns | :fcm,
@@ -59,11 +64,20 @@ defmodule PushX.Retry do
         ) :: {:ok, Response.t()} | {:error, Response.t()}
   def maybe_with_retry(provider, send_opts, fun, retry_opts \\ []) do
     case Keyword.get(send_opts, :retry, :blocking) do
-      :blocking ->
+      blocking when blocking in [:blocking, true] ->
         with_retry(fun, retry_opts)
 
-      :none ->
-        fun.()
+      none when none in [:none, false] ->
+        result = fun.()
+
+        # Single attempt — but a connection error still means the pool's
+        # HTTP/2 sockets are probably dead (cloud LBs drop them silently), so
+        # do the coalesced pool reconnect the blocking path would have done
+        # on its first retry. Nothing is retried; the error is returned as-is.
+        with {:error, %Response{status: :connection_error}} <- result do
+          maybe_reconnect(reconnect_opts(retry_opts))
+          result
+        end
 
       other ->
         {:error,
@@ -149,6 +163,13 @@ defmodule PushX.Retry do
             do_retry(fun, attempt + 1, retry_opts)
         end
     end
+  end
+
+  defp reconnect_opts(retry_opts) do
+    %{
+      reconnect_fn: Keyword.get(retry_opts, :reconnect_fn, &PushX.reconnect/0),
+      reconnect_key: Keyword.get(retry_opts, :reconnect_key, :default)
+    }
   end
 
   # On the first connection error, restart the Finch pool to discard stale

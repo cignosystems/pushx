@@ -69,6 +69,7 @@ defmodule PushX.APNS do
           | {:priority, 5 | 10}
           | {:expiration, non_neg_integer()}
           | {:collapse_id, String.t()}
+          | {:retry, :blocking | :none}
 
   @doc """
   Sends a push notification to an iOS device with automatic retry.
@@ -84,7 +85,10 @@ defmodule PushX.APNS do
     * `:priority` - 5 or 10 (default: 10)
     * `:expiration` - Unix timestamp when notification expires
     * `:collapse_id` - Group notifications with the same ID
-    * `:retry` - Enable/disable retry (default: true from config)
+    * `:retry` - `:blocking` (default; retry with backoff in the calling process,
+      subject to the `:retry_enabled` config) or `:none` (single attempt; a
+      connection error still triggers the automatic pool reconnect). `true`/`false`
+      are accepted as aliases. See `PushX.push/4`.
 
   ## Returns
 
@@ -278,44 +282,14 @@ defmodule PushX.APNS do
 
   A list of `{token, result}` tuples.
   """
-  @spec send_batch([token()], payload(), [option()]) ::
+  @spec send_batch(Enumerable.t(), payload(), [option()]) ::
           [{token(), {:ok, Response.t()} | {:error, Response.t()}}]
   def send_batch(device_tokens, payload, opts \\ []) do
-    concurrency = Keyword.get(opts, :concurrency, 50)
-    timeout = Keyword.get_lazy(opts, :timeout, &Config.batch_timeout_ms/0)
-    validate = Keyword.get(opts, :validate_tokens, false)
-    send_opts = Keyword.drop(opts, [:concurrency, :timeout, :validate_tokens])
+    send_opts = Keyword.drop(opts, PushX.Batch.batch_option_keys())
 
-    # async_stream_nolink: a task that raises must report {:exit, reason}
-    # below instead of taking down the caller through the task link.
-    Task.Supervisor.async_stream_nolink(
-      PushX.TaskSupervisor,
-      device_tokens,
-      fn token ->
-        if validate and not PushX.Token.valid?(:apns, token) do
-          {token, {:error, Response.error(:apns, :invalid_token, "Invalid token format")}}
-        else
-          {token, send(token, payload, send_opts)}
-        end
-      end,
-      max_concurrency: concurrency,
-      timeout: timeout,
-      on_timeout: :kill_task
-    )
-    |> Enum.zip(device_tokens)
-    |> Enum.map(fn
-      {{:ok, result}, _token} ->
-        result
-
-      {{:exit, :timeout}, token} ->
-        {token, {:error, Response.error(:apns, :connection_error, "timeout")}}
-
-      # A task that raises exits with {exception, stacktrace}; keep per-token
-      # isolation instead of crashing the whole batch.
-      {{:exit, reason}, token} ->
-        {token,
-         {:error, Response.error(:apns, :unknown_error, "task exited: " <> inspect(reason))}}
-    end)
+    device_tokens
+    |> PushX.Batch.stream(&send(&1, payload, send_opts), :apns, :apns, opts)
+    |> Enum.to_list()
   end
 
   @doc """

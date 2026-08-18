@@ -8,6 +8,14 @@ defmodule PushX.FCMTest do
     def invalid(provider, token, pid), do: send(pid, {:invalid_token, provider, token})
   end
 
+  defmodule Fetchers do
+    def raise_it(_), do: raise("vault down")
+    def exit_it(_), do: exit({:noproc, {GenServer, :call, [MyApp.Goth, :fetch, 5000]}})
+    def error_it(_), do: {:error, :timeout}
+    def wrong_shape(_), do: {:ok, "bare"}
+    def with_arg(goth_name, extra), do: {:ok, %{token: "#{goth_name}-#{extra}"}}
+  end
+
   doctest PushX.FCM
 
   describe "notification/2" do
@@ -694,10 +702,17 @@ defmodule PushX.FCMTest do
     setup do
       Application.put_env(:pushx, :fcm_token_fetcher, nil)
       Application.put_env(:pushx, :retry_enabled, false)
+      # Hermetic: "not configured" means no credentials either.
+      original_creds = Application.get_env(:pushx, :fcm_credentials)
+      Application.delete_env(:pushx, :fcm_credentials)
 
       on_exit(fn ->
         Application.put_env(:pushx, :fcm_token_fetcher, {PushX.TestOAuth, :fetch, []})
         Application.delete_env(:pushx, :retry_enabled)
+
+        if original_creds,
+          do: Application.put_env(:pushx, :fcm_credentials, original_creds),
+          else: Application.delete_env(:pushx, :fcm_credentials)
       end)
 
       :ok
@@ -735,17 +750,48 @@ defmodule PushX.FCMTest do
       assert reason =~ "OAuth process"
     end
 
-    test "fetch_access_token/1 reports a missing OAuth process as an error tuple" do
-      assert {:error, {:oauth_not_running, :"PushX.Goth.nope"}} =
-               FCM.fetch_access_token(:"PushX.Goth.nope")
+    test "fetch_access_token/2 reports a missing OAuth process as an error tuple" do
+      assert {:error, {:oauth_not_running, PushX.Goth}} = FCM.fetch_access_token(PushX.Goth, nil)
 
+      # Static Goth missing with no credentials configured → misconfiguration.
       assert {:error, %Response{status: :not_configured}} =
-               FCM.oauth_error_response({:oauth_not_running, :"PushX.Goth.nope"})
+               FCM.oauth_error_response({:oauth_not_running, PushX.Goth})
+
+      # Static Goth missing but credentials ARE configured → it crashed or is
+      # restarting: transient, retryable, must not be reported as config.
+      Application.put_env(:pushx, :fcm_credentials, %{"type" => "service_account"})
+      on_exit(fn -> Application.delete_env(:pushx, :fcm_credentials) end)
+
+      assert {:error, %Response{status: :connection_error, reason: reason}} =
+               FCM.oauth_error_response({:oauth_not_running, PushX.Goth})
+
+      assert reason =~ "restarting"
 
       assert {:error, %Response{status: :connection_error, reason: reason}} =
                FCM.oauth_error_response(%RuntimeError{message: "token endpoint 503"})
 
       assert reason =~ "OAuth token error"
+    end
+
+    test "a caller-supplied fetcher is guarded: raise/exit/{:error,_} → connection_error, bad shape → auth_error" do
+      raising = {PushX.FCMTest.Fetchers, :raise_it, []}
+      exiting = {PushX.FCMTest.Fetchers, :exit_it, []}
+      erroring = {PushX.FCMTest.Fetchers, :error_it, []}
+      wrong_shape = {PushX.FCMTest.Fetchers, :wrong_shape, []}
+      with_arg = {PushX.FCMTest.Fetchers, :with_arg, ["extra"]}
+
+      for fetcher <- [raising, exiting, erroring] do
+        assert {:error, reason} = FCM.fetch_access_token(PushX.Goth, fetcher)
+        assert {:error, %Response{status: :connection_error}} = FCM.oauth_error_response(reason)
+      end
+
+      assert {:error, {:bad_fetcher_return, {:ok, "bare"}} = reason} =
+               FCM.fetch_access_token(PushX.Goth, wrong_shape)
+
+      assert {:error, %Response{status: :auth_error}} = FCM.oauth_error_response(reason)
+
+      # goth_name is prepended to args, per the documented contract.
+      assert {:ok, "Elixir.PushX.Goth-extra"} = FCM.fetch_access_token(PushX.Goth, with_arg)
     end
   end
 

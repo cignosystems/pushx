@@ -194,26 +194,36 @@ defmodule PushX.Config do
   @doc """
   Returns the custom FCM OAuth token fetcher, if one is configured.
 
-  By default PushX starts a [Goth](https://hexdocs.pm/goth) process from
-  `:fcm_credentials` and calls `Goth.fetch/1` before every FCM send. Set
-  `:fcm_token_fetcher` to an `{module, function, args}` tuple to supply the
-  OAuth access token yourself instead — for example to reuse a Goth process
-  your application already runs, or to fetch tokens from a secrets service:
+  By default PushX starts a [Goth](https://hexdocs.pm/goth) process
+  (`PushX.Goth`) from `:fcm_credentials` and calls `Goth.fetch/1` before every
+  FCM send. Set `:fcm_token_fetcher` to an `{module, function, args}` tuple to
+  supply the OAuth access token yourself instead — for example to reuse a
+  Goth process your application already runs, or to fetch tokens from a
+  secrets service:
 
+      # config/runtime.exs
       config :pushx,
         fcm_project_id: "my-project",
-        fcm_token_fetcher: {Goth, :fetch, [MyApp.Goth]}
+        fcm_token_fetcher: {MyApp.PushOAuth, :fetch, []}
 
-  The function is invoked as `apply(module, function, [goth_name | args])`,
-  where `goth_name` is the Goth process PushX *would* have used (`PushX.Goth`
-  for the static configuration, `:"PushX.Goth.<instance>"` for a named
-  instance) — a fetcher that reuses your own Goth simply ignores it. It must
-  return `{:ok, %{token: access_token}}` or `{:error, reason}`.
+      defmodule MyApp.PushOAuth do
+        # PushX passes the Goth name it would have used as the first argument;
+        # a fetcher that reuses your own Goth simply ignores it.
+        def fetch(_goth_name), do: Goth.fetch(MyApp.Goth)
+      end
 
-  When a fetcher is set, PushX starts **no** Goth process — neither for the
-  static configuration nor for named FCM instances — and `:fcm_credentials`
-  becomes optional (`PushX.Instance.start/3` still requires and validates
-  `:credentials`, since an instance may be reconfigured back to Goth later).
+  The function is invoked as `apply(module, function, [goth_name | args])`
+  and must return `{:ok, %{token: access_token}}` or `{:error, reason}`. It
+  runs on the send path, so keep it cheap (Goth caches; do the same). PushX
+  guards the call: a fetcher that raises, exits, or returns `{:error, _}` is
+  reported as a retryable `:connection_error`; one that returns any other
+  shape as `:auth_error`. Neither escapes as an exception.
+
+  When a fetcher is set, PushX starts **no** `PushX.Goth` process and
+  `:fcm_credentials` becomes optional. This option applies to the **static**
+  configuration only: named FCM instances (`PushX.Instance`) authenticate
+  with their own `:credentials`, or their own per-instance `:token_fetcher`
+  config key — a global fetcher never silently takes over a tenant's OAuth.
   The test suite uses this seam to exercise the real FCM send path without
   Google.
   """
@@ -263,11 +273,22 @@ defmodule PushX.Config do
       attempts × (receive_timeout + pool_timeout)
         + (attempts − 1) × max(retry_max_delay_ms, 60s rate-limit delay)
 
-  With retries disabled it is 30 seconds. An explicit `:timeout` option on
-  `PushX.push_batch/4` / `send_batch/3` always takes precedence.
+  With retries disabled — globally (`retry_enabled: false`) or for the call
+  (`retry: :none`, see `batch_timeout_ms/1`) — it is 30 seconds. An explicit
+  `:timeout` option on `PushX.push_batch/4` / `send_batch/3` always takes
+  precedence.
   """
   @spec batch_timeout_ms() :: pos_integer()
-  def batch_timeout_ms do
+  def batch_timeout_ms, do: batch_timeout_ms(retry: :blocking)
+
+  @doc """
+  Like `batch_timeout_ms/0`, but for a specific per-call retry policy:
+  `retry: :none` means a single attempt, so the budget is the 30 s floor.
+  """
+  @spec batch_timeout_ms(retry: :blocking | :none) :: pos_integer()
+  def batch_timeout_ms(retry: :none), do: @batch_timeout_floor_ms
+
+  def batch_timeout_ms(retry: _blocking) do
     if retry_enabled?() do
       attempts = retry_max_attempts()
       per_attempt = receive_timeout() + pool_timeout()

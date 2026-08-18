@@ -98,9 +98,16 @@ defmodule PushX.Instance do
   ## FCM Config Keys
 
     * `:project_id` - (required) Firebase project ID
-    * `:credentials` - (required) Service account credentials map or JSON string.
-      Must contain `"private_key"` (an RSA PEM able to sign RS256) and
-      `"client_email"`; anything else is rejected at start time.
+    * `:credentials` - (required unless `:token_fetcher` is set) Service account
+      credentials map or JSON string. Must contain `"private_key"` (an RSA PEM
+      able to sign RS256) and `"client_email"`; anything else is rejected at
+      start time. PushX starts a Goth process for the instance from them.
+    * `:token_fetcher` - (optional) bring your own OAuth for *this* instance:
+      an `{module, function, args}` tuple invoked as
+      `apply(module, function, [goth_name | args])` that returns
+      `{:ok, %{token: access_token}}` or `{:error, reason}`. When set, no Goth
+      process is started for the instance and `:credentials` becomes optional.
+      The global `:fcm_token_fetcher` config never applies to instances.
     * `:pool_size` - Finch pool size (default: 2)
     * `:pool_count` - Finch pool count (default: 1)
 
@@ -116,6 +123,8 @@ defmodule PushX.Instance do
     * `{:error, {:invalid_credentials, reason}}` if FCM `:credentials` are not
       a service-account map (or its JSON), lack `"private_key"`/`"client_email"`,
       or hold a key that cannot sign RS256
+    * `{:error, {:invalid_token_fetcher, reason}}` if an FCM `:token_fetcher` is
+      not an `{module, function, args}` tuple
 
   Credentials are verified with a test signature before the instance starts,
   so a bad key fails here rather than on the first push (APNS) or by crashing
@@ -517,7 +526,9 @@ defmodule PushX.Instance do
   end
 
   defp fcm_send_authenticated(info, device_token, body) do
-    case PushX.FCM.fetch_access_token(info.goth_name) do
+    # A global :fcm_token_fetcher never applies here — an instance's OAuth
+    # comes from its own :credentials (Goth) or its own :token_fetcher.
+    case PushX.FCM.fetch_access_token(info.goth_name, Keyword.get(info.config, :token_fetcher)) do
       {:ok, access_token} ->
         project_id = Keyword.fetch!(info.config, :project_id)
         url = URLs.fcm_send_url(project_id)
@@ -594,13 +605,34 @@ defmodule PushX.Instance do
   end
 
   defp validate_config(:fcm, config) do
-    required = [:project_id, :credentials]
+    fetcher = Keyword.get(config, :token_fetcher)
+    # With a per-instance token fetcher the instance never talks to Goth, so
+    # service-account credentials are optional (validated if present).
+    required = if fetcher, do: [:project_id], else: [:project_id, :credentials]
     missing = Enum.reject(required, &Keyword.has_key?(config, &1))
 
-    case missing do
-      [] -> validate_fcm_credentials(Keyword.fetch!(config, :credentials))
-      keys -> {:error, {:missing_config, keys}}
+    with [] <- missing,
+         :ok <- validate_token_fetcher(fetcher) do
+      case Keyword.get(config, :credentials) do
+        nil -> :ok
+        credentials -> validate_fcm_credentials(credentials)
+      end
+    else
+      keys when is_list(keys) -> {:error, {:missing_config, keys}}
+      {:error, _} = error -> error
     end
+  end
+
+  defp validate_token_fetcher(nil), do: :ok
+
+  defp validate_token_fetcher({mod, fun, args})
+       when is_atom(mod) and is_atom(fun) and is_list(args),
+       do: :ok
+
+  defp validate_token_fetcher(other) do
+    {:error,
+     {:invalid_token_fetcher,
+      ":token_fetcher must be an {module, function, args} tuple, got: #{inspect(other)}"}}
   end
 
   # Goth eagerly exchanges the service-account credentials with Google when

@@ -116,8 +116,9 @@ defmodule PushX do
     * `:retry` - `:blocking` (default) retries retryable failures in the
       calling process with backoff; `:none` makes exactly one attempt and
       returns retryable failures as-is (with `retry_after` when the provider
-      supplied it) so you can requeue on your own schedule. See "Blocking
-      and retries" below.
+      supplied it) so you can requeue on your own schedule — a connection
+      error still triggers the automatic pool reconnect. `true`/`false` are
+      accepted as aliases. See "Blocking and retries" below.
 
   ## Examples
 
@@ -382,12 +383,13 @@ defmodule PushX do
   instead of a list.
 
   Same options and semantics as `push_batch/4` — bounded concurrency,
-  per-task timeout, optional local token validation, one result per input in
-  input order — but nothing runs until the stream is enumerated, and results
-  are yielded as they complete rather than collected. Use it for large
-  audiences so memory stays bounded and you can act on results incrementally
-  (or stop early). `device_tokens` can be any enumerable, e.g. a database
-  stream.
+  per-task timeout, optional local token validation, one result per input,
+  in input order — but nothing runs until the stream is enumerated, and each
+  result is yielded as soon as it (and everything before it) has completed
+  rather than collected into a list. Use it for large audiences so memory
+  stays bounded and you can act on results incrementally (or stop early).
+  `device_tokens` can be any enumerable and is enumerated exactly once, so a
+  one-shot source such as a `Repo.stream/2` works.
 
   The stream must be consumed in the process that will own the sends; the
   batch tasks are started under `PushX.TaskSupervisor` when enumeration
@@ -413,45 +415,16 @@ defmodule PushX do
   @spec push_batch_stream(provider() | instance_name(), Enumerable.t(), message(), [option()]) ::
           Enumerable.t()
   def push_batch_stream(provider, device_tokens, message, opts \\ []) do
-    concurrency = Keyword.get(opts, :concurrency, batch_concurrency())
-    timeout = Keyword.get_lazy(opts, :timeout, &Config.batch_timeout_ms/0)
-    validate = Keyword.get(opts, :validate_tokens, false)
-    send_opts = Keyword.drop(opts, [:concurrency, :timeout, :validate_tokens])
-    response_provider = response_provider(provider)
+    send_opts = Keyword.drop(opts, PushX.Batch.batch_option_keys())
+    validate_provider = if provider in [:apns, :fcm], do: provider
 
-    # async_stream_nolink: a task that raises must report {:exit, reason}
-    # below instead of taking down the caller through the task link.
-    PushX.TaskSupervisor
-    |> Task.Supervisor.async_stream_nolink(
+    PushX.Batch.stream(
       device_tokens,
-      fn token ->
-        if validate and provider in [:apns, :fcm] and is_binary(token) and
-             not Token.valid?(provider, token) do
-          {token, {:error, Response.error(provider, :invalid_token, "Invalid token format")}}
-        else
-          {token, push(provider, token, message, send_opts)}
-        end
-      end,
-      max_concurrency: concurrency,
-      timeout: timeout,
-      on_timeout: :kill_task
+      &push(provider, &1, message, send_opts),
+      validate_provider,
+      response_provider(provider),
+      opts
     )
-    |> Stream.zip(device_tokens)
-    |> Stream.map(fn
-      {{:ok, result}, _token} ->
-        result
-
-      {{:exit, :timeout}, token} ->
-        {token, {:error, Response.error(response_provider, :connection_error, "timeout")}}
-
-      # A task that raises (rather than returning an error tuple) exits with
-      # {exception, stacktrace}. Without this clause the whole batch would
-      # crash on one bad task, losing every other token's result.
-      {{:exit, reason}, token} ->
-        {token,
-         {:error,
-          Response.error(response_provider, :unknown_error, "task exited: " <> inspect(reason))}}
-    end)
   end
 
   defp response_provider(provider) when provider in [:apns, :fcm], do: provider
@@ -615,10 +588,6 @@ defmodule PushX do
   end
 
   defp maybe_notify_invalid_token(_provider, _token, _result), do: :ok
-
-  defp batch_concurrency do
-    PushX.Config.get(:batch_concurrency, 50)
-  end
 
   defp normalize_payload(message, _provider) when is_binary(message) do
     Message.new(message, "")

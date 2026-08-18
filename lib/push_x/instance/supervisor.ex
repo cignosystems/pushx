@@ -52,10 +52,12 @@ defmodule PushX.Instance.Supervisor do
   end
 
   defp maybe_add_goth(children, :fcm, config, goth_name) do
-    # With a custom :fcm_token_fetcher configured, the fetcher owns token
-    # acquisition and Goth — which would eagerly try to exchange the
-    # credentials with Google on start — is not started.
-    if PushX.Config.fcm_token_fetcher() do
+    # An instance with its own :token_fetcher owns token acquisition, so no
+    # Goth (which would eagerly exchange the credentials with Google on start)
+    # is started for it. The *global* :fcm_token_fetcher is deliberately not
+    # consulted: it belongs to the static configuration, and an instance's
+    # credentials are its own.
+    if Keyword.get(config, :token_fetcher) do
       children
     else
       children ++ [{Goth, name: goth_name, source: goth_source(config)}]

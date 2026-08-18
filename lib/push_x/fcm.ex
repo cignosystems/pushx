@@ -86,6 +86,7 @@ defmodule PushX.FCM do
           | {:android, map()}
           | {:apns, map()}
           | {:webpush, map()}
+          | {:retry, :blocking | :none}
 
   @doc """
   Sends a push notification to an Android device with automatic retry.
@@ -100,6 +101,7 @@ defmodule PushX.FCM do
     * `:android` - Android-specific configuration
     * `:apns` - APNS configuration (for iOS via FCM)
     * `:webpush` - Web push configuration
+    * `:retry` - `:blocking` (default) or `:none` (single attempt); see `PushX.push/4`
 
   ## Returns
 
@@ -254,44 +256,14 @@ defmodule PushX.FCM do
 
   A list of `{token, result}` tuples.
   """
-  @spec send_batch([token()], payload(), [option()]) ::
-          [{token(), {:ok, Response.t()} | {:error, Response.t()}}]
+  @spec send_batch(Enumerable.t(), payload(), [option()]) ::
+          [{target(), {:ok, Response.t()} | {:error, Response.t()}}]
   def send_batch(device_tokens, payload, opts \\ []) do
-    concurrency = Keyword.get(opts, :concurrency, 50)
-    timeout = Keyword.get_lazy(opts, :timeout, &Config.batch_timeout_ms/0)
-    validate = Keyword.get(opts, :validate_tokens, false)
-    send_opts = Keyword.drop(opts, [:concurrency, :timeout, :validate_tokens])
+    send_opts = Keyword.drop(opts, PushX.Batch.batch_option_keys())
 
-    # async_stream_nolink: a task that raises must report {:exit, reason}
-    # below instead of taking down the caller through the task link.
-    Task.Supervisor.async_stream_nolink(
-      PushX.TaskSupervisor,
-      device_tokens,
-      fn token ->
-        if validate and not PushX.Token.valid?(:fcm, token) do
-          {token, {:error, Response.error(:fcm, :invalid_token, "Invalid token format")}}
-        else
-          {token, send(token, payload, send_opts)}
-        end
-      end,
-      max_concurrency: concurrency,
-      timeout: timeout,
-      on_timeout: :kill_task
-    )
-    |> Enum.zip(device_tokens)
-    |> Enum.map(fn
-      {{:ok, result}, _token} ->
-        result
-
-      {{:exit, :timeout}, token} ->
-        {token, {:error, Response.error(:fcm, :connection_error, "timeout")}}
-
-      # A task that raises exits with {exception, stacktrace}; keep per-token
-      # isolation instead of crashing the whole batch.
-      {{:exit, reason}, token} ->
-        {token,
-         {:error, Response.error(:fcm, :unknown_error, "task exited: " <> inspect(reason))}}
-    end)
+    device_tokens
+    |> PushX.Batch.stream(&send(&1, payload, send_opts), :fcm, :fcm, opts)
+    |> Enum.to_list()
   end
 
   @doc """
@@ -634,29 +606,47 @@ defmodule PushX.FCM do
     {:error, Response.error(:fcm, error_status, error_message, body, retry_after)}
   end
 
-  defp get_access_token, do: fetch_access_token(PushX.Goth)
+  defp get_access_token, do: fetch_access_token(PushX.Goth, Config.fcm_token_fetcher())
 
   @doc false
   # Shared by the static path and PushX.Instance so the OAuth token source
-  # (`Config.fcm_token_fetcher/0` or Goth) cannot drift between them.
-  @spec fetch_access_token(atom()) :: {:ok, String.t()} | {:error, term()}
-  def fetch_access_token(goth_name) do
-    result =
-      case Config.fcm_token_fetcher() do
-        nil -> goth_fetch(goth_name)
-        {mod, fun, args} -> apply(mod, fun, [goth_name | args])
-      end
+  # (a caller-supplied fetcher, or Goth) cannot drift between them.
+  #
+  # `fetcher` is nil (use the Goth process registered as `goth_name`) or an
+  # `{module, function, args}` tuple invoked as `apply(m, f, [goth_name | args])`.
+  # The static path passes `Config.fcm_token_fetcher/0`; a named instance
+  # passes its own `:token_fetcher` config — a global fetcher never applies to
+  # instances, whose credentials are their own.
+  @spec fetch_access_token(atom(), {module(), atom(), list()} | nil) ::
+          {:ok, String.t()} | {:error, term()}
+  def fetch_access_token(goth_name, fetcher)
 
-    case result do
+  def fetch_access_token(goth_name, nil) do
+    case goth_fetch(goth_name) do
       {:ok, %{token: token}} -> {:ok, token}
       {:error, reason} -> {:error, reason}
     end
   end
 
-  # Goth.fetch/1 is a GenServer.call: when no Goth process exists (FCM not
-  # configured, or the instance's Goth died) it *exits* the caller with
-  # :noproc. Convert that into an error tuple so the documented
-  # {:error, %Response{}} contract holds instead of crashing the caller.
+  def fetch_access_token(goth_name, {mod, fun, args})
+      when is_atom(mod) and is_atom(fun) and is_list(args) do
+    # A caller-supplied fetcher is untrusted code on the send path: never let
+    # a raise/exit or an unexpected return shape escape the {:error, %Response{}}
+    # contract.
+    case apply(mod, fun, [goth_name | args]) do
+      {:ok, %{token: token}} when is_binary(token) and token != "" -> {:ok, token}
+      {:error, reason} -> {:error, {:fetcher_error, reason}}
+      other -> {:error, {:bad_fetcher_return, other}}
+    end
+  rescue
+    e -> {:error, {:fetcher_raised, Exception.message(e)}}
+  catch
+    kind, reason -> {:error, {:fetcher_exit, {kind, reason}}}
+  end
+
+  # Goth.fetch/1 is a GenServer.call: when no Goth process exists it *exits*
+  # the caller with :noproc. Convert that into an error tuple so the
+  # documented {:error, %Response{}} contract holds instead of crashing.
   defp goth_fetch(goth_name) do
     Goth.fetch(goth_name)
   catch
@@ -665,25 +655,66 @@ defmodule PushX.FCM do
 
   @doc false
   # Shared by the static and instance paths: maps an OAuth fetch failure to
-  # the right response. A missing Goth process is a deployment problem
-  # (:not_configured, never retried); anything else is a transient
-  # token-endpoint failure (:connection_error, retryable).
+  # the right response.
+  #
+  #   * no Goth process *and* no credentials configured — the static PushX.Goth
+  #     was never started: a deployment problem → :not_configured, never retried
+  #   * no Goth process but credentials are configured (Goth crashed/restarting,
+  #     or an instance's Goth child is mid-restart) → :connection_error, retryable
+  #   * a caller-supplied fetcher raised/exited/returned {:error, _} → its OAuth
+  #     infrastructure is down → :connection_error, retryable
+  #   * a caller-supplied fetcher returned the wrong shape → programming
+  #     error → :auth_error, not retried
+  #   * anything else (Goth returned {:error, exception}: token endpoint 5xx,
+  #     bad credentials rejected by Google...) → :connection_error, retryable
   @spec oauth_error_response(term()) :: {:error, Response.t()}
-  def oauth_error_response({:oauth_not_running, goth_name}) do
+  def oauth_error_response({:oauth_not_running, PushX.Goth = goth_name}) do
+    if Config.fcm_credentials_configured?() do
+      transient_oauth_outage(goth_name)
+    else
+      Logger.error(
+        "[PushX.FCM] OAuth process #{inspect(goth_name)} is not running — is FCM configured (:fcm_project_id and :fcm_credentials, or :fcm_token_fetcher)?"
+      )
+
+      {:error,
+       Response.error(
+         :fcm,
+         :not_configured,
+         "FCM is not configured: OAuth process #{inspect(goth_name)} is not running"
+       )}
+    end
+  end
+
+  def oauth_error_response({:oauth_not_running, goth_name}), do: transient_oauth_outage(goth_name)
+
+  def oauth_error_response({:bad_fetcher_return, other}) do
     Logger.error(
-      "[PushX.FCM] OAuth process #{inspect(goth_name)} is not running — is FCM configured (:fcm_project_id and :fcm_credentials, or :fcm_token_fetcher)?"
+      "[PushX.FCM] :fcm_token_fetcher returned #{inspect(other)}; expected {:ok, %{token: binary}} or {:error, reason}"
     )
 
     {:error,
      Response.error(
        :fcm,
-       :not_configured,
-       "FCM is not configured: OAuth process #{inspect(goth_name)} is not running"
+       :auth_error,
+       "OAuth token fetcher returned an unexpected value: #{inspect(other)}"
      )}
   end
 
   def oauth_error_response(reason) do
     Logger.error("[PushX.FCM] Failed to get OAuth token: #{inspect(reason)}")
     {:error, Response.error(:fcm, :connection_error, "OAuth token error: #{inspect(reason)}")}
+  end
+
+  defp transient_oauth_outage(goth_name) do
+    Logger.error(
+      "[PushX.FCM] OAuth process #{inspect(goth_name)} is not running (crashed or restarting); treating as a transient connection error"
+    )
+
+    {:error,
+     Response.error(
+       :fcm,
+       :connection_error,
+       "OAuth process #{inspect(goth_name)} is not running (restarting?)"
+     )}
   end
 end

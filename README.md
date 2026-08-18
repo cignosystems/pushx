@@ -77,7 +77,7 @@ Add `pushx` to your dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:pushx, "~> 0.12"}
+    {:pushx, "~> 0.13"}
   ]
 end
 ```
@@ -242,7 +242,7 @@ For aggregate counts, use the bang variant:
   PushX.push_batch!(:fcm, tokens, "Hello!")
 ```
 
-**Large audiences.** `push_batch/4` holds every result in memory. For tens of thousands of tokens and up, use the lazy variant — it accepts any enumerable (a database stream works), yields `{token, result}` pairs as they complete, and keeps memory bounded:
+**Large audiences.** `push_batch/4` holds every result in memory. For tens of thousands of tokens and up, use the lazy variant — it accepts any enumerable (a database stream works; the input is enumerated exactly once), yields `{token, result}` pairs in input order as each one completes, and keeps memory bounded:
 
 ```elixir
 Repo.transaction(fn ->
@@ -456,7 +456,7 @@ config :pushx,
 |--------|------|-------------|
 | `:fcm_project_id` | `String.t()` | Firebase project ID |
 | `:fcm_credentials` | `map()` \| `{:file, path}` \| `{:json, string}` \| `{:system, env_var}` | Service account as map, file, JSON string, or env var |
-| `:fcm_token_fetcher` | `{module, function, args}` | *Optional, advanced.* Bring your own OAuth: replaces the Goth process PushX would start (e.g. `{Goth, :fetch, [MyApp.Goth]}` to reuse yours). Called as `apply(m, f, [goth_name \| args])`, must return `{:ok, %{token: t}}` \| `{:error, reason}`. See `PushX.Config.fcm_token_fetcher/0`. |
+| `:fcm_token_fetcher` | `{module, function, args}` | *Optional, advanced.* Bring your own OAuth for the static config: replaces the `PushX.Goth` process PushX would start. Called as `apply(m, f, [goth_name \| args])` (so to reuse your own Goth, wrap it: `def fetch(_), do: Goth.fetch(MyApp.Goth)`), must return `{:ok, %{token: t}}` \| `{:error, reason}`; raises/exits/errors are contained. Named instances use their own `:token_fetcher` config key instead. See `PushX.Config.fcm_token_fetcher/0`. |
 
 ### Pool Sizing
 

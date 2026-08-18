@@ -209,6 +209,61 @@ defmodule PushX.BatchTest do
       assert Agent.get(counter, & &1) == 2
     end
 
+    test "push_batch_stream/4 enumerates a one-shot input exactly once (timeouts included)" do
+      # Silent listener so the task hits the per-task timeout.
+      {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+      {:ok, port} = :inet.port(listener)
+      on_exit(fn -> :gen_tcp.close(listener) end)
+      Application.put_env(:pushx, :apns_url_override, "http://localhost:#{port}")
+
+      {:ok, pulls} = Agent.start_link(fn -> 0 end)
+
+      one_shot =
+        Stream.resource(
+          fn -> ["only-token"] end,
+          fn
+            [] ->
+              {:halt, []}
+
+            [t | rest] ->
+              Agent.update(pulls, &(&1 + 1))
+              {[t], rest}
+          end,
+          fn _ -> :ok end
+        )
+
+      assert [
+               {"only-token",
+                {:error, %PushX.Response{status: :connection_error, reason: "timeout"}}}
+             ] =
+               PushX.push_batch_stream(:apns, one_shot, "Hello",
+                 topic: "com.test.app",
+                 timeout: 50
+               )
+               |> Enum.to_list()
+
+      assert Agent.get(pulls, & &1) == 1
+    end
+
+    test "validate_tokens: true leaves FCM topic/condition targets alone (provider batch API)" do
+      Application.put_env(:pushx, :fcm_url_override, "http://localhost:1")
+      on_exit(fn -> Application.delete_env(:pushx, :fcm_url_override) end)
+      Application.put_env(:pushx, :retry_enabled, false)
+
+      # Nothing is listening on port 1: a *sent* topic fails with a
+      # connection error, proving validation didn't reject (or crash on) it,
+      # while the malformed token is rejected locally.
+      results =
+        PushX.FCM.send_batch([{:topic, "news"}, "bad token!"], %{"title" => "Hi", "body" => "x"},
+          validate_tokens: true
+        )
+
+      assert [
+               {{:topic, "news"}, {:error, %PushX.Response{status: :connection_error}}},
+               {"bad token!", {:error, %PushX.Response{status: :invalid_token}}}
+             ] = results
+    end
+
     test "push_batch_stream/4 accepts any enumerable and matches push_batch/4", %{bypass: bypass} do
       Bypass.stub(bypass, "POST", "/3/device/s1", fn conn ->
         conn |> Plug.Conn.put_resp_header("apns-id", "s1") |> Plug.Conn.resp(200, "")
@@ -279,7 +334,8 @@ defmodule PushX.BatchTest do
           key_id: "TEST_KEY_ID",
           team_id: "TEST_TEAM_ID",
           private_key: Application.get_env(:pushx, :apns_private_key),
-          mode: :sandbox
+          mode: :sandbox,
+          connect_timeout: 1
         )
 
       on_exit(fn ->

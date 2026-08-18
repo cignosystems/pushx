@@ -6,13 +6,18 @@ defmodule PushX.InstanceTest do
 
   defp test_private_key, do: Application.get_env(:pushx, :apns_private_key)
 
+  # connect_timeout: 1 — instance pools eagerly dial the real provider hosts;
+  # failing that dial instantly keeps teardown fast (finch >= 0.22 waits for
+  # an in-flight connect on shutdown). Sends still work: the URL overrides
+  # route them through Finch's default HTTP/1 pool to Bypass.
   defp apns_config(overrides \\ []) do
     Keyword.merge(
       [
         key_id: "TEST_KEY_ID",
         team_id: "TEST_TEAM_ID",
         private_key: test_private_key(),
-        mode: :sandbox
+        mode: :sandbox,
+        connect_timeout: 1
       ],
       overrides
     )
@@ -333,9 +338,16 @@ defmodule PushX.InstanceTest do
     end)
   end
 
+  # Instances get their *own* token fetcher (the global :fcm_token_fetcher
+  # never applies to instances), which also means no Goth is started for them.
   defp fcm_config(overrides \\ []) do
     Keyword.merge(
-      [project_id: "tenant-project", credentials: PushX.TestCredentials.fcm()],
+      [
+        project_id: "tenant-project",
+        credentials: PushX.TestCredentials.fcm(),
+        token_fetcher: {PushX.TestOAuth, :fetch, []},
+        connect_timeout: 1
+      ],
       overrides
     )
   end
@@ -653,10 +665,62 @@ defmodule PushX.InstanceTest do
       {:ok, bypass: bypass}
     end
 
-    test "does not start a Goth process when a token fetcher is configured" do
-      # test_helper.exs configures :fcm_token_fetcher for the whole suite.
+    test "does not start a Goth process when the instance has its own token fetcher" do
       assert Process.whereis(:"PushX.Goth.fcm_send") == nil
       assert Process.whereis(:"PushX.Finch.fcm_send") != nil
+    end
+
+    test "the global :fcm_token_fetcher does not apply to instances (Goth would be started)" do
+      # Inspect the child specs without starting them: an instance without its
+      # own :token_fetcher gets a Goth child even though the suite configures a
+      # global fetcher — instance credentials are the instance's own.
+      config = fcm_config() |> Keyword.delete(:token_fetcher)
+
+      {:ok, {_flags, children}} =
+        PushX.Instance.Supervisor.init(name: :inspect_only, provider: :fcm, config: config)
+
+      assert Enum.any?(children, &(&1.id == Goth))
+
+      {:ok, {_flags, children}} =
+        PushX.Instance.Supervisor.init(name: :inspect_only, provider: :fcm, config: fcm_config())
+
+      refute Enum.any?(children, &(&1.id == Goth))
+    end
+
+    test "returns connection_error (not :not_configured) when an instance's Goth is down" do
+      # Instance path with no per-instance fetcher and no Goth registered under
+      # its name: this is what a crashed/restarting Goth child looks like.
+      assert {:error, %Response{status: :connection_error, reason: reason}} =
+               PushX.FCM.fetch_access_token(:"PushX.Goth.ghost", nil)
+               |> then(fn {:error, reason} -> PushX.FCM.oauth_error_response(reason) end)
+
+      assert reason =~ "restarting"
+    end
+
+    test "the per-instance token fetcher is used and its failures are contained" do
+      start_and_cleanup(
+        :fetcher_inst,
+        :fcm,
+        fcm_config(token_fetcher: {PushX.TestOAuth, :fetch_error, []})
+        |> Keyword.delete(:credentials)
+      )
+
+      Application.put_env(:pushx, :retry_enabled, false)
+      on_exit(fn -> Application.delete_env(:pushx, :retry_enabled) end)
+
+      assert {:error, %Response{status: :connection_error, reason: reason}} =
+               PushX.push(:fetcher_inst, "t", "Hello")
+
+      assert reason =~ "OAuth token error"
+
+      # A fetcher tuple of the wrong shape is rejected at start.
+      assert {:error, {:invalid_token_fetcher, _}} =
+               Instance.start(:bad_fetcher, :fcm, project_id: "p", token_fetcher: "MyMod.fetch")
+
+      # With a fetcher, credentials are optional; without either, credentials
+      # are still required.
+      assert {:error, {:missing_config, [:credentials]}} =
+               Instance.start(:no_oauth, :fcm, project_id: "p")
     end
 
     test "sends to the instance's project with the fetched OAuth token", %{bypass: bypass} do
@@ -825,17 +889,23 @@ defmodule PushX.InstanceTest do
                PushX.push(:fcm_send, "t", "Hello")
     end
 
-    test "returns connection_error when the OAuth token cannot be fetched" do
+    test "the global :fcm_token_fetcher does not affect an instance's sends", %{bypass: bypass} do
+      # Point the global fetcher at a failing one; the instance keeps using its
+      # own and the send still goes through.
       Application.put_env(:pushx, :fcm_token_fetcher, {PushX.TestOAuth, :fetch_error, []})
 
       on_exit(fn ->
         Application.put_env(:pushx, :fcm_token_fetcher, {PushX.TestOAuth, :fetch, []})
       end)
 
-      assert {:error, %Response{status: :connection_error, reason: reason}} =
-               PushX.push(:fcm_send, "t", "Hello")
+      Bypass.expect_once(bypass, "POST", "/v1/projects/tenant-project/messages:send", fn conn ->
+        assert Plug.Conn.get_req_header(conn, "authorization") ==
+                 ["Bearer #{PushX.TestOAuth.token()}"]
 
-      assert reason =~ "OAuth token error"
+        fcm_ok(conn)
+      end)
+
+      assert {:ok, %Response{status: :sent}} = PushX.push(:fcm_send, "t", "Hello")
     end
 
     test "rejects oversized payloads locally" do

@@ -110,6 +110,10 @@ defmodule PushX.Token do
     end
   end
 
+  # Total over any term so callers (and property tests) can rely on it never
+  # raising: a non-binary is not a token of either provider.
+  def validate(_provider, _other), do: {:error, :invalid_format}
+
   @doc """
   Returns `true` if the token is valid for the given provider.
 

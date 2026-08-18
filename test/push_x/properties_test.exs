@@ -149,9 +149,9 @@ defmodule PushX.PropertiesTest do
       end
     end
 
-    property "never raises for arbitrary binaries and always returns :ok or an error tuple" do
+    property "never raises for arbitrary terms and always returns :ok or an error tuple" do
       check all(
-              token <- one_of([binary(), string(:printable)]),
+              token <- one_of([binary(), string(:printable), term()]),
               provider <- member_of([:apns, :fcm])
             ) do
         result = Token.validate(provider, token)

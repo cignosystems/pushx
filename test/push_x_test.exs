@@ -290,7 +290,8 @@ defmodule PushXTest do
           key_id: "KEY",
           team_id: "TEAM",
           private_key: Application.get_env(:pushx, :apns_private_key),
-          mode: :sandbox
+          mode: :sandbox,
+          connect_timeout: 1
         )
 
       on_exit(fn -> PushX.Instance.stop(:push_data_disabled) end)
@@ -307,7 +308,8 @@ defmodule PushXTest do
           key_id: "KEY",
           team_id: "TEAM",
           private_key: Application.get_env(:pushx, :apns_private_key),
-          mode: :sandbox
+          mode: :sandbox,
+          connect_timeout: 1
         )
 
       on_exit(fn -> PushX.Instance.stop(:push_data_apns) end)
@@ -395,7 +397,8 @@ defmodule PushXTest do
           key_id: "K",
           team_id: "T",
           private_key: Application.get_env(:pushx, :apns_private_key),
-          mode: :sandbox
+          mode: :sandbox,
+          connect_timeout: 1
         )
 
       on_exit(fn ->
