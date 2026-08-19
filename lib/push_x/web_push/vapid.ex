@@ -74,6 +74,16 @@ defmodule PushX.WebPush.VAPID do
 
   defp decode_public(_, _), do: {:error, "VAPID public key must be a base64url string"}
 
+  @doc """
+  RFC 8292 §2.1: the `sub` claim MUST be a contact URI — `mailto:` or `https:`.
+  """
+  @spec validate_subject(term()) :: :ok | {:error, String.t()}
+  def validate_subject("mailto:" <> rest) when rest != "", do: :ok
+  def validate_subject("https://" <> rest) when rest != "", do: :ok
+
+  def validate_subject(other),
+    do: {:error, "VAPID subject must be a mailto: or https: contact URI, got: #{inspect(other)}"}
+
   @doc "Generates a fresh VAPID key pair, base64url-encoded (the `web-push` CLI format)."
   @spec generate() :: %{public_key: String.t(), private_key: String.t()}
   def generate do

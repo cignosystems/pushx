@@ -706,11 +706,14 @@ defmodule PushX.Instance do
 
     case missing do
       [] ->
-        case VAPID.resolve_keys(
-               Keyword.get(config, :vapid_public_key),
-               Keyword.fetch!(config, :vapid_private_key)
-             ) do
-          {:ok, _keys} -> :ok
+        with :ok <- VAPID.validate_subject(Keyword.fetch!(config, :vapid_subject)),
+             {:ok, _keys} <-
+               VAPID.resolve_keys(
+                 Keyword.get(config, :vapid_public_key),
+                 Keyword.fetch!(config, :vapid_private_key)
+               ) do
+          :ok
+        else
           {:error, reason} -> {:error, {:invalid_vapid_key, reason}}
         end
 

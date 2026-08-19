@@ -5,7 +5,8 @@
 <p align="center">
   <strong>Push notifications for Elixir that just work: APNS, FCM and Web Push in one call.</strong><br>
   Retries, circuit breaker, dead-token cleanup and telemetry built in. Per-tenant credentials at runtime.<br>
-  Nothing to add to your supervision tree.
+  Nothing to add to your supervision tree.<br>
+  <sub>Web Push per <a href="https://www.rfc-editor.org/rfc/rfc8030">RFC 8030</a> (transport), <a href="https://www.rfc-editor.org/rfc/rfc8291">RFC 8291</a> (encryption) and <a href="https://www.rfc-editor.org/rfc/rfc8292">RFC 8292</a> (VAPID) — every browser, no Firebase required.</sub>
 </p>
 
 <p align="center">
@@ -47,7 +48,7 @@
 - **HTTP/2** connections via Finch (Mint-based) for optimal performance
 - **APNS** (Apple Push Notification Service) with JWT authentication
 - **FCM** (Firebase Cloud Messaging) with OAuth2 via Goth
-- **Web Push** — standards-based (RFC 8030/8291/8292, VAPID) for every browser incl. Safari 16+; FCM webpush and legacy Safari APNS too
+- **Web Push** — standards-based for every browser incl. Safari 16+: [RFC 8030](https://www.rfc-editor.org/rfc/rfc8030) transport, [RFC 8291](https://www.rfc-editor.org/rfc/rfc8291) `aes128gcm` encryption (reproduces the RFC's test vectors), [RFC 8292](https://www.rfc-editor.org/rfc/rfc8292) VAPID; FCM webpush and legacy Safari APNS also supported
 - **Batch sending** — send to multiple tokens concurrently with configurable parallelism, as a list or a lazy stream
 - **FCM topics & conditions** — fan out to `{:topic, "news"}` or `{:condition, "'a' in topics && 'b' in topics"}` with the same call
 - **Multi-tenant** — named runtime instances with their own credentials, pools and breakers

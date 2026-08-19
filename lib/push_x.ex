@@ -1,20 +1,32 @@
 defmodule PushX do
   @moduledoc """
-  Modern push notifications for Elixir.
+  Push notifications for Elixir: APNS, FCM and Web Push in one call.
 
-  PushX provides a simple, unified API for sending push notifications
-  to iOS (APNS) and Android (FCM) devices using HTTP/2 connections.
+  One API sends to iOS/macOS (Apple APNS, HTTP/2 + JWT), Android (Google FCM
+  HTTP v1, HTTP/2 + OAuth2) and **every browser** via standards-based Web Push:
+
+    * **RFC 8030** — Generic Event Delivery Using HTTP Push (the transport:
+      `TTL`, `Urgency`, `Topic`, 201/404/410 semantics)
+    * **RFC 8291** — Message Encryption for Web Push (`aes128gcm`, RFC 8188
+      content coding; PushX reproduces the RFC's test vectors exactly)
+    * **RFC 8292** — VAPID (Voluntary Application Server Identification; ES256
+      JWTs signed with your application-server key)
+
+  See `PushX.WebPush` for the compliance notes (what is implemented, what is
+  optional and omitted).
 
   ## Features
 
     * HTTP/2 connections via Finch (Mint-based)
     * JWT authentication for APNS with automatic caching
     * OAuth2 authentication for FCM via Goth
+    * VAPID + RFC 8291 encryption for Web Push, keys generated with `mix pushx.vapid`
     * Unified API with direct provider access
     * Structured response handling
     * Batch sending with configurable concurrency
     * Token validation
     * Client-side rate limiting
+    * Test delivery mode (`PushX.Test`)
 
   ## Quick Start
 

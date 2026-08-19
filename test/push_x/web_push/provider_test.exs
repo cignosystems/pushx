@@ -324,9 +324,10 @@ defmodule PushX.WebPush.ProviderTest do
                WebPush.send_once(good, "x")
     end
 
-    test "a VAPID key that is configured but unusable is an auth_error at send time", %{
-      bypass: bypass
-    } do
+    test "a VAPID key or subject that is configured but unusable is an auth_error at send time",
+         %{
+           bypass: bypass
+         } do
       {sub, _, _} = browser_subscription(bypass)
       Application.put_env(:pushx, :webpush_vapid_private_key, "not-a-key")
 
@@ -334,6 +335,23 @@ defmodule PushX.WebPush.ProviderTest do
                WebPush.send_once(sub, "x")
 
       assert reason =~ "base64url"
+
+      # RFC 8292 §2.1: sub must be mailto: or https:
+      Application.put_env(:pushx, :webpush_vapid_private_key, VAPID.generate().private_key)
+      Application.put_env(:pushx, :webpush_vapid_subject, "ops@example.com")
+
+      assert {:error, %Response{status: :auth_error, reason: reason}} =
+               WebPush.send_once(sub, "x")
+
+      assert reason =~ "mailto: or https:"
+
+      assert {:error, {:invalid_vapid_key, reason}} =
+               PushX.Instance.start(:bad_subject, :webpush,
+                 vapid_subject: "http://insecure",
+                 vapid_private_key: VAPID.generate().private_key
+               )
+
+      assert reason =~ "mailto: or https:"
     end
 
     test "not configured → :not_configured (never retried)", %{bypass: bypass} do
@@ -401,8 +419,7 @@ defmodule PushX.WebPush.ProviderTest do
       {:ok, :tenant_web} =
         PushX.Instance.start(:tenant_web, :webpush,
           vapid_subject: "mailto:tenant@example.com",
-          vapid_private_key: tenant.private_key,
-          connect_timeout: 1
+          vapid_private_key: tenant.private_key
         )
 
       on_exit(fn ->
@@ -465,11 +482,7 @@ defmodule PushX.WebPush.ProviderTest do
                  Loader.load(
                    instances: [
                      {:loader_web, :webpush,
-                      [
-                        vapid_subject: "mailto:a@b",
-                        vapid_private_key: tenant.private_key,
-                        connect_timeout: 1
-                      ]}
+                      [vapid_subject: "mailto:a@b", vapid_private_key: tenant.private_key]}
                    ]
                  )
       end)

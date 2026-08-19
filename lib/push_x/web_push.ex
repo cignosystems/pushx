@@ -69,6 +69,36 @@ defmodule PushX.WebPush do
   Multi-tenant: `PushX.Instance.start(name, :webpush, vapid_subject: ..., vapid_private_key: ...)`
   gives each tenant its own VAPID identity. Test delivery mode records the
   plaintext payload and never encrypts or contacts a push service.
+
+  ## Standards compliance
+
+  Implemented (the mandatory application-server side of each RFC):
+
+    * **RFC 8030 (transport)** — `POST` to the push resource over TLS; `TTL`
+      always sent (required); `Urgency` (`very-low | low | normal | high`) and
+      `Topic` (≤ 32 URL-safe base64 characters) when given; `201 Created`
+      with `Location` is success; `404`/`410` mean the subscription is gone;
+      `413`, `429` + `Retry-After`, `5xx` mapped. Plain `http` endpoints are
+      accepted only so a local push-service stub can be used in tests.
+    * **RFC 8291 (encryption) / RFC 8188 (`aes128gcm`)** — ECDH P-256 with a
+      fresh ephemeral key pair and a fresh 16-byte salt per message, HKDF-SHA-256
+      with the subscription's `auth` secret, `"WebPush: info"` key info, CEK/nonce
+      derivation, single 4096-byte record with the `0x02` delimiter, GCM tag.
+      The implementation reproduces RFC 8291 Appendix A bit-for-bit (see the
+      encryption tests).
+    * **RFC 8292 (VAPID)** — ES256 JWT with `aud` = push-service origin, `exp`
+      12 h ahead (the RFC allows up to 24 h), `sub` = your `mailto:`/`https:`
+      contact; sent as `Authorization: vapid t=<jwt>, k=<public key>` with the
+      same key that signed. JWTs are cached per origin and re-signed once when a
+      push service answers 401/403.
+
+  Optional parts of the RFCs that are **not** implemented: multi-record
+  encryption and padding (RFC 8188 allows records > 4096 bytes; push services
+  are only required to accept 4096, so PushX limits plaintext to
+  #{PushX.WebPush.Encryption.max_plaintext()} bytes instead), push-message
+  receipts and `Prefer: respond-async` (RFC 8030 §5.1, rarely supported by
+  push services), and HTTP/2 to push services (HTTP/1.1 is used, which RFC
+  8030 permits for application servers).
   """
 
   require Logger
@@ -312,7 +342,11 @@ defmodule PushX.WebPush do
          )}
   end
 
-  defp vapid_keys(%{vapid: {public, private}}), do: VAPID.resolve_keys(public, private)
+  defp vapid_keys(%{vapid: {public, private}, subject: subject}) do
+    with :ok <- VAPID.validate_subject(subject) do
+      VAPID.resolve_keys(public, private)
+    end
+  end
 
   @doc false
   def build_body(%Message{} = message),
