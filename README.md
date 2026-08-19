@@ -444,8 +444,9 @@ config :pushx,
   fcm_credentials: {:file, "priv/keys/firebase.json"},
 
   # === HTTP/2 Pool (tune for your traffic level) ===
-  finch_pool_count: 2,         # HTTP/2 connections per origin (default: 2)
-  finch_pool_count: 1,         # number of pools (default: 2)
+  finch_pool_count: 2,         # HTTP/2 connections per origin (default: 2; never 1 in prod)
+  # finch_pool_size does NOT apply to APNS/FCM (HTTP/2) — it only sizes the HTTP/1 pool (Web Push)
+  finch_http2_ping_interval: 60_000,   # HTTP/2 PING keepalive after 60 s idle (default)
 
   # === Timeouts ===
   receive_timeout: 15_000,     # wait for response data (default: 15s)
@@ -1158,6 +1159,20 @@ All checks passed.
 ```
 
 PushX logs this distinctly from a network failure. It means every HTTP/2 stream on the pool's connections is busy — typically either a **retry burst converging on a freshly reconnected connection** (a pool with `finch_pool_count: 1` is especially prone) or genuine overload. It is retried with backoff (jittered, so a burst spreads out).
+
+A canonical real-world trace (pushx 0.12, Fly.io, `finch_pool_count: 1`, 12 minutes idle before a 3-token push) shows the two problems chained — an idle-dead socket, then the retry burst saturating the single fresh connection:
+
+```
+[PushX.APNS] Connection error: %Finch.Error{reason: :timeout}
+[PushX.APNS] Connection error: %Finch.Error{reason: :connection_process_went_down}
+[PushX.Retry] Attempt 1/3 failed for apns (connection_error), retrying in 960ms
+[PushX] Reconnected HTTP pools (stale connections discarded)
+[PushX.APNS] Connection error: %Finch.HTTPError{reason: :too_many_concurrent_requests, module: Mint.HTTP2}
+[PushX.Retry] Attempt 2/3 failed for apns (connection_error), retrying in 2007ms
+[Push] Sent to ios x3
+```
+
+Delivered, but ~2 s late and two attempts burned. With `finch_pool_count: 2+` and the default PING keepalive, neither line appears: the idle socket is kept alive (or detected dead before the send), and a retry burst has several connections to land on.
 
 **Fix:** raise `finch_pool_count` (HTTP/2 connections per origin; `finch_pool_size` does nothing for HTTP/2) and/or lower batch `:concurrency`; enable rate limiting for sustained volume:
 ```elixir
