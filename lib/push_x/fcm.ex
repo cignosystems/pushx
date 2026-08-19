@@ -426,14 +426,36 @@ defmodule PushX.FCM do
         {:ok, zip_topic_results(tokens, resp_body)}
 
       {:ok, %{status: status, headers: resp_headers, body: resp_body}} ->
-        {:error, response} = handle_error_response(status, resp_body, resp_headers)
-        {:error, response}
+        topic_error_response(status, resp_body, resp_headers)
 
       {:error, reason} ->
         Logger.error("[PushX.FCM] Topic #{action} connection error: #{inspect(reason)}")
         {:error, Response.error(:fcm, :connection_error, inspect(reason))}
     end
   end
+
+  # The Instance ID API reports request-level errors as {"error": "InvalidToken"}
+  # (a bare string) rather than FCM v1's {"error": {"status": ...}} envelope;
+  # map those by HTTP status and keep Google's string as the reason. Anything
+  # else goes through the FCM v1 parser.
+  defp topic_error_response(status, body, headers) do
+    case JSON.decode(body) do
+      {:ok, %{"error" => reason}} when is_binary(reason) ->
+        Logger.warning("[PushX.FCM] Topic request failed #{status}: #{reason}")
+
+        {:error,
+         Response.error(:fcm, iid_status(status), reason, body, HTTP.parse_retry_after(headers))}
+
+      _ ->
+        {:error, response} = handle_error_response(status, body, headers)
+        {:error, response}
+    end
+  end
+
+  defp iid_status(status) when status in [401, 403], do: :auth_error
+  defp iid_status(429), do: :rate_limited
+  defp iid_status(status) when status >= 500, do: :server_error
+  defp iid_status(_), do: :invalid_request
 
   # {"results": [{}, {"error": "NOT_FOUND"}, ...]} — one entry per token, in order.
   defp zip_topic_results(tokens, resp_body) do

@@ -681,6 +681,26 @@ defmodule PushX.FCMTest do
       assert {:error, %Response{provider: :fcm, reason: "bad token"}} =
                FCM.subscribe(["t1"], "news")
 
+      # Instance ID API style: bare string error, mapped by HTTP status.
+      Bypass.expect_once(bypass, "POST", "/iid/v1:batchAdd", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(400, ~s({"error": "InvalidToken"}))
+      end)
+
+      assert {:error, %Response{status: :invalid_request, reason: "InvalidToken"}} =
+               FCM.subscribe(["t1"], "news")
+
+      Bypass.expect_once(bypass, "POST", "/iid/v1:batchAdd", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.put_resp_header("retry-after", "5")
+        |> Plug.Conn.resp(429, ~s({"error": "TooManyRequests"}))
+      end)
+
+      assert {:error, %Response{status: :rate_limited, retry_after: 5}} =
+               FCM.subscribe(["t1"], "news")
+
       Bypass.down(bypass)
       assert {:error, %Response{status: :connection_error}} = FCM.subscribe(["t1"], "news")
     end
