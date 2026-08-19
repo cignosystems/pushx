@@ -1047,6 +1047,25 @@ defmodule PushX.FCMTest do
              }
     end
 
+    test "atom-keyed :apns / :android overrides merge correctly with Message-derived maps" do
+      message = PushX.Message.new("T", "B") |> PushX.Message.mutable_content()
+
+      %{"message" => built} =
+        FCM.build_message("tok", message,
+          apns: %{payload: %{aps: %{sound: "default"}}, headers: %{"apns-priority": "5"}},
+          android: %{notification: %{channel_id: "orders"}}
+        )
+
+      assert built["apns"] == %{
+               "payload" => %{"aps" => %{"mutable-content" => 1, "sound" => "default"}},
+               "headers" => %{"apns-priority" => "5"}
+             }
+
+      assert built["android"] == %{"notification" => %{"channel_id" => "orders"}}
+      # Exactly one key of each name on the wire.
+      refute JSON.encode!(built) =~ ~r/"payload".*"payload"/
+    end
+
     test "no android block when nothing is set" do
       %{"message" => built} = FCM.build_message("tok", PushX.Message.new("T", "B"), [])
       refute Map.has_key?(built, "android")

@@ -368,9 +368,16 @@ defmodule PushX.FCM do
   # One chunk (<= 1000 tokens) under the caller's retry policy; halts the
   # reduce on a request-level failure so the error covers the whole batch.
   defp topic_chunk(action, chunk, topic, opts, ctx, {:ok, acc}) do
-    case Retry.maybe_with_retry(:fcm, opts, fn ->
-           topic_request(action, chunk, topic, opts, ctx)
-         end) do
+    # ctx.retry_opts carries the pool's own reconnect function for instances,
+    # so a connection error restarts *that* pool rather than the static one.
+    retry_opts = Map.get(ctx, :retry_opts, [])
+
+    case Retry.maybe_with_retry(
+           :fcm,
+           opts,
+           fn -> topic_request(action, chunk, topic, opts, ctx) end,
+           retry_opts
+         ) do
       {:ok, results} -> {:cont, {:ok, acc ++ results}}
       {:error, %Response{}} = error -> {:halt, error}
     end
@@ -792,8 +799,11 @@ defmodule PushX.FCM do
      )}
   end
 
+  # Caller overrides may use atom keys (they used to pass straight through to
+  # the JSON encoder); the derived maps are string-keyed, so normalise before
+  # merging or both "payload" and :payload would end up in the JSON.
   defp merge_android(%Message{} = message, opts_android) do
-    case {Message.to_fcm_android(message), opts_android} do
+    case {Message.to_fcm_android(message), HTTP.stringify_keys(opts_android)} do
       {nil, opts_map} -> opts_map
       {msg_map, nil} -> msg_map
       {msg_map, opts_map} -> deep_merge(msg_map, opts_map)
@@ -804,7 +814,7 @@ defmodule PushX.FCM do
   # `:apns` option: explicit keys win, nested maps are merged so a caller's
   # `apns: %{"headers" => ...}` doesn't wipe the payload block and vice versa.
   defp merge_apns(%Message{} = message, opts_apns) do
-    case {Message.to_fcm_apns(message), opts_apns} do
+    case {Message.to_fcm_apns(message), HTTP.stringify_keys(opts_apns)} do
       {nil, opts_map} -> opts_map
       {msg_map, nil} -> msg_map
       {msg_map, opts_map} -> deep_merge(msg_map, opts_map)

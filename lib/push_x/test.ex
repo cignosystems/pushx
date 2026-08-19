@@ -17,7 +17,9 @@ defmodule PushX.Test do
   Recorded pushes are scoped to the **test process**: a test only sees the
   pushes made by itself and by processes it started (`Task`, `Task.Supervisor`
   children including `push_batch/4` workers, and anything else that carries
-  `$callers`), so `async: true` tests do not interfere.
+  `$callers`), so `async: true` tests do not interfere. Records are deleted
+  automatically when the test process exits, so memory stays bounded and no
+  `clear/0` between tests is needed.
 
   ## Asserting
 
@@ -63,7 +65,8 @@ defmodule PushX.Test do
   ## Named instances in tests
 
   `PushX.Instance.start/3` validates credentials before starting, so use the
-  throwaway-key helpers rather than committing keys:
+  throwaway-key helpers rather than committing keys. In test delivery mode
+  no Goth process is started for FCM instances (nothing contacts Google):
 
       PushX.Instance.start(:tenant_apns, :apns,
         key_id: "TEST", team_id: "TEST", private_key: PushX.Test.apns_private_key(), mode: :sandbox)
@@ -81,6 +84,7 @@ defmodule PushX.Test do
   """
 
   alias PushX.{Config, Response, Telemetry}
+  alias PushX.Test.Store
 
   @pushes_table :pushx_test_pushes
   @stubs_table :pushx_test_stubs
@@ -113,16 +117,6 @@ defmodule PushX.Test do
     defstruct [:provider, :target, :payload, :opts, :instance, :result, :id, :sent_at]
   end
 
-  @doc false
-  # Called from PushX.Application: the tables are cheap and always exist so
-  # test mode can be switched on at runtime (Application.put_env) as well as
-  # in config.
-  def init_tables do
-    :ets.new(@pushes_table, [:named_table, :public, :ordered_set])
-    :ets.new(@stubs_table, [:named_table, :public, :set])
-    :ok
-  end
-
   @doc "True when `delivery: :test` is configured."
   @spec active?() :: boolean()
   def active?, do: Config.delivery() == :test
@@ -151,10 +145,7 @@ defmodule PushX.Test do
   """
   @spec clear() :: :ok
   def clear do
-    owner = owner()
-    :ets.match_delete(@pushes_table, {{owner, :_}, :_})
-    :ets.delete(@stubs_table, owner)
-    :ok
+    Store.purge(owner())
   end
 
   @doc """
@@ -178,7 +169,9 @@ defmodule PushX.Test do
   end
 
   def stub(fun) when is_function(fun, 1) do
-    :ets.insert(@stubs_table, {owner(), fun})
+    owner = owner()
+    Store.track(owner)
+    :ets.insert(@stubs_table, {owner, fun})
     :ok
   end
 
@@ -207,7 +200,9 @@ defmodule PushX.Test do
 
     result = stubbed_result(push, Response.success(provider, id))
     push = %{push | result: result}
-    :ets.insert(@pushes_table, {{owner(), seq}, push})
+    owner = owner()
+    Store.track(owner)
+    :ets.insert(@pushes_table, {{owner, seq}, push})
 
     case result do
       {:ok, response} -> Telemetry.stop(provider, target, start_time, response)

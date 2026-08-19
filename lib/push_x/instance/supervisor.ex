@@ -47,7 +47,10 @@ defmodule PushX.Instance.Supervisor do
     {Finch,
      name: finch_name,
      pools: %{
-       PushX.URLs.fcm_origin() => http2_pool_opts(config)
+       PushX.URLs.fcm_origin() => http2_pool_opts(config),
+       # Instance ID API (topic subscription management) — same sizing and
+       # transport options as the send pool, so instance settings apply.
+       PushX.URLs.fcm_iid_origin() => http2_pool_opts(config)
      }}
   end
 
@@ -57,7 +60,10 @@ defmodule PushX.Instance.Supervisor do
     # is started for it. The *global* :fcm_token_fetcher is deliberately not
     # consulted: it belongs to the static configuration, and an instance's
     # credentials are its own.
-    if Keyword.get(config, :token_fetcher) do
+    # In test delivery mode (PushX.Test) nothing contacts the providers, so no
+    # Goth either — it would try to exchange the (throwaway) credentials with
+    # Google's OAuth endpoint on start.
+    if Keyword.get(config, :token_fetcher) || PushX.Test.active?() do
       children
     else
       children ++ [{Goth, name: goth_name, source: goth_source(config)}]

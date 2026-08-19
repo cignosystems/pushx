@@ -20,6 +20,12 @@ defmodule PushX.SendGate do
   """
   @spec check(atom(), :apns | :fcm) :: :ok | {:error, Response.t()}
   def check(key, provider) do
+    # Test delivery mode (PushX.Test) never touches the breaker/limiter: a
+    # stubbed failure must not open the global breaker for other tests.
+    if PushX.Test.active?(), do: :ok, else: do_check(key, provider)
+  end
+
+  defp do_check(key, provider) do
     with :ok <- CircuitBreaker.allow?(key),
          :ok <- RateLimiter.check_and_increment(key, provider) do
       :ok
@@ -36,14 +42,18 @@ defmodule PushX.SendGate do
   Feeds a send result back into the circuit breaker for `key`.
   """
   @spec record(atom(), {:ok, Response.t()} | {:error, Response.t()} | term()) :: :ok
-  def record(key, {:error, %Response{status: status}})
-      when status in [:connection_error, :server_error] do
+  def record(key, result) do
+    if PushX.Test.active?(), do: :ok, else: do_record(key, result)
+  end
+
+  defp do_record(key, {:error, %Response{status: status}})
+       when status in [:connection_error, :server_error] do
     CircuitBreaker.record_failure(key)
   end
 
-  def record(key, {:ok, _response}) do
+  defp do_record(key, {:ok, _response}) do
     CircuitBreaker.record_success(key)
   end
 
-  def record(_key, _result), do: :ok
+  defp do_record(_key, _result), do: :ok
 end

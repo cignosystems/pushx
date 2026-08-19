@@ -71,7 +71,7 @@ defmodule PushX.Config do
 
     * `:rate_limit_enabled` - (default: `false`)
     * `:rate_limit_apns`, `:rate_limit_fcm` - max sends per window per
-      provider (default: `1_000`)
+      provider (default: `5_000`)
     * `:rate_limit_window_ms` - fixed window length (default: `1_000`)
 
     See `PushX.RateLimiter`.

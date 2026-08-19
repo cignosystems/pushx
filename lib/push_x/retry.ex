@@ -63,12 +63,15 @@ defmodule PushX.Retry do
           keyword()
         ) :: {:ok, Response.t()} | {:error, Response.t()}
   def maybe_with_retry(provider, send_opts, fun, retry_opts \\ []) do
-    # Test delivery mode (see PushX.Test): never sleep in a user's test suite
-    # because a stubbed response happened to be retryable.
-    policy = if PushX.Test.active?(), do: :test, else: Keyword.get(send_opts, :retry, :blocking)
+    # Validate the option first so a typo fails the same way in test delivery
+    # mode as in production; only then does test mode (PushX.Test) replace the
+    # policy with a single attempt — never sleep in a user's suite because a
+    # stubbed response happened to be retryable.
+    policy = Keyword.get(send_opts, :retry, :blocking)
+    test_mode? = policy in [:blocking, true, :none, false] and PushX.Test.active?()
 
     case policy do
-      :test ->
+      _valid when test_mode? ->
         fun.()
 
       blocking when blocking in [:blocking, true] ->

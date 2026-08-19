@@ -7,14 +7,14 @@ defmodule PushX.Application do
   def start(_type, _args) do
     # Initialize ETS table for named instances (fast reads on push path)
     :ets.new(:pushx_instances, [:named_table, :public, :set])
-    # Recorded pushes / stubs for `delivery: :test` (see PushX.Test); always
-    # present so test mode can also be enabled at runtime.
-    PushX.Test.init_tables()
 
     children =
       [
         # JWT cache (must start before any APNS sends)
         PushX.JWTCache,
+        # Tables for `delivery: :test` (PushX.Test); always present so test
+        # mode can also be enabled at runtime, bounded by owner monitoring.
+        PushX.Test.Store,
         # Dynamic supervisor for named instances
         {DynamicSupervisor, name: PushX.Instance.DynamicSupervisor, strategy: :one_for_one},
         # Rate limiter (always started, but only tracks when enabled)
@@ -71,6 +71,19 @@ defmodule PushX.Application do
                  keepalive: true,
                  # Explicit so a future refactor can't silently disable TLS peer
                  # verification (this is already Mint's default on OTP 25+).
+                 verify: :verify_peer
+               ]
+             ]
+           ],
+           # FCM Instance ID API (topic subscription management)
+           PushX.URLs.fcm_iid_origin() => [
+             size: PushX.Config.finch_pool_size(),
+             count: PushX.Config.finch_pool_count(),
+             protocols: [:http2],
+             conn_opts: [
+               transport_opts: [
+                 timeout: PushX.Config.connect_timeout(),
+                 keepalive: true,
                  verify: :verify_peer
                ]
              ]

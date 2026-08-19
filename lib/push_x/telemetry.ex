@@ -119,9 +119,12 @@ defmodule PushX.Telemetry do
       * `pushx.push.error.count` — failed sends, by `provider` and `status`
         (`:invalid_token`, `:rate_limited`, `:server_error`, ...)
       * `pushx.push.exception.count` — sends that raised, by `provider` and `kind`
-      * `pushx.push.duration` — send latency distribution in milliseconds
-        (successes and failures), by `provider`; buckets tuned for provider
-        round-trips (5 ms .. 10 s)
+      * `pushx.push.duration` — latency distribution of *successful* sends in
+        milliseconds, by `provider`; buckets tuned for provider round-trips
+        (5 ms .. 10 s)
+      * `pushx.push.error.duration` — latency distribution of *failed* sends
+        (timeouts and 5xx land here — alert on this one for provider
+        slowdowns), by `provider` and `status`; same buckets
       * `pushx.retry.attempt.count` — retry attempts, by `provider` and the
         `status` that triggered them
       * `pushx.retry.delay` — backoff delay distribution in milliseconds, by `provider`

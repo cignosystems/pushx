@@ -114,6 +114,17 @@ defmodule PushX.HTTP do
   def maybe_add_header(headers, _key, nil), do: headers
   def maybe_add_header(headers, key, value), do: [{key, to_string(value)} | headers]
 
+  @doc false
+  # Deeply converts map keys to strings (values untouched except nested
+  # maps); nil passes through. Used to normalise caller override blocks
+  # before merging them with string-keyed derived maps.
+  @spec stringify_keys(map() | nil) :: map() | nil
+  def stringify_keys(nil), do: nil
+
+  def stringify_keys(map) when is_map(map) do
+    Map.new(map, fn {k, v} -> {to_string(k), if(is_map(v), do: stringify_keys(v), else: v)} end)
+  end
+
   @doc """
   Converts a map's keys and values to strings, as required by FCM `data`.
 

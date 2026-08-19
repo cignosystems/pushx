@@ -321,6 +321,8 @@ defmodule PushX.Instance do
   @doc false
   # Called by PushX.subscribe/4 / unsubscribe/4 for named FCM instances.
   def manage_topic(%{provider: :fcm} = info, action, tokens, topic, opts) do
+    name = info.name
+
     PushX.FCM.manage_topic(action, tokens, topic, opts, %{
       goth_name: info.goth_name,
       token_fetcher: Keyword.get(info.config, :token_fetcher),
@@ -328,7 +330,9 @@ defmodule PushX.Instance do
       request_opts: [
         receive_timeout: Keyword.get(info.config, :receive_timeout, 15_000),
         pool_timeout: Keyword.get(info.config, :pool_timeout, 5_000)
-      ]
+      ],
+      # A connection error must restart *this* instance's pool, not the static one.
+      retry_opts: [reconnect_fn: fn -> reconnect(name) end, reconnect_key: name]
     })
   end
 

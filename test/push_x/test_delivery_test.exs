@@ -265,6 +265,91 @@ defmodule PushX.TestDeliveryTest do
       assert_pushed(%{target: "from-sup"})
     end
 
+    test "records and stubs are deleted automatically when the owner process exits" do
+      parent = self()
+
+      pid =
+        spawn(fn ->
+          PushX.push(:apns, "ephemeral", "Hi", topic: "t")
+          Test.stub(fn _ -> :ok end)
+          send(parent, :recorded)
+
+          receive do
+            :exit -> :ok
+          end
+        end)
+
+      assert_receive :recorded
+      assert :ets.select_count(:pushx_test_pushes, [{{{pid, :_}, :_}, [], [true]}]) == 1
+      assert :ets.member(:pushx_test_stubs, pid)
+
+      ref = Process.monitor(pid)
+      send(pid, :exit)
+      assert_receive {:DOWN, ^ref, _, _, _}
+      # The store purges on :DOWN; give its mailbox a moment.
+      Process.sleep(20)
+
+      assert :ets.select_count(:pushx_test_pushes, [{{{pid, :_}, :_}, [], [true]}]) == 0
+      refute :ets.member(:pushx_test_stubs, pid)
+    end
+
+    test "the breaker and rate limiter are not consulted or fed in test mode" do
+      Application.put_env(:pushx, :circuit_breaker_enabled, true)
+      Application.put_env(:pushx, :circuit_breaker_threshold, 1)
+      Application.put_env(:pushx, :rate_limit_enabled, true)
+      Application.put_env(:pushx, :rate_limit_apns, 1)
+
+      on_exit(fn ->
+        for k <- [
+              :circuit_breaker_enabled,
+              :circuit_breaker_threshold,
+              :rate_limit_enabled,
+              :rate_limit_apns
+            ],
+            do: Application.delete_env(:pushx, k)
+
+        PushX.CircuitBreaker.reset(:apns)
+        PushX.RateLimiter.reset(:apns)
+      end)
+
+      Test.stub(fn _ -> {:error, :server_error} end)
+      for _ <- 1..3, do: PushX.push(:apns, "tok", "Hi", topic: "t")
+
+      # Three stubbed server errors would have opened a threshold-1 breaker,
+      # and the third send would have been rate limited at limit 1 — neither
+      # happened, and every send was recorded.
+      assert PushX.CircuitBreaker.state(:apns) == :closed
+      assert length(Test.pushes()) == 3
+
+      assert Enum.all?(
+               Test.pushes(),
+               &match?(%{result: {:error, %Response{status: :server_error}}}, &1)
+             )
+    end
+
+    test "an invalid :retry option fails in test mode exactly as in production" do
+      assert {:error, %Response{status: :invalid_request, reason: reason}} =
+               PushX.push(:apns, "tok", "Hi", topic: "t", retry: :never)
+
+      assert reason =~ ":retry"
+      assert_no_pushes()
+    end
+
+    test "FCM instances start no Goth process in test mode even without a token fetcher" do
+      {:ok, _} =
+        PushX.Instance.start(:tenant_fcm_plain, :fcm,
+          project_id: "tenant",
+          credentials: Test.fcm_credentials(),
+          connect_timeout: 1
+        )
+
+      on_exit(fn -> PushX.Instance.stop(:tenant_fcm_plain) end)
+
+      assert Process.whereis(:"PushX.Goth.tenant_fcm_plain") == nil
+      assert {:ok, %Response{status: :sent}} = PushX.push(:tenant_fcm_plain, "tok", "Hi")
+      assert {:ok, [{"tok", :ok}]} = PushX.subscribe(:tenant_fcm_plain, ["tok"], "news")
+    end
+
     test "clear/0 forgets this process's pushes and stub only" do
       PushX.push(:apns, "a", "Hi", topic: "t")
       Test.stub(fn _ -> {:error, :server_error} end)

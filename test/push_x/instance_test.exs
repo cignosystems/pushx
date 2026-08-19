@@ -793,6 +793,36 @@ defmodule PushX.InstanceTest do
       assert reason =~ "device tokens only"
     end
 
+    test "a topic-request connection error reconnects the instance's own pool, not the static one",
+         %{
+           bypass: bypass
+         } do
+      # Retries on with a tiny delay so the first connection error triggers
+      # the (coalesced) reconnect of *this* instance's pool.
+      Application.put_env(:pushx, :retry_enabled, true)
+      Application.put_env(:pushx, :retry_max_attempts, 2)
+      Application.put_env(:pushx, :retry_base_delay_ms, 1)
+      Application.put_env(:pushx, :retry_max_delay_ms, 1)
+
+      on_exit(fn ->
+        for k <- [:retry_max_attempts, :retry_base_delay_ms, :retry_max_delay_ms],
+            do: Application.delete_env(:pushx, k)
+      end)
+
+      {:ok, info} = PushX.Instance.resolve(:fcm_send)
+      instance_pool_before = Process.whereis(info.finch_name)
+      static_pool_before = Process.whereis(PushX.Config.finch_name())
+      PushX.ReconnectGuard.reset()
+
+      Bypass.down(bypass)
+
+      assert {:error, %Response{status: :connection_error}} =
+               PushX.subscribe(:fcm_send, ["t1"], "news")
+
+      assert Process.whereis(info.finch_name) != instance_pool_before
+      assert Process.whereis(PushX.Config.finch_name()) == static_pool_before
+    end
+
     test "topic subscriptions go through the instance's OAuth and pool", %{bypass: bypass} do
       Bypass.expect_once(bypass, "POST", "/iid/v1:batchAdd", fn conn ->
         {:ok, body, conn} = Plug.Conn.read_body(conn)
