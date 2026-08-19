@@ -10,13 +10,13 @@ model and the mistakes agents most often make.
 ## What PushX is
 
 A single hex package (`{:pushx, "~> 0.14"}`) that sends push notifications to
-**Apple APNS** and **Google FCM** over HTTP/2 — with JWT/OAuth handled
-automatically. Concretely, what's in the box:
+**Apple APNS**, **Google FCM** and **browsers via standards-based Web Push**
+(VAPID + RFC 8291 encryption) — with JWT/OAuth/VAPID handled automatically. Concretely, what's in the box:
 
 | Layer | Module | Purpose |
 |-------|--------|---------|
 | Unified API | `PushX` | One call sends to either provider |
-| Provider APIs | `PushX.APNS`, `PushX.FCM` | Direct provider access for full control |
+| Provider APIs | `PushX.APNS`, `PushX.FCM`, `PushX.WebPush` | Direct provider access for full control |
 | Message builder | `PushX.Message` | Fluent struct for cross-provider payloads |
 | Result | `PushX.Response` | Normalized result with semantic `:status` |
 | Multi-tenant | `PushX.Instance` | Named runtime instances with their own credentials |
@@ -31,7 +31,7 @@ anything to your application's supervision tree.
 
 ```
 single set of credentials in config?
-├── yes → PushX.push(:apns | :fcm, token, msg, opts)
+├── yes → PushX.push(:apns | :fcm | :webpush, token_or_subscription, msg, opts)
 │            └── many tokens at once?  → PushX.push_batch/4 (list) or
 │            │                            PushX.push_batch_stream/4 (lazy; big audiences)
 │            └── only need :ok / :error? → PushX.push!/4
@@ -41,6 +41,7 @@ single set of credentials in config?
 │            │     manage subscriptions   → PushX.subscribe/4, PushX.unsubscribe/4
 │            └── verify a token, no send?  → PushX.push(:fcm, token, msg, validate_only: true)
 │            └── must not block on backoff? → add retry: :none to any call
+│            └── browser (any)?            → PushX.push(:webpush, subscription, msg) [VAPID config]
 └── no — multiple tenants / per-customer credentials at runtime
          → PushX.Instance.start(name, :apns | :fcm, config)
            then PushX.push(name, token, msg, opts)
@@ -169,7 +170,20 @@ PushX.Instance.reconfigure(:tenant_42_apns, private_key: new_pem)
 Reserved instance names: `:apns` and `:fcm` (those resolve to the default
 config-based pools — don't use as instance names).
 
-### Web push (Safari = APNS, Chrome/Firefox/Edge = FCM)
+### Web push
+
+Prefer standards-based Web Push for every browser (Chrome, Firefox, Edge,
+Safari 16+): the target is the browser's subscription map, auth is VAPID
+(`webpush_vapid_*` config, `mix pushx.vapid` to generate keys):
+
+```elixir
+PushX.push(:webpush, subscription, %{title: "Hi", body: "There"}, ttl: 3600)
+# 404/410 → :unregistered → :on_invalid_token receives the subscription map
+```
+
+Only use the two below for apps *already* on the Firebase JS SDK or
+legacy Safari website push:
+
 
 ```elixir
 # Safari (APNS web push)
@@ -219,8 +233,13 @@ not the iOS bundle ID.
   newlines often arrive as literal `\n`. Either set the env to the file
   contents directly (`export APNS_PRIVATE_KEY="$(cat AuthKey.p8)"`) or use
   the `{:file, "priv/keys/AuthKey.p8"}` tuple form.
-- **Web-push topic = bundle ID.** Safari web push needs the *website push
+- **Web-push topic = bundle ID.** Legacy Safari web push needs the *website push
   ID* (`web.com.example.app`), not the iOS bundle (`com.example.app`).
+- **Treating a Web Push subscription like a token string.** The `:webpush`
+  target is the *whole subscription map* (`endpoint` + `keys`), and the
+  cleanup callback receives that map back. Don't extract the endpoint.
+- **Rotating the VAPID private key** invalidates every existing browser
+  subscription — it's not like rotating an APNS key.
 - **Restarting your supervision tree to "fix" stale HTTP/2 connections.**
   Just call `PushX.reconnect/0` — it terminates the Finch pool and lets the
   PushX supervisor start a fresh one. This is also called automatically by

@@ -76,11 +76,16 @@ defmodule PushX do
 
   alias PushX.{APNS, CircuitBreaker, Config, FCM, Message, RateLimiter, Response, Token}
 
-  @type provider :: :apns | :fcm
+  @type provider :: :apns | :fcm | :webpush
   @type instance_name :: atom()
   @type token :: String.t()
-  @typedoc "A device token, or for FCM also `{:topic, name}` / `{:condition, expr}` — see `t:PushX.FCM.target/0`."
-  @type target :: token() | {:topic, String.t()} | {:condition, String.t()}
+  @typedoc """
+  A device token; for FCM also `{:topic, name}` / `{:condition, expr}` (see
+  `t:PushX.FCM.target/0`); for Web Push the browser's subscription map (see
+  `t:PushX.WebPush.subscription/0`).
+  """
+  @type target ::
+          token() | {:topic, String.t()} | {:condition, String.t()} | PushX.WebPush.subscription()
   @type message :: String.t() | map() | Message.t()
   @type option :: APNS.option() | FCM.option()
 
@@ -89,11 +94,12 @@ defmodule PushX do
 
   ## Arguments
 
-    * `provider` - `:apns` for iOS or `:fcm` for Android
+    * `provider` - `:apns` for iOS, `:fcm` for Android, `:webpush` for browsers
     * `device_token` - The device's push token. For FCM this may also be a
       topic (`{:topic, "news"}`) or a condition
       (`{:condition, "'news' in topics && 'sports' in topics"}`) — see
-      `t:PushX.FCM.target/0`.
+      `t:PushX.FCM.target/0`. For Web Push it is the browser's subscription
+      map — see `t:PushX.WebPush.subscription/0`.
     * `message` - A string, map, or `PushX.Message` struct
     * `opts` - Provider-specific options
 
@@ -119,6 +125,11 @@ defmodule PushX do
       over what a `PushX.Message` derives (see `PushX.FCM.send/3`)
     * `:validate_only` - dry run: FCM validates without delivering (see `PushX.FCM.send/3`)
 
+  ### Web Push Options
+
+    * `:ttl`, `:urgency`, `:topic` - see `PushX.WebPush` (how long the push
+      service holds the message, power hint, collapse key)
+
   ### Common options
 
     * `:receive_timeout`, `:pool_timeout` - per-call overrides of the config
@@ -137,6 +148,9 @@ defmodule PushX do
 
       # Map with title and body
       PushX.push(:fcm, token, %{title: "Alert", body: "Something happened"})
+
+      # Web Push: the browser's subscription object is the target
+      PushX.push(:webpush, subscription, %{title: "Hi", body: "From the server"})
 
       # FCM topic / condition instead of a device token
       PushX.push(:fcm, {:topic, "news"}, "Breaking news")
@@ -172,13 +186,14 @@ defmodule PushX do
           {:ok, Response.t()} | {:error, Response.t()}
   def push(provider, device_token, message, opts \\ [])
 
-  def push(provider, device_token, message, opts) when provider in [:apns, :fcm] do
+  def push(provider, device_token, message, opts) when provider in [:apns, :fcm, :webpush] do
     payload = normalize_payload(message, provider)
 
     result =
       case provider do
         :apns -> APNS.send(device_token, payload, opts)
         :fcm -> FCM.send(device_token, payload, opts)
+        :webpush -> PushX.WebPush.send(device_token, payload, opts)
       end
 
     maybe_notify_invalid_token(provider, device_token, result)
@@ -214,9 +229,10 @@ defmodule PushX do
 
   ## Arguments
 
-    * `provider` - `:fcm` or a named instance atom
-    * `device_token` - The device's push token
-    * `data` - A map of key-value data (values will be stringified)
+    * `provider` - `:fcm`, `:webpush`, or a named instance atom
+    * `device_token` - The device's push token (for Web Push: the subscription map)
+    * `data` - A map of key-value data (values are stringified for FCM; sent as
+      JSON as-is for Web Push, where the payload is whatever your service worker reads)
     * `opts` - Provider-specific options
 
   ## Examples
@@ -244,6 +260,14 @@ defmodule PushX do
   def push_data(:fcm, device_token, data, opts) do
     result = FCM.send_data(device_token, data, opts)
     maybe_notify_invalid_token(:fcm, device_token, result)
+    result
+  end
+
+  # Web Push has no notification/data split: the payload *is* data for your
+  # service worker, so send the map as-is.
+  def push_data(:webpush, subscription, data, opts) do
+    result = PushX.WebPush.send(subscription, data, opts)
+    maybe_notify_invalid_token(:webpush, subscription, result)
     result
   end
 
@@ -487,7 +511,7 @@ defmodule PushX do
     )
   end
 
-  defp response_provider(provider) when provider in [:apns, :fcm], do: provider
+  defp response_provider(provider) when provider in [:apns, :fcm, :webpush], do: provider
   defp response_provider(_instance_name), do: :unknown
 
   @doc """
@@ -568,6 +592,7 @@ defmodule PushX do
       #=> %{
       #=>   apns: %{configured: true, circuit: :closed},
       #=>   fcm: %{configured: true, circuit: :closed},
+      #=>   webpush: %{configured: false, circuit: :closed},
       #=>   instances: %{
       #=>     tenant_42_apns: %{provider: :apns, enabled: true, circuit: :closed},
       #=>     tenant_7_fcm: %{provider: :fcm, enabled: false, circuit: :open}
@@ -575,7 +600,12 @@ defmodule PushX do
       #=> }
 
   """
-  @spec health_check() :: %{apns: map(), fcm: map(), instances: %{atom() => map()}}
+  @spec health_check() :: %{
+          apns: map(),
+          fcm: map(),
+          webpush: map(),
+          instances: %{atom() => map()}
+        }
   def health_check do
     instances =
       Map.new(PushX.Instance.list(), fn %{name: name, provider: provider, enabled: enabled} ->
@@ -585,6 +615,10 @@ defmodule PushX do
     %{
       apns: %{configured: Config.apns_configured?(), circuit: CircuitBreaker.state(:apns)},
       fcm: %{configured: Config.fcm_configured?(), circuit: CircuitBreaker.state(:fcm)},
+      webpush: %{
+        configured: Config.webpush_configured?(),
+        circuit: CircuitBreaker.state(:webpush)
+      },
       instances: instances
     }
   end
@@ -630,8 +664,10 @@ defmodule PushX do
 
   # Private functions
 
+  # `token` is the device token, or for Web Push the subscription map — the
+  # callback receives whichever the caller passed, i.e. what they stored.
   defp maybe_notify_invalid_token(provider, token, {:error, %Response{} = response})
-       when is_binary(token) do
+       when is_binary(token) or is_map(token) do
     if Response.should_remove_token?(response) do
       case Config.on_invalid_token() do
         {mod, fun, args} ->

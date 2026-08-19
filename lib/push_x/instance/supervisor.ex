@@ -43,6 +43,26 @@ defmodule PushX.Instance.Supervisor do
      }}
   end
 
+  defp finch_child(:webpush, config, finch_name) do
+    # Push service endpoints are per-subscription (Google, Mozilla, Apple,
+    # Microsoft, ...), so there is no fixed origin to pool for: one HTTP/1.1
+    # default pool sized by the instance config serves them all.
+    {Finch,
+     name: finch_name,
+     pools: %{
+       default: [
+         size: Keyword.get(config, :pool_size, 2),
+         count: Keyword.get(config, :pool_count, 1),
+         conn_opts: [
+           transport_opts: [
+             timeout: Keyword.get(config, :connect_timeout, 10_000),
+             verify: :verify_peer
+           ]
+         ]
+       ]
+     }}
+  end
+
   defp finch_child(:fcm, config, finch_name) do
     {Finch,
      name: finch_name,

@@ -51,7 +51,7 @@ defmodule PushX.Instance.Loader do
 
   require Logger
 
-  @type spec :: {atom(), :apns | :fcm, keyword()}
+  @type spec :: {atom(), :apns | :fcm | :webpush, keyword()}
   @type result :: %{
           started: [atom()],
           already_running: [atom()],
@@ -101,7 +101,7 @@ defmodule PushX.Instance.Loader do
     result =
       Enum.reduce(specs, %{started: [], already_running: [], failed: []}, fn
         {name, provider, config}, acc
-        when is_atom(name) and provider in [:apns, :fcm] and is_list(config) ->
+        when is_atom(name) and provider in [:apns, :fcm, :webpush] and is_list(config) ->
           case PushX.Instance.start(name, provider, config) do
             {:ok, ^name} ->
               %{acc | started: [name | acc.started]}
@@ -119,7 +119,7 @@ defmodule PushX.Instance.Loader do
 
         other, acc ->
           Logger.error(
-            "[PushX.Instance.Loader] Invalid instance spec #{inspect(other)}: expected {name, :apns | :fcm, config}"
+            "[PushX.Instance.Loader] Invalid instance spec #{inspect(other)}: expected {name, :apns | :fcm | :webpush, config}"
           )
 
           %{acc | failed: [{other, :invalid_spec} | acc.failed]}

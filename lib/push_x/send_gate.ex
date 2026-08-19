@@ -18,7 +18,7 @@ defmodule PushX.SendGate do
   instance sends; `provider` (`:apns` | `:fcm`) selects the rate-limit
   config and stamps the error response.
   """
-  @spec check(atom(), :apns | :fcm) :: :ok | {:error, Response.t()}
+  @spec check(atom(), :apns | :fcm | :webpush) :: :ok | {:error, Response.t()}
   def check(key, provider) do
     # Test delivery mode (PushX.Test) never touches the breaker/limiter: a
     # stubbed failure must not open the global breaker for other tests.

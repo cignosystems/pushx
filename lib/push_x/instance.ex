@@ -67,6 +67,7 @@ defmodule PushX.Instance do
   require Logger
 
   alias PushX.{HTTP, JWTCache, Message, Response, Retry, SendGate, Telemetry, URLs}
+  alias PushX.WebPush.VAPID
 
   @table :pushx_instances
   @reserved_names [:apns, :fcm]
@@ -81,7 +82,7 @@ defmodule PushX.Instance do
   ## Arguments
 
     * `name` - Unique atom name for this instance (e.g., `:apns_prod`)
-    * `provider` - `:apns` or `:fcm`
+    * `provider` - `:apns`, `:fcm` or `:webpush`
     * `config` - Provider-specific configuration (keyword list)
 
   ## APNS Config Keys
@@ -96,6 +97,17 @@ defmodule PushX.Instance do
     * `:pool_count` - Finch pool count (default: 1)
     * `:receive_timeout` / `:pool_timeout` / `:connect_timeout` - per-instance
       request timeouts in ms (defaults: 15_000 / 5_000 / 10_000)
+
+  ## Web Push Config Keys
+
+    * `:vapid_subject` - (required) `"mailto:..."` or https URL contact
+    * `:vapid_private_key` - (required) base64url 32-byte scalar or EC PEM; validated
+      (must sign) at start time
+    * `:vapid_public_key` - (optional) base64url 65-byte point; derived from the
+      private key when omitted. Give this to the tenant's front end as
+      `applicationServerKey`.
+    * `:pool_size` / `:pool_count` / timeouts - as for APNS (HTTP/1.1 to the
+      browsers' push services)
 
   ## FCM Config Keys
 
@@ -128,15 +140,17 @@ defmodule PushX.Instance do
       or hold a key that cannot sign RS256
     * `{:error, {:invalid_token_fetcher, reason}}` if an FCM `:token_fetcher` is
       not an `{module, function, args}` tuple
+    * `{:error, {:invalid_vapid_key, reason}}` if a Web Push `:vapid_private_key`
+      cannot be decoded / does not match `:vapid_public_key`
 
   Credentials are verified with a test signature before the instance starts,
   so a bad key fails here rather than on the first push (APNS) or by crashing
   the OAuth process after start (FCM).
 
   """
-  @spec start(atom(), :apns | :fcm, keyword()) :: {:ok, atom()} | {:error, term()}
+  @spec start(atom(), :apns | :fcm | :webpush, keyword()) :: {:ok, atom()} | {:error, term()}
   def start(name, provider, config)
-      when is_atom(name) and provider in [:apns, :fcm] and is_list(config) do
+      when is_atom(name) and provider in [:apns, :fcm, :webpush] and is_list(config) do
     if name in @reserved_names do
       {:error, :reserved_name}
     else
@@ -336,9 +350,13 @@ defmodule PushX.Instance do
     })
   end
 
-  def manage_topic(%{provider: :apns}, _action, _tokens, _topic, _opts) do
+  def manage_topic(%{provider: provider}, _action, _tokens, _topic, _opts) do
     {:error,
-     Response.error(:apns, :invalid_request, "Topics are an FCM feature; this instance is APNS")}
+     Response.error(
+       provider,
+       :invalid_request,
+       "Topics are an FCM feature; this instance is #{inspect(provider)}"
+     )}
   end
 
   # -- Send --
@@ -348,7 +366,52 @@ defmodule PushX.Instance do
     case instance_info.provider do
       :apns -> apns_send(instance_info, device_token, payload, opts)
       :fcm -> fcm_send(instance_info, device_token, payload, opts)
+      :webpush -> webpush_send(instance_info, device_token, payload, opts)
     end
+  end
+
+  # -- Web Push Send --
+
+  defp webpush_send(info, subscription, payload, opts) do
+    name = info.name
+
+    Retry.maybe_with_retry(
+      :webpush,
+      opts,
+      fn -> webpush_send_once(info, subscription, payload, opts) end,
+      reconnect_fn: fn -> reconnect(name) end,
+      reconnect_key: name
+    )
+  end
+
+  defp webpush_send_once(info, subscription, payload, opts) do
+    case SendGate.check(info.name, :webpush) do
+      :ok ->
+        result = PushX.WebPush.do_send(webpush_ctx(info), subscription, payload, opts)
+        SendGate.record(info.name, result)
+        result
+
+      {:error, %Response{}} = error ->
+        error
+    end
+  end
+
+  defp webpush_ctx(info) do
+    %{
+      vapid:
+        {Keyword.get(info.config, :vapid_public_key),
+         Keyword.fetch!(info.config, :vapid_private_key)},
+      subject: Keyword.fetch!(info.config, :vapid_subject),
+      finch_name: info.finch_name,
+      request_opts: [
+        receive_timeout: Keyword.get(info.config, :receive_timeout, 15_000),
+        pool_timeout: Keyword.get(info.config, :pool_timeout, 5_000)
+      ],
+      # VAPID JWTs are cached per (instance, origin) so tenants never share one.
+      scope: info.name,
+      configured?: true,
+      instance: info.name
+    }
   end
 
   # -- APNS Send --
@@ -634,6 +697,25 @@ defmodule PushX.Instance do
     case missing do
       [] -> validate_private_key(config)
       keys -> {:error, {:missing_config, keys}}
+    end
+  end
+
+  defp validate_config(:webpush, config) do
+    required = [:vapid_subject, :vapid_private_key]
+    missing = Enum.reject(required, &Keyword.has_key?(config, &1))
+
+    case missing do
+      [] ->
+        case VAPID.resolve_keys(
+               Keyword.get(config, :vapid_public_key),
+               Keyword.fetch!(config, :vapid_private_key)
+             ) do
+          {:ok, _keys} -> :ok
+          {:error, reason} -> {:error, {:invalid_vapid_key, reason}}
+        end
+
+      keys ->
+        {:error, {:missing_config, keys}}
     end
   end
 

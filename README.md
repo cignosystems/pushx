@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>Push notifications for Elixir that just work: APNS and FCM in one call.</strong><br>
+  <strong>Push notifications for Elixir that just work: APNS, FCM and Web Push in one call.</strong><br>
   Retries, circuit breaker, dead-token cleanup and telemetry built in. Per-tenant credentials at runtime.<br>
   Nothing to add to your supervision tree.
 </p>
@@ -47,7 +47,7 @@
 - **HTTP/2** connections via Finch (Mint-based) for optimal performance
 - **APNS** (Apple Push Notification Service) with JWT authentication
 - **FCM** (Firebase Cloud Messaging) with OAuth2 via Goth
-- **Web Push** — FCM for Chrome/Firefox/Edge, APNS for Safari
+- **Web Push** — standards-based (RFC 8030/8291/8292, VAPID) for every browser incl. Safari 16+; FCM webpush and legacy Safari APNS too
 - **Batch sending** — send to multiple tokens concurrently with configurable parallelism, as a list or a lazy stream
 - **FCM topics & conditions** — fan out to `{:topic, "news"}` or `{:condition, "'a' in topics && 'b' in topics"}` with the same call
 - **Multi-tenant** — named runtime instances with their own credentials, pools and breakers
@@ -343,49 +343,46 @@ PushX.push(:my_fcm, token, %{
 
 ### Web Push
 
-#### FCM Web Push (Chrome, Firefox, Edge)
+#### Standards-based Web Push (all browsers — recommended)
 
-FCM uses the same API for web and mobile. Web tokens come from Firebase Messaging SDK.
+Chrome, Firefox, Edge, Opera, Samsung Internet and Safari 16+ (macOS Ventura / iOS 16.4+) all speak the same protocol: the browser gives you a **subscription** (endpoint + keys), you encrypt the payload for it (RFC 8291) and authenticate with VAPID (RFC 8292). PushX does all of that; no Firebase, no Apple website-push ID.
 
 ```elixir
-# Same API as mobile
-PushX.push(:fcm, web_token, %{title: "Hello", body: "From web!"})
+# 1. once: generate a VAPID key pair
+#    $ mix pushx.vapid
+config :pushx,
+  webpush_vapid_subject: "mailto:ops@example.com",
+  webpush_vapid_private_key: System.fetch_env!("WEBPUSH_VAPID_PRIVATE_KEY")
+  # webpush_vapid_public_key is optional (derived); it's the front end's applicationServerKey
 
-# With click action
-PushX.FCM.send_web(web_token, "New Message", "Check it out",
-  "https://example.com/messages")
+# 2. the browser subscribes (JS) and POSTs the subscription to you
+#    const sub = await registration.pushManager.subscribe({userVisibleOnly: true, applicationServerKey: PUBLIC_KEY})
 
-# With icon and badge
-PushX.FCM.send_web(web_token, "Alert", "Important update",
-  "https://example.com",
-  icon: "https://example.com/icon.png",
-  badge: "https://example.com/badge.png"
-)
-
-# Build payload manually for more control
-payload = PushX.FCM.web_notification("Title", "Body", "https://example.com",
-  icon: "https://example.com/icon.png",
-  require_interaction: true
-)
-PushX.FCM.send(web_token, payload)
+# 3. send — the subscription object is the target
+PushX.push(:webpush, subscription, %{title: "Order shipped", body: "Arrives Tuesday", data: %{url: "/orders/42"}},
+  ttl: 3600, urgency: :high, topic: "order-42")
 ```
 
-#### Safari Web Push (macOS)
+`PushX.Message` maps to the Notification API shape (`title`, `body`, `icon`, `tag`, `data`) your service worker shows; a map is sent as JSON; a binary verbatim. A `404`/`410` from the push service means the subscription is gone → `:unregistered`, and `:on_invalid_token` fires with the subscription map so you can delete it. Payloads are limited to ~4 KB; `:ttl`, `:urgency` (`:very_low | :low | :normal | :high`) and `:topic` (collapse key) are the RFC 8030 knobs. Multi-tenant: `PushX.Instance.start(name, :webpush, vapid_subject: ..., vapid_private_key: ...)`. See `PushX.WebPush`.
 
-Safari uses APNS with a `web.` topic prefix. Tokens are 64 hex characters (same as iOS).
+#### FCM Web Push (apps using the Firebase JS SDK)
+
+If your web app already uses Firebase Messaging, its tokens go through FCM like mobile tokens:
 
 ```elixir
-# Topic format: web.{website-push-id}
-payload = PushX.APNS.web_notification("New Article", "Check it out",
-  "https://example.com/article/123")
-PushX.APNS.send(safari_token, payload, topic: "web.com.example.website")
+PushX.push(:fcm, web_token, %{title: "Hello", body: "From web!"})
 
-# With custom action button and data
-payload = PushX.APNS.web_notification_with_data("Sale!", "50% off",
-  "https://shop.com",
-  %{"promo_id" => "summer50"},
-  action: "Shop Now"
-)
+PushX.FCM.send_web(web_token, "New Message", "Check it out", "https://example.com/messages",
+  icon: "https://example.com/icon.png", badge: "https://example.com/badge.png")
+```
+
+#### Safari legacy website push (APNS)
+
+Pre-Safari-16 "website push" uses APNS with a `web.` topic (the website push ID) and 64-hex tokens — still supported:
+
+```elixir
+payload = PushX.APNS.web_notification("New Article", "Check it out", "https://example.com/article/123")
+PushX.APNS.send(safari_token, payload, topic: "web.com.example.website")
 ```
 
 ### Direct Provider Access
@@ -485,6 +482,14 @@ config :pushx,
 | `:fcm_project_id` | `String.t()` | Firebase project ID |
 | `:fcm_credentials` | `map()` \| `{:file, path}` \| `{:json, string}` \| `{:system, env_var}` | Service account as map, file, JSON string, or env var |
 | `:fcm_token_fetcher` | `{module, function, args}` | *Optional, advanced.* Bring your own OAuth for the static config: replaces the `PushX.Goth` process PushX would start. Called as `apply(m, f, [goth_name \| args])` (so to reuse your own Goth, wrap it: `def fetch(_), do: Goth.fetch(MyApp.Goth)`), must return `{:ok, %{token: t}}` \| `{:error, reason}`; raises/exits/errors are contained. Named instances use their own `:token_fetcher` config key instead. See `PushX.Config.fcm_token_fetcher/0`. |
+
+#### Web Push (VAPID)
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `:webpush_vapid_subject` | `String.t()` | `"mailto:..."` or https URL contact for push services |
+| `:webpush_vapid_private_key` | `String.t()` | base64url 32-byte key (`mix pushx.vapid`) or EC PEM |
+| `:webpush_vapid_public_key` | `String.t()` | Optional (derived); the front end's `applicationServerKey` |
 
 #### Testing
 
@@ -1021,6 +1026,8 @@ Named instances have their own circuit breakers (keyed by name), so one tenant's
 ---
 
 ## Token Cleanup Callback
+
+> For Web Push the "token" passed to the callback is the subscription map you sent with — delete it from your store by endpoint.
 
 Automatically clean up invalid tokens from your database when a push fails with `:invalid_token`, `:expired_token`, or `:unregistered`:
 

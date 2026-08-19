@@ -93,10 +93,12 @@ defmodule PushX.Test do
     @moduledoc """
     One recorded push. Fields:
 
-      * `:provider` — `:apns` | `:fcm`
-      * `:target` — device token, or for FCM `{:topic, name}` / `{:condition, expr}`
+      * `:provider` — `:apns` | `:fcm` | `:webpush`
+      * `:target` — device token, for FCM `{:topic, name}` / `{:condition, expr}`,
+        for Web Push the subscription map
       * `:payload` — the decoded wire payload PushX would have sent: for APNS the
-        `%{"aps" => ...}` map, for FCM the `%{"message" => ...}` envelope
+        `%{"aps" => ...}` map, for FCM the `%{"message" => ...}` envelope, for
+        Web Push the plaintext (decoded JSON, or the raw binary) before encryption
       * `:opts` — the send options after `PushX.Message` delivery fields were
         merged in (`:topic`, `:push_type`, `:priority`, `:collapse_id`, ...)
       * `:instance` — the named instance, or `nil` for the static configuration
@@ -105,7 +107,7 @@ defmodule PushX.Test do
       * `:sent_at` — `DateTime` of the send
     """
     @type t :: %__MODULE__{
-            provider: :apns | :fcm,
+            provider: :apns | :fcm | :webpush,
             target: PushX.target(),
             payload: map(),
             opts: keyword(),
@@ -179,7 +181,7 @@ defmodule PushX.Test do
   # The delivery hook. Called by the send paths after all local validation,
   # in place of the network request. Records the push, consults the stub,
   # emits the same telemetry as a real send, and returns the result.
-  @spec deliver(:apns | :fcm, PushX.target(), binary(), keyword(), atom() | nil) ::
+  @spec deliver(:apns | :fcm | :webpush, PushX.target(), binary(), keyword(), atom() | nil) ::
           {:ok, Response.t()} | {:error, Response.t()}
   def deliver(provider, target, body, opts, instance) do
     Telemetry.start(provider, target)
@@ -191,7 +193,7 @@ defmodule PushX.Test do
     push = %Push{
       provider: provider,
       target: target,
-      payload: JSON.decode!(body),
+      payload: decode_payload(body),
       opts: opts,
       instance: instance,
       id: id,
@@ -210,6 +212,14 @@ defmodule PushX.Test do
     end
 
     result
+  end
+
+  # Web Push payloads may be raw text; everything else is JSON.
+  defp decode_payload(body) do
+    case JSON.decode(body) do
+      {:ok, decoded} -> decoded
+      _ -> body
+    end
   end
 
   defp stubbed_result(push, default_response) do

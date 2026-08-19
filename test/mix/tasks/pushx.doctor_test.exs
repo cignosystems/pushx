@@ -4,6 +4,8 @@ defmodule Mix.Tasks.Pushx.DoctorTest do
   import ExUnit.CaptureIO
 
   alias Mix.Tasks.Pushx.Doctor
+  alias Mix.Tasks.Pushx.Vapid
+  alias PushX.WebPush.VAPID
 
   # The suite's test_helper configures APNS (generated key) and FCM
   # (project id + token fetcher); the doctor should be happy with that.
@@ -84,5 +86,35 @@ defmodule Mix.Tasks.Pushx.DoctorTest do
     assert out =~ "FCM   – not configured"
     assert out =~ "Delivery: test  ⚠"
     assert out =~ "All checks passed."
+  end
+
+  test "checks Web Push VAPID configuration when present" do
+    keys = PushX.WebPush.generate_vapid_keys()
+    Application.put_env(:pushx, :webpush_vapid_subject, "mailto:ops@example.com")
+    Application.put_env(:pushx, :webpush_vapid_private_key, keys.private_key)
+
+    on_exit(fn ->
+      Application.delete_env(:pushx, :webpush_vapid_subject)
+      Application.delete_env(:pushx, :webpush_vapid_private_key)
+    end)
+
+    out = capture_io(fn -> Doctor.run([]) end)
+    assert out =~ "WEB   ✔ Web Push configured (subject mailto:ops@example.com)"
+    assert out =~ "VAPID key resolves"
+
+    Application.put_env(:pushx, :webpush_vapid_private_key, "garbage")
+
+    capture_io(fn ->
+      err = assert_raise Mix.Error, fn -> Doctor.run([]) end
+      assert err.message =~ "Web Push VAPID key"
+    end)
+  end
+
+  test "mix pushx.vapid prints a usable key pair with config snippets" do
+    out = capture_io(fn -> Vapid.run([]) end)
+    [_, pub] = Regex.run(~r/webpush_vapid_public_key: "([^"]+)"/, out)
+    [_, priv] = Regex.run(~r/WEBPUSH_VAPID_PRIVATE_KEY="([^"]+)"/, out)
+    assert {:ok, _} = VAPID.resolve_keys(pub, priv)
+    assert out =~ "applicationServerKey"
   end
 end

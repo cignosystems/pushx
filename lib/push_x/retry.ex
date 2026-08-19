@@ -57,7 +57,7 @@ defmodule PushX.Retry do
   calling `fun`.
   """
   @spec maybe_with_retry(
-          :apns | :fcm,
+          :apns | :fcm | :webpush,
           keyword(),
           (-> {:ok, Response.t()} | {:error, Response.t()}),
           keyword()

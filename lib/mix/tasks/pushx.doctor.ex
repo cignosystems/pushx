@@ -12,6 +12,8 @@ defmodule Mix.Tasks.Pushx.Doctor do
               ✔ private key resolves and signs ES256
         FCM   ✔ project my-project
               ✔ service-account credentials resolve and sign RS256
+        WEB   ✔ Web Push configured (subject mailto:ops@example.com)
+              ✔ VAPID key resolves; public key BJ1kQ2m3n4o5… (applicationServerKey)
         Delivery: live
         Retries:  enabled, 3 attempts, 10000ms base delay — a batch task may block up to 180s
         Pools:    finch_pool_size 25 (consider 2-5 for low traffic on cloud LBs)
@@ -33,6 +35,7 @@ defmodule Mix.Tasks.Pushx.Doctor do
   use Mix.Task
 
   alias PushX.Config
+  alias PushX.WebPush.VAPID
 
   @impl Mix.Task
   def run(_args) do
@@ -44,6 +47,7 @@ defmodule Mix.Tasks.Pushx.Doctor do
       []
       |> check_apns()
       |> check_fcm()
+      |> check_webpush()
 
     print_settings()
 
@@ -171,6 +175,41 @@ defmodule Mix.Tasks.Pushx.Doctor do
 
   defp resolve_fcm_credentials({:file, path}), do: path |> File.read!() |> JSON.decode!()
   defp resolve_fcm_credentials(map) when is_map(map), do: map
+
+  # -- Web Push -------------------------------------------------------------
+
+  defp check_webpush(failures) do
+    subject = Application.get_env(:pushx, :webpush_vapid_subject)
+    private = Application.get_env(:pushx, :webpush_vapid_private_key)
+    public = Application.get_env(:pushx, :webpush_vapid_public_key)
+
+    cond do
+      is_nil(subject) and is_nil(private) ->
+        skip("WEB  ", "Web Push not configured — :webpush sends will return :not_configured")
+        failures
+
+      is_nil(subject) or is_nil(private) ->
+        fail("WEB  ", "Web Push needs both :webpush_vapid_subject and :webpush_vapid_private_key")
+        ["Web Push: missing VAPID subject or private key" | failures]
+
+      true ->
+        case VAPID.resolve_keys(public, private) do
+          {:ok, keys} ->
+            ok("WEB  ", "Web Push configured (subject #{subject})")
+
+            ok(
+              "     ",
+              "VAPID key resolves; public key #{Base.url_encode64(keys.public, padding: false) |> String.slice(0, 12)}… (applicationServerKey)"
+            )
+
+            failures
+
+          {:error, reason} ->
+            fail("WEB  ", "VAPID key: #{reason}")
+            ["Web Push VAPID key: #{reason}" | failures]
+        end
+    end
+  end
 
   # -- Settings -------------------------------------------------------------
 

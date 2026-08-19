@@ -479,6 +479,28 @@ defmodule PushX.Message do
     if aps == %{}, do: nil, else: %{"payload" => %{"aps" => aps}}
   end
 
+  @doc """
+  Converts the message to the Notification API shape a service worker shows
+  via `registration.showNotification(title, options)`: `title`, `body`,
+  `icon` (from `image/2`), `tag` (from `collapse_key/2`), `badge` and `data`.
+
+  ## Examples
+
+      iex> PushX.Message.new("Hi", "There") |> PushX.Message.data(%{"url" => "/inbox"}) |> PushX.Message.to_webpush_payload()
+      %{"title" => "Hi", "body" => "There", "data" => %{"url" => "/inbox"}}
+
+  """
+  @spec to_webpush_payload(t()) :: map()
+  def to_webpush_payload(%__MODULE__{} = message) do
+    %{}
+    |> maybe_put("title", message.title)
+    |> maybe_put("body", message.body)
+    |> maybe_put("icon", message.image)
+    |> maybe_put("tag", message.collapse_key)
+    |> maybe_put("badge", message.badge)
+    |> maybe_put("data", if(message.data == %{}, do: nil, else: message.data))
+  end
+
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 

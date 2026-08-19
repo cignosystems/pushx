@@ -38,7 +38,7 @@ defmodule PushX.CircuitBreaker do
 
   @table_name :pushx_circuit_breaker
 
-  @type provider :: :apns | :fcm
+  @type provider :: :apns | :fcm | :webpush
   # Breakers are also keyed by named-instance atoms (per-tenant pools have
   # independent health), so every entry point accepts any atom key.
   @type key :: atom()

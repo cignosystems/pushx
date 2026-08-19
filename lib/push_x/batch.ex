@@ -31,7 +31,13 @@ defmodule PushX.Batch do
       options are the caller's send options and are only inspected for
       `:retry` (to size the default timeout)
   """
-  @spec stream(Enumerable.t(), (target() -> result()), :apns | :fcm | nil, atom(), keyword()) ::
+  @spec stream(
+          Enumerable.t(),
+          (target() -> result()),
+          :apns | :fcm | :webpush | nil,
+          atom(),
+          keyword()
+        ) ::
           Enumerable.t()
   def stream(targets, send_fun, validate_provider, error_provider, opts) do
     concurrency = Keyword.get(opts, :concurrency, Config.get(:batch_concurrency, 50))

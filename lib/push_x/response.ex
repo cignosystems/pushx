@@ -12,7 +12,8 @@ defmodule PushX.Response do
 
   ## Status Values
 
-    * `:sent` - Message was successfully sent
+    * `:sent` - The provider accepted the message for delivery (APNS/FCM/the
+      push service answered 2xx); delivery to the device itself is asynchronous
     * `:invalid_token` - Device token is invalid or expired
     * `:expired_token` - Device token has expired
     * `:unregistered` - Device is no longer registered
@@ -52,7 +53,7 @@ defmodule PushX.Response do
           | :unknown_error
 
   @type t :: %__MODULE__{
-          provider: :apns | :fcm | :unknown,
+          provider: :apns | :fcm | :webpush | :unknown,
           status: status(),
           id: String.t() | nil,
           reason: String.t() | nil,
@@ -72,7 +73,7 @@ defmodule PushX.Response do
   @doc """
   Creates a successful response.
   """
-  @spec success(provider :: :apns | :fcm | :unknown, id :: String.t() | nil) :: t()
+  @spec success(provider :: :apns | :fcm | :webpush | :unknown, id :: String.t() | nil) :: t()
   def success(provider, id \\ nil) do
     %__MODULE__{
       provider: provider,
@@ -84,7 +85,11 @@ defmodule PushX.Response do
   @doc """
   Creates an error response.
   """
-  @spec error(provider :: :apns | :fcm | :unknown, status :: status(), reason :: String.t() | nil) ::
+  @spec error(
+          provider :: :apns | :fcm | :webpush | :unknown,
+          status :: status(),
+          reason :: String.t() | nil
+        ) ::
           t()
   def error(provider, status, reason \\ nil) do
     %__MODULE__{
@@ -98,7 +103,7 @@ defmodule PushX.Response do
   Creates an error response with raw data.
   """
   @spec error(
-          provider :: :apns | :fcm | :unknown,
+          provider :: :apns | :fcm | :webpush | :unknown,
           status :: status(),
           reason :: String.t() | nil,
           raw :: any()
@@ -116,7 +121,7 @@ defmodule PushX.Response do
   Creates an error response with raw data and retry_after value.
   """
   @spec error(
-          provider :: :apns | :fcm | :unknown,
+          provider :: :apns | :fcm | :webpush | :unknown,
           status :: status(),
           reason :: String.t() | nil,
           raw :: any(),

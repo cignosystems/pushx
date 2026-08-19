@@ -66,10 +66,10 @@ defmodule PushX.MixProject do
 
   defp description do
     """
-    Push notifications for Elixir with one API for Apple APNS and Google FCM —
-    automatic retries, circuit breaker, dead-token cleanup, telemetry, FCM
-    topics, and per-tenant runtime credentials, with nothing to add to your
-    supervision tree.
+    Push notifications for Elixir with one API for Apple APNS, Google FCM and
+    standards-based Web Push (VAPID) — automatic retries, circuit breaker,
+    dead-token cleanup, telemetry, FCM topics, a test adapter, and per-tenant
+    runtime credentials, with nothing to add to your supervision tree.
     """
   end
 
@@ -103,7 +103,7 @@ defmodule PushX.MixProject do
       skip_undefined_reference_warnings_on: ["CHANGELOG.md"],
       groups_for_modules: [
         "Core API": [PushX, PushX.Message, PushX.Response],
-        Providers: [PushX.APNS, PushX.FCM],
+        Providers: [PushX.APNS, PushX.FCM, PushX.WebPush],
         "Runtime Instances": [PushX.Instance, PushX.Instance.Loader],
         Infrastructure: [PushX.Config, PushX.Retry, PushX.Token],
         Observability: [PushX.Telemetry, PushX.CircuitBreaker, PushX.RateLimiter],

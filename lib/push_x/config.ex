@@ -25,6 +25,13 @@ defmodule PushX.Config do
       an `{module, function, args}` tuple that replaces the Goth process PushX
       would otherwise start. See `fcm_token_fetcher/0`.
 
+  ### Web Push (VAPID)
+
+    * `:webpush_vapid_subject` - contact for push services: `"mailto:..."` or an https URL
+    * `:webpush_vapid_private_key` - base64url 32-byte scalar (web-push CLI format) or EC PEM
+    * `:webpush_vapid_public_key` - *(optional)* base64url 65-byte point; derived from the
+      private key when omitted. This is the `applicationServerKey` your front end uses.
+
   ### Testing
 
     * `:delivery` - `:live` (default) or `:test` — record sends locally
@@ -228,6 +235,12 @@ defmodule PushX.Config do
   def fcm_configured? do
     get(:fcm_project_id) != nil and
       (get(:fcm_credentials) != nil or get(:fcm_token_fetcher) != nil)
+  end
+
+  @doc "Checks if Web Push (VAPID subject + private key) is configured."
+  @spec webpush_configured?() :: boolean()
+  def webpush_configured? do
+    get(:webpush_vapid_subject) != nil and get(:webpush_vapid_private_key) != nil
   end
 
   @doc """

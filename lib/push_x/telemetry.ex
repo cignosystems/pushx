@@ -283,6 +283,11 @@ defmodule PushX.Telemetry do
     "#{first}...#{last}"
   end
 
+  def truncate_token(%{} = subscription) do
+    endpoint = Map.get(subscription, :endpoint) || Map.get(subscription, "endpoint")
+    "endpoint:" <> truncate_token(to_string(endpoint))
+  end
+
   def truncate_token({:topic, name}), do: "topic:" <> truncate_token(name)
   def truncate_token({:condition, expr}), do: "condition:" <> truncate_token(expr)
   def truncate_token(token), do: token

@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Standards-based Web Push** — a third provider, `:webpush`, for every browser (Chrome, Firefox, Edge, Opera, Samsung Internet, Safari 16+ on macOS Ventura / iOS 16.4+): `PushX.push(:webpush, subscription, message, opts)` and `PushX.WebPush.send/3` take the browser's `PushManager` subscription (endpoint + `p256dh`/`auth` keys, string or atom keys), encrypt the payload per RFC 8291 (`aes128gcm`, single record; reproduces the RFC's Appendix A test vectors bit-for-bit), authenticate with VAPID (RFC 8292 ES256 JWTs cached per push-service origin and re-signed once on a 401/403) and deliver per RFC 8030 with `:ttl` (default four weeks), `:urgency` and `:topic` headers. Push-service responses map onto the usual statuses (`404`/`410` → `:unregistered`, so `should_remove_token?/1` and `:on_invalid_token` — which receives the subscription map — work unchanged; `413` → `:payload_too_large`, `429` → `:rate_limited`, `5xx` → `:server_error`). Subscriptions, options and payload size (~4 KB) are validated locally. Configuration: `webpush_vapid_subject`, `webpush_vapid_private_key` (base64url or EC PEM), optional `webpush_vapid_public_key` (derived otherwise; it is the front end's `applicationServerKey`). Works through everything the other providers do: `push_data/4` (the map *is* the payload), `push!/4`, `push_batch/4`/`push_batch_stream/4`, the circuit breaker and rate limiter (`rate_limit_webpush`), retries incl. `retry: :none`, telemetry (`provider: :webpush`, endpoints truncated), `health_check/0` (`:webpush` key), and test delivery mode (records the plaintext payload; no VAPID config needed). `PushX.Message.to_webpush_payload/1` maps a message to the Notification API shape (`title`, `body`, `icon`, `tag`, `badge`, `data`).
+- **Web Push named instances** — `PushX.Instance.start(name, :webpush, vapid_subject: ..., vapid_private_key: ..., vapid_public_key: optional)` gives each tenant its own VAPID identity, HTTP/1.1 pool and per-instance JWT cache; keys are validated (decode + match) at start like APNS/FCM credentials (`{:error, {:invalid_vapid_key, reason}}`). `PushX.Instance.Loader` accepts `:webpush` specs.
+- **`mix pushx.vapid`** generates a VAPID key pair with the config and front-end snippets; **`mix pushx.doctor`** checks the Web Push configuration (VAPID key resolves / matches).
+- **`PushX.WebPush.generate_vapid_keys/0`** and **`validate_subscription/1`** for programmatic use.
+
+- **`ROADMAP.md`** and the **Expo design note** (`docs/design/expo.md`): Expo's ticket/receipt model fits PushX additively (new provider atom, binary target, a provider-specific `receipts/1`, and a chunked multi-target mode for `PushX.Batch`); not planned before 1.0.
+
+### Changed
+- `PushX.Response` documents `:sent` as "accepted by the provider for delivery" (delivery to the device is asynchronous) — true for APNS/FCM and the wording a receipts-based provider like Expo needs.
+- Tagline, hex description and README now say "APNS, FCM and Web Push"; the README's Web Push section leads with the standards path and keeps FCM-webpush (Firebase JS SDK apps) and legacy Safari APNS as the alternatives.
+- `PushX.provider()` / `PushX.Response.provider` / `PushX.target()` types include `:webpush` and the subscription map. Adding a provider atom is additive for callers matching on `:apns`/`:fcm`; an exhaustive `case` on `response.provider` needs a `:webpush` clause — noted as *Breaking (minor)* in the same spirit as new statuses.
+
 ## [0.14.0] - 2026-08-19
 
 ### Added
@@ -414,6 +429,7 @@ are *Breaking (minor)* and are marked as such.
 - HTTP/2 connections via Finch
 - Zero external JSON dependency (uses Elixir 1.18+ built-in JSON)
 
+[Unreleased]: https://github.com/cignosystems/pushx/compare/v0.14.0...HEAD
 [0.14.0]: https://github.com/cignosystems/pushx/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/cignosystems/pushx/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/cignosystems/pushx/compare/v0.11.0...v0.12.0

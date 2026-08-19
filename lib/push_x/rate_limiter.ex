@@ -46,7 +46,7 @@ defmodule PushX.RateLimiter do
   @default_window_ms 1_000
   @default_limit 5_000
 
-  @type provider :: :apns | :fcm
+  @type provider :: :apns | :fcm | :webpush
   @type key :: atom()
 
   ## Client API
@@ -114,6 +114,7 @@ defmodule PushX.RateLimiter do
   @spec limit(provider()) :: pos_integer()
   def limit(:apns), do: PushX.Config.get(:rate_limit_apns, @default_limit)
   def limit(:fcm), do: PushX.Config.get(:rate_limit_fcm, @default_limit)
+  def limit(:webpush), do: PushX.Config.get(:rate_limit_webpush, @default_limit)
 
   @doc """
   Returns remaining requests before rate limit is hit.
