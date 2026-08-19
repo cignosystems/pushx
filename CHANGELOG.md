@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.14.0] - 2026-08-19
 
 ### Added
 - **Test delivery mode (`config :pushx, delivery: :test`) and `PushX.Test`** — the way to test an application that sends pushes without mocking PushX or contacting the providers. Every send (`PushX.push/4`, `push_data/4`, batches and `push_batch_stream/4`, `PushX.APNS`/`PushX.FCM` directly, and named instances) runs its full local validation (required `:topic`, target format, `:mode`, payload encoding and size limits) and is then recorded and answered `{:ok, %Response{status: :sent, id: "test-N"}}` — no credentials, no network, no retries. Records are scoped to the test process via `$callers` (so `async: true` and batch workers just work) and carry the decoded wire payload, the merged send options, the instance name, and the result. `PushX.Test.Assertions` provides `assert_pushed/1`, `refute_pushed/1` and `assert_no_pushes/0` (match patterns with pins, `assert_receive`-style, with failure messages listing what was recorded); `PushX.Test.pushes/0`, `last_push/0`, `clear/0`; `PushX.Test.stub/1` scripts provider responses per test (e.g. `{:error, :unregistered}` for a token — `:on_invalid_token` and `should_remove_token?/1` then behave exactly as for a real response); and `PushX.Test.apns_private_key/0` / `fcm_credentials/0` supply throwaway keys for starting named instances in tests. The same telemetry events are emitted as for a real send. PushX's own suite now uses those key helpers instead of its private fixtures.
@@ -414,7 +414,7 @@ are *Breaking (minor)* and are marked as such.
 - HTTP/2 connections via Finch
 - Zero external JSON dependency (uses Elixir 1.18+ built-in JSON)
 
-[Unreleased]: https://github.com/cignosystems/pushx/compare/v0.13.0...HEAD
+[0.14.0]: https://github.com/cignosystems/pushx/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/cignosystems/pushx/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/cignosystems/pushx/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/cignosystems/pushx/compare/v0.10.0...v0.11.0

@@ -82,7 +82,7 @@ Add `pushx` to your dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:pushx, "~> 0.13"}
+    {:pushx, "~> 0.14"}
   ]
 end
 ```
