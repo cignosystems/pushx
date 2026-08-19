@@ -39,6 +39,20 @@ defmodule PushX.FCM do
       # Data-only via structured payload
       PushX.FCM.send(device_token, %{"data" => %{"action" => "sync"}})
 
+  ## Topics and Conditions
+
+  Any send accepts a topic or condition where the token goes (see
+  `t:target/0`), and `subscribe/3` / `unsubscribe/3` manage memberships:
+
+      PushX.FCM.subscribe(tokens, "news")
+      PushX.FCM.send({:topic, "news"}, message)
+      PushX.FCM.send({:condition, "'news' in topics && 'sports' in topics"}, message)
+
+  ## Dry Runs
+
+      # FCM validates token and payload without delivering anything
+      PushX.FCM.send(device_token, message, validate_only: true)
+
   ## Web Push (Chrome, Firefox, Edge)
 
   FCM supports web push using the same API. Web tokens come from the browser's

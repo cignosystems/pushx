@@ -534,6 +534,20 @@ With `retry: :none`, retryable failures come back immediately with `retry_after`
 
 > **Tip:** Increase timeouts if connecting from distant regions (e.g., EU to Apple's US servers).
 
+### Other Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `:batch_concurrency` | `50` | Default `:concurrency` for `push_batch/4`, `push_batch_stream/4` and `send_batch/3` |
+| `:reconnect_cooldown_ms` | `5_000` | Minimum time between *automatic* pool restarts on connection errors, per pool (manual `PushX.reconnect/0` is not gated) |
+| `:finch_name` | `PushX.Finch` | Name of the static Finch pool |
+| `:on_invalid_token` | — | `{module, function, args}` cleanup callback — see [Token Cleanup Callback](#token-cleanup-callback) |
+| `:circuit_breaker_*` | off | See [Circuit Breaker](#circuit-breaker) |
+| `:rate_limit_*` | off | See [Rate Limiting](#rate-limiting) |
+| `:delivery` | `:live` | `:test` records sends locally — see [Testing Your App](#testing-your-app) |
+
+The complete, authoritative option reference is the `PushX.Config` moduledoc.
+
 You can also override timeouts per-request:
 
 ```elixir
@@ -721,7 +735,8 @@ Call `MyApp.PushAdmin.boot()` from your `Application.start/2` after PushX starts
 | `:private_key` | `String.t()` \| `{:file, path}` \| `{:system, env}` | required (APNS) | PEM private key |
 | `:mode` | `:prod` \| `:sandbox` | `:prod` | APNS environment |
 | `:project_id` | `String.t()` | required (FCM) | Firebase project ID |
-| `:credentials` | `map()` \| `String.t()` | required (FCM) | Service account (map or JSON string) |
+| `:credentials` | `map()` \| `String.t()` | required (FCM, unless `:token_fetcher`) | Service account (map or JSON string); validated at start |
+| `:token_fetcher` | `{module, function, args}` | — | Bring your own OAuth for this instance (no Goth started; makes `:credentials` optional). The global `:fcm_token_fetcher` never applies to instances. |
 | `:pool_size` | `integer()` | `2` | Finch connections per pool |
 | `:pool_count` | `integer()` | `1` | Number of Finch pools |
 | `:receive_timeout` | `integer()` | `15_000` | Response timeout (ms) |

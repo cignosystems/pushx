@@ -103,19 +103,26 @@ defmodule PushX do
 
     * `:topic` - Bundle ID (required for APNS)
     * `:mode` - `:prod` or `:sandbox` (default: from config)
-    * `:push_type` - "alert", "background", "voip" (default: "alert")
-    * `:priority` - 5 or 10 (default: 10)
+    * `:push_type` - "alert", "background", "voip", ... (default: "alert")
+    * `:priority` - 5 or 10 (default: 10; 5 for `push_type: "background"`)
+    * `:expiration` - Unix timestamp after which APNS drops the notification
+      (`0` = deliver now or never); a `PushX.Message` `ttl` sets this for you
+    * `:collapse_id` - notifications sharing an id replace each other
     * `:apns_id` - your own UUID for the notification, echoed back by Apple
       (see `PushX.APNS.send/3`)
 
   ### FCM Options
 
     * `:project_id` - Firebase project ID (default: from config)
-    * `:data` - Custom data payload map
+    * `:data` - Custom data payload map (values are stringified)
+    * `:android`, `:apns`, `:webpush` - raw platform override blocks, deep-merged
+      over what a `PushX.Message` derives (see `PushX.FCM.send/3`)
     * `:validate_only` - dry run: FCM validates without delivering (see `PushX.FCM.send/3`)
 
   ### Common options
 
+    * `:receive_timeout`, `:pool_timeout` - per-call overrides of the config
+      timeouts (static paths)
     * `:retry` - `:blocking` (default) retries retryable failures in the
       calling process with backoff; `:none` makes exactly one attempt and
       returns retryable failures as-is (with `retry_after` when the provider

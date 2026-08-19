@@ -48,6 +48,47 @@ defmodule PushX.Config do
     * `:retry_max_attempts` - Maximum retry attempts (default: `3`)
     * `:retry_base_delay_ms` - Base delay in milliseconds (default: `10_000`)
     * `:retry_max_delay_ms` - Maximum delay in milliseconds (default: `60_000`)
+    * `:reconnect_cooldown_ms` - Minimum time between *automatic* Finch pool
+      restarts triggered by connection errors, per pool (default: `5_000`);
+      see `PushX.ReconnectGuard`. Manual `PushX.reconnect/0` is not gated.
+
+  ### Batch Sending
+
+    * `:batch_concurrency` - Default `:concurrency` for `PushX.push_batch/4`,
+      `push_batch_stream/4` and the provider `send_batch/3` functions
+      (default: `50`)
+
+  ### Circuit Breaker (opt-in)
+
+    * `:circuit_breaker_enabled` - (default: `false`)
+    * `:circuit_breaker_threshold` - consecutive failures that open the
+      breaker (default: `5`)
+    * `:circuit_breaker_cooldown_ms` - open → half-open delay (default: `30_000`)
+
+    See `PushX.CircuitBreaker`.
+
+  ### Rate Limiting (opt-in)
+
+    * `:rate_limit_enabled` - (default: `false`)
+    * `:rate_limit_apns`, `:rate_limit_fcm` - max sends per window per
+      provider (default: `1_000`)
+    * `:rate_limit_window_ms` - fixed window length (default: `1_000`)
+
+    See `PushX.RateLimiter`.
+
+  ### Token Cleanup
+
+    * `:on_invalid_token` - `{module, function, args}` invoked asynchronously
+      as `apply(module, function, [provider, token | args])` whenever a
+      response says the token should be removed
+      (`PushX.Response.should_remove_token?/1`); see the README's "Token
+      Cleanup Callback".
+
+  ### Internal / test-only
+
+    * `:apns_url_override`, `:fcm_url_override` - point the real send paths at
+      a local HTTP server. Used by PushX's own test suite; not for production.
+      For testing *your* application use `:delivery` (`PushX.Test`) instead.
 
   ## Example Configuration
 

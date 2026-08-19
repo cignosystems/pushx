@@ -94,6 +94,8 @@ defmodule PushX.Instance do
     * `:mode` - `:prod` or `:sandbox` (default: `:prod`)
     * `:pool_size` - Finch pool size (default: 2)
     * `:pool_count` - Finch pool count (default: 1)
+    * `:receive_timeout` / `:pool_timeout` / `:connect_timeout` - per-instance
+      request timeouts in ms (defaults: 15_000 / 5_000 / 10_000)
 
   ## FCM Config Keys
 
@@ -110,6 +112,7 @@ defmodule PushX.Instance do
       The global `:fcm_token_fetcher` config never applies to instances.
     * `:pool_size` - Finch pool size (default: 2)
     * `:pool_count` - Finch pool count (default: 1)
+    * `:receive_timeout` / `:pool_timeout` / `:connect_timeout` - as for APNS
 
   ## Returns
 

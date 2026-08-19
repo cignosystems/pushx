@@ -29,6 +29,13 @@ defmodule PushX.APNS do
       message = PushX.Message.new("Hello", "World")
       PushX.APNS.send(device_token, message, topic: "com.example.app")
 
+  ## Tracing a notification
+
+  Pass your own UUID as `:apns_id`; Apple echoes it back as `response.id` and
+  shows it in delivery logs and the Push Notifications Console:
+
+      PushX.APNS.send(token, payload, topic: "com.example.app", apns_id: my_uuid)
+
   ## Safari Web Push
 
   Safari uses APNS for web push notifications. The token format is the same
