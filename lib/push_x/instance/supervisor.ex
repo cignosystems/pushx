@@ -106,6 +106,9 @@ defmodule PushX.Instance.Supervisor do
       size: Keyword.get(config, :pool_size, 2),
       count: Keyword.get(config, :pool_count, 1),
       protocols: [:http2],
+      # Per-instance :ping_interval / :max_connection_age / ... override the
+      # global :finch_http2_* config.
+      http2: PushX.Config.finch_http2_opts(config),
       conn_opts: [
         transport_opts: [
           timeout: Keyword.get(config, :connect_timeout, 10_000),

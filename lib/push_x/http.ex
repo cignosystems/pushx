@@ -25,7 +25,9 @@ defmodule PushX.HTTP do
   @spec finch_request(Finch.Request.t(), atom(), keyword(), String.t()) ::
           {:ok, Finch.Response.t()} | {:error, term()}
   def finch_request(request, finch_name, request_opts, label) do
-    Finch.request(request, finch_name, request_opts)
+    request
+    |> Finch.request(finch_name, request_opts)
+    |> tap(&explain_pool_error(&1, label))
   rescue
     e in CaseClauseError ->
       case e do
@@ -113,6 +115,29 @@ defmodule PushX.HTTP do
           [{String.t(), String.t()}]
   def maybe_add_header(headers, _key, nil), do: headers
   def maybe_add_header(headers, key, value), do: [{key, to_string(value)} | headers]
+
+  # Distinguish "the HTTP/2 pool is saturated" from "the network flapped" in
+  # the logs: both come back as :connection_error (and are retried), but the
+  # operator's fix is different — more connections (:finch_pool_count) or less
+  # concurrency, not a reconnect.
+  @doc false
+  def explain_pool_error({:error, %{reason: :too_many_concurrent_requests}}, label) do
+    Logger.warning(
+      "[#{label}] HTTP/2 connection saturated (too_many_concurrent_requests): every stream on the " <>
+        "pool's connections is in use. This is capacity, not a network failure — raise " <>
+        ":finch_pool_count (HTTP/2 connections per origin; for instances :pool_count) or lower " <>
+        "batch :concurrency. Retried with backoff."
+    )
+  end
+
+  def explain_pool_error({:error, %{reason: :connection_not_ready}}, label) do
+    Logger.info(
+      "[#{label}] request arrived before the fresh HTTP/2 connection received the server's " <>
+        "SETTINGS (connection_not_ready); retried with backoff."
+    )
+  end
+
+  def explain_pool_error(_result, _label), do: :ok
 
   @doc false
   # Deeply converts map keys to strings (values untouched except nested

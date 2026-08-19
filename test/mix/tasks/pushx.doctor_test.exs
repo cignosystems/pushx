@@ -117,4 +117,19 @@ defmodule Mix.Tasks.Pushx.DoctorTest do
     assert {:ok, _} = VAPID.resolve_keys(pub, priv)
     assert out =~ "applicationServerKey"
   end
+
+  test "warns about a single HTTP/2 connection and a disabled PING keepalive" do
+    Application.put_env(:pushx, :finch_pool_count, 1)
+    Application.put_env(:pushx, :finch_http2_ping_interval, :infinity)
+
+    on_exit(fn ->
+      Application.delete_env(:pushx, :finch_pool_count)
+      Application.delete_env(:pushx, :finch_http2_ping_interval)
+    end)
+
+    out = capture_io(fn -> Doctor.run([]) end)
+    assert out =~ "finch_pool_count 1 HTTP/2 connection per origin"
+    assert out =~ "single connection: no redundancy"
+    assert out =~ "PING keepalive off"
+  end
 end

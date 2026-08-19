@@ -94,9 +94,11 @@ single set of credentials in config?
   `import PushX.Test.Assertions` → `assert_pushed(%{provider: :apns, target: ^token})`,
   script provider errors with `PushX.Test.stub/1`. Don't mock `PushX.push/4`
   yourself and don't put real credentials in test config.
-- **HTTP/2 pools are long-lived** — set `finch_pool_size` low (2–5) for
-  low-traffic apps to avoid stale-connection issues on cloud infra (Fly.io,
-  AWS NLB, GCP), or call `PushX.reconnect/0` if you suspect zombie sockets.
+- **HTTP/2 pools are long-lived** — `finch_pool_count` is the number of
+  HTTP/2 connections per origin (default 2; never 1 in prod); `finch_pool_size`
+  is *ignored* for HTTP/2. Stale idle sockets on cloud infra are prevented by
+  the HTTP/2 PING keepalive (`finch_http2_ping_interval`, default 60 s) — not
+  by shrinking pools. `PushX.reconnect/0` for manual recovery.
 
 ## Idiomatic patterns
 
@@ -240,6 +242,10 @@ not the iOS bundle ID.
   cleanup callback receives that map back. Don't extract the endpoint.
 - **Rotating the VAPID private key** invalidates every existing browser
   subscription — it's not like rotating an APNS key.
+- **Setting `finch_pool_count: 1` (or treating `finch_pool_size` as the HTTP/2
+  knob).** One connection is a single point of failure and a retry burst
+  saturates it (`too_many_concurrent_requests`). Keep ≥ 2; rely on the PING
+  keepalive for idle staleness.
 - **Restarting your supervision tree to "fix" stale HTTP/2 connections.**
   Just call `PushX.reconnect/0` — it terminates the Finch pool and lets the
   PushX supervisor start a fresh one. This is also called automatically by
@@ -268,9 +274,10 @@ not the iOS bundle ID.
   a `notification` block — the system tray shows it without your code
   running. Use both keys together (via `push/4` with a map containing both)
   for hybrid behavior.
-- **`finch_pool_size`:** for < 100 pushes/min, **2** is the sweet spot —
-  fewer idle connections to go stale on cloud infra. Scale up (25–50) only
-  for genuine throughput.
+- **Pool knobs:** `finch_pool_count` (HTTP/2 connections per origin) is the
+  one that matters for APNS/FCM — 2 by default, 4–8 for high volume;
+  `finch_pool_size` only affects the HTTP/1 pool (Web Push). Don't advise
+  `finch_pool_size: 2` "for low traffic" — it does nothing for HTTP/2.
 
 ## Where to find authoritative answers
 

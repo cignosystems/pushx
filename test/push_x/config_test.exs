@@ -433,4 +433,77 @@ defmodule PushX.ConfigTest do
       Application.delete_env(:pushx, :pool_timeout)
     end
   end
+
+  describe "finch_http2_opts/1 (HTTP/2 keepalive and recycling)" do
+    setup do
+      keys = [
+        :finch_http2_ping_interval,
+        :finch_http2_max_connection_age,
+        :finch_http2_max_connection_age_jitter,
+        :finch_http2_wait_for_server_settings
+      ]
+
+      on_exit(fn -> Enum.each(keys, &Application.delete_env(:pushx, &1)) end)
+      :ok
+    end
+
+    test "defaults: PING after 60 s idle, no max age, no SETTINGS wait" do
+      assert Config.finch_http2_options_supported?()
+
+      assert Config.finch_http2_opts() == [
+               ping_interval: 60_000,
+               max_connection_age: :infinity,
+               max_connection_age_jitter: 0,
+               wait_for_server_settings?: false
+             ]
+    end
+
+    test "global config applies; per-instance overrides win" do
+      Application.put_env(:pushx, :finch_http2_ping_interval, 30_000)
+      Application.put_env(:pushx, :finch_http2_max_connection_age, 600_000)
+      Application.put_env(:pushx, :finch_http2_max_connection_age_jitter, 5_000)
+      Application.put_env(:pushx, :finch_http2_wait_for_server_settings, true)
+
+      assert Config.finch_http2_opts() == [
+               ping_interval: 30_000,
+               max_connection_age: 600_000,
+               max_connection_age_jitter: 5_000,
+               wait_for_server_settings?: true
+             ]
+
+      assert Config.finch_http2_opts(ping_interval: :infinity, max_connection_age: 1_000)[
+               :ping_interval
+             ] ==
+               :infinity
+
+      assert Config.finch_http2_opts(max_connection_age: 1_000)[:max_connection_age] == 1_000
+      # Untouched keys still come from the global config.
+      assert Config.finch_http2_opts(max_connection_age: 1_000)[:ping_interval] == 30_000
+    end
+
+    test "instance Finch pools carry the http2 options (per-instance override)" do
+      {:ok, {_flags, children}} =
+        PushX.Instance.Supervisor.init(
+          name: :inspect_h2,
+          provider: :apns,
+          config: [
+            key_id: "K",
+            team_id: "T",
+            private_key: PushX.Test.apns_private_key(),
+            ping_interval: 15_000
+          ]
+        )
+
+      %{start: {Finch, :start_link, [finch_opts]}} =
+        Enum.find(children, &(&1.id == :"PushX.Finch.inspect_h2"))
+
+      pools = Keyword.fetch!(finch_opts, :pools)
+
+      for {_origin, pool} <- pools do
+        assert pool[:protocols] == [:http2]
+        assert pool[:http2][:ping_interval] == 15_000
+        assert pool[:http2][:max_connection_age] == :infinity
+      end
+    end
+  end
 end

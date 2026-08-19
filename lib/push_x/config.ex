@@ -1,4 +1,6 @@
 defmodule PushX.Config do
+  require Logger
+
   @moduledoc """
   Configuration management for PushX.
 
@@ -40,8 +42,27 @@ defmodule PushX.Config do
   ### Finch Pool
 
     * `:finch_name` - Name of the Finch pool (default: `PushX.Finch`)
-    * `:finch_pool_size` - Connections per pool (default: 25)
-    * `:finch_pool_count` - Number of pools (default: 2)
+    * `:finch_pool_count` - **HTTP/2 connections per provider origin** (APNS,
+      FCM): each Finch HTTP/2 "pool" is one multiplexed connection, so this is
+      the knob for APNS/FCM capacity and redundancy (default: `2`; don't use `1`
+      in production — a single socket is a single point of failure and a retry
+      burst lands entirely on it)
+    * `:finch_pool_size` - connections per pool **for HTTP/1 pools only** (the
+      default pool used for Web Push and as a fallback); Finch ignores it for
+      HTTP/2 (default: 25)
+    * `:finch_http2_ping_interval` - HTTP/2 PING after this many ms of idleness to
+      keep APNS/FCM connections alive and detect dead ones before a send does
+      (default: `60_000`; `:infinity` disables). Requires finch ≥ 0.22; on
+      older finch the option is ignored with a warning at boot.
+    * `:finch_http2_max_connection_age` - ms after which an HTTP/2 connection is
+      gracefully drained and replaced (default: `:infinity`); useful behind
+      rotating DNS / load balancers. finch ≥ 0.22.
+    * `:finch_http2_max_connection_age_jitter` - random ms added to the age so
+      connections don't all recycle together (default: `0`). finch ≥ 0.22.
+    * `:finch_http2_wait_for_server_settings` - hold requests on a fresh HTTP/2
+      connection until the server's SETTINGS arrived (default: `false`;
+      requests sent before SETTINGS fail fast with `:connection_not_ready`,
+      which PushX retries). finch ≥ 0.22.
 
   ### Request Timeouts
 
@@ -217,6 +238,72 @@ defmodule PushX.Config do
   """
   @spec finch_pool_count() :: pos_integer()
   def finch_pool_count, do: get(:finch_pool_count, 2)
+
+  @doc """
+  The Finch `http2:` pool options built from `:finch_http2_*` config
+  (`ping_interval`, `max_connection_age`, `max_connection_age_jitter`,
+  `wait_for_server_settings?`), or `[]` when the installed finch predates
+  them (< 0.22). `overrides` (e.g. an instance's config) win over the global
+  config.
+  """
+  @spec finch_http2_opts(keyword()) :: keyword()
+  def finch_http2_opts(overrides \\ []) do
+    if finch_http2_options_supported?() do
+      [
+        ping_interval:
+          Keyword.get(overrides, :ping_interval, get(:finch_http2_ping_interval, 60_000)),
+        max_connection_age:
+          Keyword.get(
+            overrides,
+            :max_connection_age,
+            get(:finch_http2_max_connection_age, :infinity)
+          ),
+        max_connection_age_jitter:
+          Keyword.get(
+            overrides,
+            :max_connection_age_jitter,
+            get(:finch_http2_max_connection_age_jitter, 0)
+          ),
+        wait_for_server_settings?:
+          Keyword.get(
+            overrides,
+            :wait_for_server_settings,
+            get(:finch_http2_wait_for_server_settings, false)
+          )
+      ]
+    else
+      configured =
+        Enum.filter(
+          [
+            :finch_http2_ping_interval,
+            :finch_http2_max_connection_age,
+            :finch_http2_max_connection_age_jitter,
+            :finch_http2_wait_for_server_settings
+          ],
+          &(get(&1) != nil)
+        )
+
+      if configured != [] do
+        Logger.warning(
+          "[PushX] #{inspect(configured)} need finch >= 0.22 (installed: #{finch_version()}); ignored"
+        )
+      end
+
+      []
+    end
+  end
+
+  @doc false
+  def finch_http2_options_supported? do
+    Version.match?(finch_version(), ">= 0.22.0")
+  end
+
+  defp finch_version do
+    case Application.spec(:finch, :vsn) do
+      nil -> "0.0.0"
+      vsn -> to_string(vsn)
+    end
+  end
 
   @doc """
   Checks if APNS is configured.

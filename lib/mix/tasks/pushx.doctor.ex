@@ -16,7 +16,7 @@ defmodule Mix.Tasks.Pushx.Doctor do
               ✔ VAPID key resolves; public key BJ1kQ2m3n4o5… (applicationServerKey)
         Delivery: live
         Retries:  enabled, 3 attempts, 10000ms base delay — a batch task may block up to 180s
-        Pools:    finch_pool_size 25 (consider 2-5 for low traffic on cloud LBs)
+        Pools:    finch_pool_count 2 HTTP/2 connections per origin; PING after 60000ms idle
         Breaker:  off   Rate limit: off
 
       All checks passed.
@@ -235,12 +235,7 @@ defmodule Mix.Tasks.Pushx.Doctor do
       IO.puts("  Retries:  disabled")
     end
 
-    size = Config.finch_pool_size()
-
-    IO.puts(
-      "  Pools:    finch_pool_size #{size}, finch_pool_count #{Config.finch_pool_count()}" <>
-        if(size > 5, do: " (consider 2-5 for low traffic on cloud load balancers)", else: "")
-    )
+    IO.puts(pools_line())
 
     IO.puts(
       "  Breaker:  #{if Config.circuit_breaker_enabled?(), do: "on (threshold #{Config.circuit_breaker_threshold()})", else: "off"}" <>
@@ -256,6 +251,26 @@ defmodule Mix.Tasks.Pushx.Doctor do
           "  Cleanup:  no :on_invalid_token callback (check Response.should_remove_token?/1 yourself)"
         )
     end
+  end
+
+  defp pools_line do
+    count = Config.finch_pool_count()
+
+    ping =
+      case Config.finch_http2_opts()[:ping_interval] do
+        nil -> "no PING keepalive (finch < 0.22)"
+        :infinity -> "PING keepalive off ⚠ idle connections may go stale"
+        ms -> "PING after #{ms}ms idle"
+      end
+
+    warning =
+      if count == 1,
+        do: "  ⚠ single connection: no redundancy, retry bursts saturate it — use >= 2",
+        else: ""
+
+    plural = if count == 1, do: "", else: "s"
+
+    "  Pools:    finch_pool_count #{count} HTTP/2 connection#{plural} per origin; #{ping}#{warning}"
   end
 
   defp ok(label, msg), do: IO.puts("  #{label} ✔ #{msg}")

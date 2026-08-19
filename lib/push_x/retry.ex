@@ -256,11 +256,15 @@ defmodule PushX.Retry do
   end
 
   def calculate_delay(%Response{status: :connection_error}, attempt, _base, max_delay) do
-    # Connection errors get faster retry (1s base instead of 10s)
-    # These are typically transient network issues, not provider throttling
+    # Connection errors get a faster retry (1s base instead of 10s) — they are
+    # typically transient network issues, not provider throttling. "Full
+    # jitter" (uniform between half and the full exponential) spreads a burst
+    # of retries — e.g. every task of a batch after a pool reconnect — over
+    # the window instead of landing them on the fresh connection at once and
+    # saturating its stream limit.
     exponential = (@connection_error_base_delay_ms * :math.pow(2, attempt - 1)) |> round()
-    jitter = round(exponential * 0.1 * (:rand.uniform() * 2 - 1))
-    min(exponential + jitter, max_delay)
+    half = div(exponential, 2)
+    min(half + :rand.uniform(max(exponential - half, 1)), max_delay)
   end
 
   def calculate_delay(_response, attempt, base_delay, max_delay) do

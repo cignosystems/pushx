@@ -157,4 +157,34 @@ defmodule PushX.HTTPTest do
         ) do
     defp month_abbr(unquote(num)), do: unquote(abbr)
   end
+
+  describe "pool-saturation guidance" do
+    test "too_many_concurrent_requests and connection_not_ready are explained; other errors are silent" do
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          HTTP.explain_pool_error(
+            {:error, %Finch.HTTPError{reason: :too_many_concurrent_requests, module: Mint.HTTP2}},
+            "T"
+          )
+        end)
+
+      assert log =~ "HTTP/2 connection saturated"
+      assert log =~ ":finch_pool_count"
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          HTTP.explain_pool_error({:error, %Finch.Error{reason: :connection_not_ready}}, "T")
+        end)
+
+      assert log =~ "connection_not_ready"
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          HTTP.explain_pool_error({:error, %Mint.TransportError{reason: :timeout}}, "T")
+        end)
+
+      refute log =~ "saturated"
+      assert :ok = HTTP.explain_pool_error({:ok, %{}}, "T")
+    end
+  end
 end

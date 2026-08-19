@@ -444,7 +444,7 @@ config :pushx,
   fcm_credentials: {:file, "priv/keys/firebase.json"},
 
   # === HTTP/2 Pool (tune for your traffic level) ===
-  finch_pool_size: 2,          # connections per pool (default: 25)
+  finch_pool_count: 2,         # HTTP/2 connections per origin (default: 2)
   finch_pool_count: 1,         # number of pools (default: 2)
 
   # === Timeouts ===
@@ -498,18 +498,26 @@ config :pushx,
 |--------|------|-------------|
 | `:delivery` | `:live` \| `:test` | `:test` records sends locally instead of contacting the providers — see [Testing Your App](#testing-your-app) and `PushX.Test` |
 
-### Pool Sizing
+### Pool Sizing and Keepalive
 
-Each HTTP/2 connection supports ~100 concurrent streams. Pool capacity = `pool_size x pool_count x 100`.
+APNS and FCM are spoken over **HTTP/2**, and in Finch an HTTP/2 "pool" is **one multiplexed connection**. So for APNS/FCM:
 
-| Traffic Level | `pool_size` | `pool_count` | Concurrent Capacity |
-|---------------|-------------|--------------|---------------------|
-| Low (<100/min) | 2 | 1 | ~200 |
-| Medium (<1000/min) | 10 | 1 | ~1,000 |
-| High (>1000/min) | 25 | 2 | ~5,000 |
-| Very high | 50 | 4 | ~20,000 |
+- **`finch_pool_count`** = number of HTTP/2 connections per provider origin (default `2`). This is the capacity *and* redundancy knob. Each connection multiplexes up to the server's stream limit (APNS ≈ 1 000 concurrent streams, FCM ≈ 100). Don't run `1` in production: a single socket is a single point of failure, and after a reconnect a retry burst lands entirely on it (`too_many_concurrent_requests`).
+- **`finch_pool_size`** is **ignored for HTTP/2** pools. It only sizes the HTTP/1 default pool (Web Push, fallback traffic). Earlier versions of this README recommended lowering it for low-traffic apps — that had no effect on APNS/FCM.
 
-> **Important:** For low-traffic apps, **reduce** pool size from the defaults. Large pools create many idle HTTP/2 connections that can go stale on cloud infrastructure (Fly.io, AWS, GCP), leading to `too_many_concurrent_requests` errors. Start small and increase only if needed.
+| Traffic | `finch_pool_count` | Approx. concurrent streams (APNS) |
+|---------|--------------------|-----------------------------------|
+| Low (< 100/min) | 2 (default) | ~2 000 |
+| High (> 1 000/min) | 4–8 | ~4 000–8 000 |
+
+**Idle connections going stale** (Fly.io, AWS NLB, GCP drop idle HTTP/2 sockets; the first send after a quiet period then hits a dead one) is solved by **HTTP/2 PING keepalive**, not by shrinking pools: PushX sends a PING after `finch_http2_ping_interval` ms of idleness (default **60 s**, finch ≥ 0.22), which both keeps the connection warm and detects a dead one before a real send pays for it. Optional proactive recycling: `finch_http2_max_connection_age` (+ `_jitter`) drains and replaces connections on a schedule — useful behind rotating DNS/load balancers. `PushX.reconnect/0` remains for manual recovery, and the retry path still reconnects automatically (coalesced) on the first connection error.
+
+```elixir
+config :pushx,
+  finch_pool_count: 2,                     # HTTP/2 connections per origin
+  finch_http2_ping_interval: 60_000,       # PING after 60 s idle (default)
+  finch_http2_max_connection_age: :infinity # or e.g. 30 * 60 * 1000 behind rotating LBs
+```
 
 ### Retry Behavior
 
@@ -1136,7 +1144,7 @@ PushX 0.14.0 — configuration check (MIX_ENV=prod)
 
   Delivery: live
   Retries:  enabled, 3 attempts, 10000ms base delay — a batch task may block up to 180s
-  Pools:    finch_pool_size 2, finch_pool_count 1
+  Pools:    finch_pool_count 2 HTTP/2 connections per origin; PING after 60000ms idle
   Breaker:  off   Rate limit: off
   Cleanup:  on_invalid_token → MyApp.Tokens.delete_by_token/2
 
@@ -1145,41 +1153,24 @@ All checks passed.
 
 ### `too_many_concurrent_requests` Error
 
-This Mint HTTP/2 error means all streams on a connection are in use. It has two common causes with **opposite** fixes:
-
 ```
-[error] [PushX.APNS] Connection error: %Mint.HTTPError{reason: :too_many_concurrent_requests}
+[warning] [PushX.APNS] HTTP/2 connection saturated (too_many_concurrent_requests): every stream on the pool's connections is in use ...
 ```
 
-**Cause 1: Stale connections (low-traffic apps)**
+PushX logs this distinctly from a network failure. It means every HTTP/2 stream on the pool's connections is busy — typically either a **retry burst converging on a freshly reconnected connection** (a pool with `finch_pool_count: 1` is especially prone) or genuine overload. It is retried with backoff (jittered, so a burst spreads out).
 
-On cloud infrastructure (Fly.io, AWS, GCP), idle HTTP/2 connections can be silently dropped by load balancers or firewalls. The client doesn't know the connection is dead, so new requests on it hang or fail. PushX enables TCP keepalive to detect dead connections at the OS level, and automatically reconnects on connection errors during retry.
-
-**Fix:** Reduce pool size to minimize idle connections:
+**Fix:** raise `finch_pool_count` (HTTP/2 connections per origin; `finch_pool_size` does nothing for HTTP/2) and/or lower batch `:concurrency`; enable rate limiting for sustained volume:
 ```elixir
 config :pushx,
-  finch_pool_size: 2,
-  finch_pool_count: 1
-```
-
-You can also force a reconnect manually:
-```elixir
-PushX.reconnect()
-```
-
-**Cause 2: Actual overload (high-traffic apps)**
-
-If you're sending thousands of notifications per minute, the pool may genuinely run out of HTTP/2 streams.
-
-**Fix:** Increase pool capacity and use rate limiting:
-```elixir
-config :pushx,
-  finch_pool_size: 50,
   finch_pool_count: 4,
   rate_limit_enabled: true,
   rate_limit_apns: 2000,
   rate_limit_fcm: 2000
 ```
+
+### Stale connections after idle periods
+
+On cloud infrastructure (Fly.io, AWS, GCP) idle HTTP/2 connections are silently dropped; the first send after a quiet period then fails with a connection error and is recovered by the retry path (which reconnects the pool) — a second or two late. Prevent it instead of recovering from it: HTTP/2 PING keepalive is on by default (`finch_http2_ping_interval: 60_000`); lower it if your platform drops faster, or add `finch_http2_max_connection_age` to recycle connections proactively. Manual: `PushX.reconnect()`.
 
 ### `request_timeout` Error
 

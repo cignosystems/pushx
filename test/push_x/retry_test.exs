@@ -336,4 +336,16 @@ defmodule PushX.RetryTest do
       assert reason =~ ":retry"
     end
   end
+
+  describe "connection-error backoff jitter" do
+    test "is spread across the upper half of the exponential window and capped" do
+      resp = Response.error(:apns, :connection_error, "x")
+      delays = for _ <- 1..200, do: Retry.calculate_delay(resp, 1, 10_000, 60_000)
+      # Attempt 1: exponential = 1000 ms → uniform in (500, 1000]
+      assert Enum.min(delays) > 500 and Enum.max(delays) <= 1_000
+      # Not all the same: the burst is actually spread.
+      assert length(Enum.uniq(delays)) > 20
+      assert Retry.calculate_delay(resp, 10, 10_000, 3_000) == 3_000
+    end
+  end
 end

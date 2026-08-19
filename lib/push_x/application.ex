@@ -35,6 +35,7 @@ defmodule PushX.Application do
              size: PushX.Config.finch_pool_size(),
              count: PushX.Config.finch_pool_count(),
              protocols: [:http2],
+             http2: PushX.Config.finch_http2_opts(),
              conn_opts: [
                transport_opts: [
                  timeout: PushX.Config.connect_timeout(),
@@ -50,6 +51,7 @@ defmodule PushX.Application do
              size: PushX.Config.finch_pool_size(),
              count: PushX.Config.finch_pool_count(),
              protocols: [:http2],
+             http2: PushX.Config.finch_http2_opts(),
              conn_opts: [
                transport_opts: [
                  timeout: PushX.Config.connect_timeout(),
@@ -65,6 +67,7 @@ defmodule PushX.Application do
              size: PushX.Config.finch_pool_size(),
              count: PushX.Config.finch_pool_count(),
              protocols: [:http2],
+             http2: PushX.Config.finch_http2_opts(),
              conn_opts: [
                transport_opts: [
                  timeout: PushX.Config.connect_timeout(),
@@ -80,6 +83,7 @@ defmodule PushX.Application do
              size: PushX.Config.finch_pool_size(),
              count: PushX.Config.finch_pool_count(),
              protocols: [:http2],
+             http2: PushX.Config.finch_http2_opts(),
              conn_opts: [
                transport_opts: [
                  timeout: PushX.Config.connect_timeout(),
