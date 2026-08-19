@@ -580,7 +580,13 @@ For applications that manage push credentials from a database or admin panel, Pu
 
 Each instance gets its own HTTP/2 connection pool, JWT cache (APNS), and OAuth process (FCM). Multiple instances can run concurrently (e.g., APNS sandbox + APNS prod + FCM).
 
-> **Instances live in memory only.** They are not persisted across node restarts and are per-VM (not cluster-wide). Start them on boot from your own source of truth — typically a worker after your `Repo` that loads tenant credentials and calls `PushX.Instance.start/3` for each — and again when a tenant is provisioned. `start/3` returns `{:error, :already_started}` for a running name, so re-running it is safe.
+> **Instances live in memory only.** They are not persisted across node restarts and are per-VM (not cluster-wide). Start them on boot from your own source of truth with `PushX.Instance.Loader` — a child you place after your `Repo` that calls a function of yours returning the instances to start — and again when a tenant is provisioned with `PushX.Instance.start/3` (it returns `{:error, :already_started}` for a running name, so re-running is safe):
+>
+> ```elixir
+> children = [MyApp.Repo, {PushX.Instance.Loader, instances: &MyApp.Push.tenant_instances/0}, MyAppWeb.Endpoint]
+> ```
+>
+> One tenant's bad credentials are logged and skipped (pass `on_error: :raise` to fail the boot instead).
 
 ### Starting Instances
 
@@ -1106,6 +1112,28 @@ Recorded pushes are scoped to the test process (and processes it spawns, includi
 ---
 
 ## Troubleshooting
+
+### `mix pushx.doctor`
+
+Checks the configuration and credentials offline — the same checks the library runs at start/send time, reported all at once, without sending anything. Fails (non-zero exit) on a credential problem, so it can gate a deploy:
+
+```
+$ MIX_ENV=prod mix pushx.doctor && mix release
+PushX 0.14.0 — configuration check (MIX_ENV=prod)
+
+  APNS  ✔ configured (key ABC123DEFG, team TEAM123456, mode :prod)
+        ✔ private key resolves and signs ES256 (P-256)
+  FCM   ✔ project my-project
+        ✔ service-account credentials resolve and sign RS256
+
+  Delivery: live
+  Retries:  enabled, 3 attempts, 10000ms base delay — a batch task may block up to 180s
+  Pools:    finch_pool_size 2, finch_pool_count 1
+  Breaker:  off   Rate limit: off
+  Cleanup:  on_invalid_token → MyApp.Tokens.delete_by_token/2
+
+All checks passed.
+```
 
 ### `too_many_concurrent_requests` Error
 

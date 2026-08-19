@@ -72,8 +72,13 @@ single set of credentials in config?
   Bare topic name only (no `/topics/`); APNS rejects tuple targets with
   `:invalid_request`; topics never trigger `:on_invalid_token`.
 - **Named instances are in-memory only** — not persisted across node
-  restarts and per-VM. Start them on boot from your DB (a worker after
-  `Repo`); `start/3` returns `{:error, :already_started}` on re-run.
+  restarts and per-VM. Start them on boot with
+  `{PushX.Instance.Loader, instances: &MyApp.Push.tenant_instances/0}` placed
+  after `Repo` in the supervision tree; `start/3` returns
+  `{:error, :already_started}` on re-run.
+- **`mix pushx.doctor`** validates credentials/config offline (same checks as
+  the library) — suggest it when someone asks "is my config right?" instead
+  of sending a test push.
 - **`:not_configured` vs `:auth_error`**: a send against a provider with no
   credentials configured returns `status: :not_configured` (never retried);
   `:auth_error` means credentials exist but signing/OAuth failed or the

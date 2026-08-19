@@ -59,7 +59,8 @@ defmodule PushX.MixProject do
     [
       # Committed to a stable path so CI can cache the PLT between runs.
       plt_file: {:no_warn, "priv/plts/dialyzer.plt"},
-      plt_add_apps: [:ex_unit]
+      # :mix for the lib/mix/tasks (pushx.doctor), :ex_unit for PushX.Test.Assertions
+      plt_add_apps: [:ex_unit, :mix]
     ]
   end
 
@@ -103,7 +104,7 @@ defmodule PushX.MixProject do
       groups_for_modules: [
         "Core API": [PushX, PushX.Message, PushX.Response],
         Providers: [PushX.APNS, PushX.FCM],
-        "Runtime Instances": [PushX.Instance],
+        "Runtime Instances": [PushX.Instance, PushX.Instance.Loader],
         Infrastructure: [PushX.Config, PushX.Retry, PushX.Token],
         Observability: [PushX.Telemetry, PushX.CircuitBreaker, PushX.RateLimiter],
         Testing: [PushX.Test, PushX.Test.Assertions, PushX.Test.Push]

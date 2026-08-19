@@ -674,7 +674,9 @@ defmodule PushX.Instance do
   # (mirrors validate_private_key/1 for APNS).
   @credentials_shape_error "credentials must be a decoded service-account map (or its JSON string)"
 
-  defp validate_fcm_credentials(credentials) do
+  @doc false
+  # Public for `mix pushx.doctor`, which runs exactly the checks start/3 runs.
+  def validate_fcm_credentials(credentials) do
     with {:ok, creds} <- decode_credentials(credentials),
          {:ok, pem} <- fetch_credential(creds, "private_key"),
          {:ok, _email} <- fetch_credential(creds, "client_email"),
@@ -715,7 +717,10 @@ defmodule PushX.Instance do
   # Resolves the key and performs a test sign so a garbage PEM (or a missing
   # file / unset env var) is rejected at start/reconfigure time instead of
   # raising inside the shared JWTCache on the first push.
-  defp validate_private_key(config) do
+  @doc false
+  # Public for `mix pushx.doctor` (same check as start/3). `config` needs
+  # `:key_id` and `:private_key` (PEM, `{:file, path}` or `{:system, var}`).
+  def validate_private_key(config) do
     key_id = Keyword.fetch!(config, :key_id)
     private_key = resolve_private_key(Keyword.fetch!(config, :private_key))
     signer = Joken.Signer.create("ES256", %{"pem" => private_key}, %{"kid" => key_id})
