@@ -43,7 +43,13 @@ defmodule PushX.HTTP do
       end
   end
 
-  @doc "Returns the value of an HTTP header by name (case-sensitive), or nil."
+  @doc """
+  Returns the value of a response header by name, or nil.
+
+  The lookup is case-sensitive on purpose: Mint lowercases response header
+  names for both HTTP/2 (APNS, FCM) and HTTP/1.1 (Web Push), so callers pass
+  lowercase names and no per-call downcasing is needed.
+  """
   @spec get_header([{String.t(), String.t()}], String.t()) :: String.t() | nil
   def get_header(headers, key) do
     case List.keyfind(headers, key, 0) do
