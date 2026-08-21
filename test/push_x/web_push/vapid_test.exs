@@ -38,6 +38,41 @@ defmodule PushX.WebPush.VAPIDTest do
     assert {:error, _} = VAPID.resolve_keys(nil, "-----BEGIN GARBAGE-----\n")
   end
 
+  test "validate_subject/1 accepts mailto: and https: contact URIs only (RFC 8292 §2.1)" do
+    assert :ok = VAPID.validate_subject("mailto:ops@example.com")
+    assert :ok = VAPID.validate_subject("https://example.com/contact")
+
+    for bad <- ["ops@example.com", "http://example.com", "mailto:", "https://", nil, 42] do
+      assert {:error, reason} = VAPID.validate_subject(bad)
+      assert reason =~ "mailto: or https:"
+    end
+  end
+
+  test "a private scalar that the curve rejects is reported, not raised" do
+    # 32 bytes of zeros passes the length check but is not a valid scalar.
+    zero_scalar = Base.url_encode64(<<0::256>>, padding: false)
+    assert {:error, reason} = VAPID.resolve_keys(nil, zero_scalar)
+    assert reason =~ "not a valid P-256 scalar"
+    # Same when the caller also supplies a public key.
+    %{public_key: pub} = VAPID.generate()
+    assert {:error, _} = VAPID.resolve_keys(pub, zero_scalar)
+  end
+
+  test "authorization/4 surfaces a signing failure instead of raising" do
+    %{public_key: pub} = VAPID.generate()
+    public = Base.url_decode64!(pub, padding: false)
+
+    assert {:error, reason} =
+             VAPID.authorization(
+               "https://push.example.test/x",
+               %{public: public, private: :not_a_scalar},
+               "mailto:ops@example.com",
+               :vapid_unit_test
+             )
+
+    assert reason =~ "VAPID JWT signing failed"
+  end
+
   test "more key-shape errors are readable" do
     {:ok, rsa_pem} = {:ok, PushX.Test.fcm_credentials()["private_key"]}
     assert {:error, reason} = VAPID.resolve_keys(nil, rsa_pem)

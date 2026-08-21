@@ -23,9 +23,18 @@ defmodule PushX.WebPush.VAPID do
       # Sanity: the private scalar must derive the given public point.
       {derived, _} = :crypto.generate_key(:ecdh, :prime256v1, private_raw)
 
-      if derived == public_raw,
-        do: {:ok, %{public: public_raw, private: private_raw}},
-        else: {:error, "VAPID public key does not match the private key"}
+      cond do
+        # A scalar of 0 (or a multiple of the curve order) derives the point at
+        # infinity, which OTP returns as <<0>> — not a usable key.
+        not match?(<<4, _::binary-64>>, derived) ->
+          {:error, "VAPID private key is not a valid P-256 scalar"}
+
+        derived != public_raw ->
+          {:error, "VAPID public key does not match the private key"}
+
+        true ->
+          {:ok, %{public: public_raw, private: private_raw}}
+      end
     end
   rescue
     e -> {:error, "invalid VAPID key: #{Exception.message(e)}"}

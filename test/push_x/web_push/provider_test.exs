@@ -249,6 +249,22 @@ defmodule PushX.WebPush.ProviderTest do
                WebPush.validate_subscription(atom_sub)
     end
 
+    test "a 65-byte p256dh that is not a point on P-256 is an invalid subscription, not a crash",
+         %{bypass: bypass} do
+      {good, _, _} = browser_subscription(bypass)
+
+      # Well-formed (0x04 prefix, 65 bytes) but not on the curve: only ECDH
+      # can tell, which happens at encryption time. Nothing is sent.
+      off_curve =
+        put_in(good, ["keys", "p256dh"], Base.url_encode64(<<4, 1::512>>, padding: false))
+
+      assert {:error, %Response{status: :invalid_token, reason: reason}} =
+               WebPush.send_once(off_curve, "x")
+
+      assert reason =~ "not a valid P-256 point"
+      refute_received {:bypass_request, _}
+    end
+
     test "options and payload size are validated before anything is sent", %{bypass: bypass} do
       {sub, _, _} = browser_subscription(bypass)
 

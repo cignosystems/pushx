@@ -110,6 +110,82 @@ defmodule Mix.Tasks.Pushx.DoctorTest do
     end)
   end
 
+  test "flags a missing FCM project id and broken token fetchers" do
+    saved =
+      for k <- [:fcm_project_id, :fcm_token_fetcher], do: {k, Application.get_env(:pushx, k)}
+
+    on_exit(fn -> for {k, v} <- saved, do: Application.put_env(:pushx, k, v) end)
+
+    Application.delete_env(:pushx, :fcm_project_id)
+
+    capture_io(fn ->
+      err = assert_raise Mix.Error, fn -> Doctor.run([]) end
+      assert err.message =~ ":fcm_project_id is not set"
+    end)
+
+    Application.put_env(:pushx, :fcm_project_id, "test-project")
+    Application.put_env(:pushx, :fcm_token_fetcher, {PushX.TestOAuth, :nope, []})
+
+    out =
+      capture_io(fn ->
+        err = assert_raise Mix.Error, fn -> Doctor.run([]) end
+        assert err.message =~ "is not exported"
+      end)
+
+    assert out =~ "✘ token fetcher PushX.TestOAuth.nope/1 is not exported"
+
+    Application.put_env(:pushx, :fcm_token_fetcher, "not an mfa")
+
+    capture_io(fn ->
+      err = assert_raise Mix.Error, fn -> Doctor.run([]) end
+      assert err.message =~ ":fcm_token_fetcher malformed"
+    end)
+  end
+
+  test "Web Push needs both VAPID settings and a mailto:/https: subject" do
+    keys = PushX.WebPush.generate_vapid_keys()
+
+    on_exit(fn ->
+      Application.delete_env(:pushx, :webpush_vapid_subject)
+      Application.delete_env(:pushx, :webpush_vapid_private_key)
+    end)
+
+    Application.put_env(:pushx, :webpush_vapid_private_key, keys.private_key)
+
+    capture_io(fn ->
+      err = assert_raise Mix.Error, fn -> Doctor.run([]) end
+      assert err.message =~ "missing VAPID subject or private key"
+    end)
+
+    Application.put_env(:pushx, :webpush_vapid_subject, "ops@example.com")
+
+    out =
+      capture_io(fn ->
+        err = assert_raise Mix.Error, fn -> Doctor.run([]) end
+        assert err.message =~ "mailto: or https:"
+      end)
+
+    assert out =~ "✘ VAPID key: VAPID subject must be a mailto: or https: contact URI"
+
+    Application.put_env(:pushx, :webpush_vapid_subject, "https://example.com/contact")
+    out = capture_io(fn -> Doctor.run([]) end)
+    assert out =~ "WEB   ✔ Web Push configured (subject https://example.com/contact)"
+  end
+
+  test "reports disabled retries and the configured cleanup callback" do
+    Application.put_env(:pushx, :retry_enabled, false)
+    Application.put_env(:pushx, :on_invalid_token, {PushX.TestOAuth, :cleanup, [:extra]})
+
+    on_exit(fn ->
+      Application.delete_env(:pushx, :retry_enabled)
+      Application.delete_env(:pushx, :on_invalid_token)
+    end)
+
+    out = capture_io(fn -> Doctor.run([]) end)
+    assert out =~ "Retries:  disabled"
+    assert out =~ "Cleanup:  on_invalid_token → PushX.TestOAuth.cleanup/3"
+  end
+
   test "mix pushx.vapid prints a usable key pair with config snippets" do
     out = capture_io(fn -> Vapid.run([]) end)
     [_, pub] = Regex.run(~r/webpush_vapid_public_key: "([^"]+)"/, out)

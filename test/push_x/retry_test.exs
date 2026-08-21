@@ -316,6 +316,46 @@ defmodule PushX.RetryTest do
       assert Agent.get(counter, & &1) == 1
     end
 
+    test "retry: :none still triggers the coalesced pool reconnect on a connection error" do
+      parent = self()
+      key = {:retry_none_test, System.unique_integer([:positive])}
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      retry_opts = [
+        reconnect_fn: fn ->
+          send(parent, :reconnected)
+          :ok
+        end,
+        reconnect_key: key
+      ]
+
+      result =
+        Retry.maybe_with_retry(
+          :apns,
+          [retry: :none],
+          fn ->
+            Agent.update(counter, &(&1 + 1))
+            {:error, Response.error(:apns, :connection_error, "closed")}
+          end,
+          retry_opts
+        )
+
+      # One attempt, the error returned as-is, and the pool reconnect fired once.
+      assert {:error, %Response{status: :connection_error}} = result
+      assert Agent.get(counter, & &1) == 1
+      assert_received :reconnected
+
+      # A non-connection failure does not reconnect.
+      Retry.maybe_with_retry(
+        :apns,
+        [retry: :none],
+        fn -> {:error, Response.error(:apns, :server_error, "boom")} end,
+        retry_opts
+      )
+
+      refute_received :reconnected
+    end
+
     test "retry: :blocking (and the default) retries retryable failures" do
       for opts <- [[retry: :blocking], []] do
         {:ok, counter} = Agent.start_link(fn -> 0 end)

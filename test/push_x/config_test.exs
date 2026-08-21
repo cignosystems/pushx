@@ -377,6 +377,18 @@ defmodule PushX.ConfigTest do
       assert Config.batch_timeout_ms() == 180_000
     end
 
+    test "is the 30s floor for retry: :none regardless of the retry policy" do
+      Application.put_env(:pushx, :retry_max_attempts, 5)
+      Application.put_env(:pushx, :retry_max_delay_ms, 120_000)
+
+      on_exit(fn ->
+        for k <- [:retry_max_attempts, :retry_max_delay_ms], do: Application.delete_env(:pushx, k)
+      end)
+
+      assert Config.batch_timeout_ms(retry: :none) == 30_000
+      assert Config.batch_timeout_ms(retry: :blocking) > 30_000
+    end
+
     test "is 30s when retries are disabled" do
       Application.put_env(:pushx, :retry_enabled, false)
       assert Config.batch_timeout_ms() == 30_000
