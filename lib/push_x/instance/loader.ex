@@ -1,4 +1,5 @@
 defmodule PushX.Instance.Loader do
+  @moduledoc since: "0.14.0"
   @moduledoc """
   Starts named instances on boot from your own source of truth.
 
@@ -73,6 +74,7 @@ defmodule PushX.Instance.Loader do
   Runs `load/1` synchronously and returns `:ignore` (no process is kept).
   Raises if `on_error: :raise` and any instance failed to start.
   """
+  @doc since: "0.14.0"
   @spec start_link(keyword()) :: :ignore
   def start_link(opts) do
     result = load(opts)
@@ -94,6 +96,7 @@ defmodule PushX.Instance.Loader do
   re-running the loader is safe); any other `PushX.Instance.start/3` error
   lands in `:failed` with its reason and is logged at error level.
   """
+  @doc since: "0.14.0"
   @spec load(keyword()) :: result()
   def load(opts) do
     specs = resolve_specs(Keyword.fetch!(opts, :instances))

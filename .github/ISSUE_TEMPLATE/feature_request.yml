@@ -1,0 +1,20 @@
+name: Feature request
+description: Propose an addition or change
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The use case, not the solution — e.g. "send Live Activity updates", "per-tenant rate limits".
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed API / behaviour
+      description: How would it look from the caller's side? Check ROADMAP.md first — some things are planned, some are explicitly out of scope.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What do you do today instead?

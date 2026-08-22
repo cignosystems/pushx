@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/cignosystems/pushx/security/advisories/new
+    about: Report privately — please do not open a public issue.
+  - name: Questions / usage help
+    url: https://hexdocs.pm/pushx
+    about: The docs (README, AGENTS.md, module docs) answer most "how do I" questions; otherwise open a blank issue.

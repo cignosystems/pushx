@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+1.0 is a stability promise, not a feature release — see README "Versioning and Support".
+
+### Removed
+- **`request_timeout/0` on `PushX.Config`** (deprecated since 0.11; it was never passed to Finch). Use `:receive_timeout` / `:pool_timeout`.
+
+### Added
+- `@doc since:` / `@moduledoc since:` on the whole public API (the version each function first shipped in; hexdocs shows it as a badge).
+- README "Versioning and Support": what the public API is, semver + deprecation policy, supported Elixir/OTP, "Upgrading to 1.0".
+- `SECURITY.md`, Dependabot (mix + GitHub Actions), issue and pull-request templates.
+
 ## [0.15.0] - 2026-08-22
 
 ### Added

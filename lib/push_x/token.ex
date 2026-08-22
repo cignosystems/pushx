@@ -1,4 +1,5 @@
 defmodule PushX.Token do
+  @moduledoc since: "0.4.0"
   @moduledoc """
   Token validation for push notification device tokens.
 
@@ -72,6 +73,7 @@ defmodule PushX.Token do
       {:error, :invalid_format}
 
   """
+  @doc since: "0.4.0"
   @spec validate(provider(), token()) :: :ok | {:error, validation_error()}
   def validate(_provider, nil), do: {:error, :empty}
   def validate(_provider, ""), do: {:error, :empty}
@@ -136,6 +138,7 @@ defmodule PushX.Token do
       false
 
   """
+  @doc since: "0.4.0"
   @spec valid?(provider(), token()) :: boolean()
   def valid?(provider, token) do
     validate(provider, token) == :ok
@@ -153,6 +156,7 @@ defmodule PushX.Token do
       ** (ArgumentError) Invalid APNS token: invalid_length
 
   """
+  @doc since: "0.4.0"
   @spec validate!(provider(), token()) :: :ok
   def validate!(provider, token) do
     case validate(provider, token) do
@@ -168,6 +172,7 @@ defmodule PushX.Token do
   @doc """
   Returns a human-readable error message for validation errors.
   """
+  @doc since: "0.4.0"
   @spec error_message(provider(), validation_error()) :: String.t()
   def error_message(:apns, :empty), do: "APNS token cannot be empty"
 

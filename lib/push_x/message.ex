@@ -1,4 +1,5 @@
 defmodule PushX.Message do
+  @moduledoc since: "0.1.0"
   @moduledoc """
   A struct representing a push notification message.
 
@@ -95,6 +96,7 @@ defmodule PushX.Message do
       %PushX.Message{title: nil, body: nil, data: %{}, priority: nil}
 
   """
+  @doc since: "0.1.0"
   @spec new() :: t()
   def new, do: %__MODULE__{}
 
@@ -107,6 +109,7 @@ defmodule PushX.Message do
       %PushX.Message{title: "Hello", body: "World", data: %{}, priority: nil}
 
   """
+  @doc since: "0.1.0"
   @spec new(String.t(), String.t()) :: t()
   def new(title, body) do
     %__MODULE__{title: title, body: body}
@@ -115,6 +118,7 @@ defmodule PushX.Message do
   @doc """
   Sets the title of the message.
   """
+  @doc since: "0.1.0"
   @spec title(t(), String.t()) :: t()
   def title(%__MODULE__{} = message, title) do
     %{message | title: title}
@@ -123,6 +127,7 @@ defmodule PushX.Message do
   @doc """
   Sets the body of the message.
   """
+  @doc since: "0.1.0"
   @spec body(t(), String.t()) :: t()
   def body(%__MODULE__{} = message, body) do
     %{message | body: body}
@@ -131,6 +136,7 @@ defmodule PushX.Message do
   @doc """
   Sets the badge count (iOS).
   """
+  @doc since: "0.1.0"
   @spec badge(t(), non_neg_integer()) :: t()
   def badge(%__MODULE__{} = message, badge) when is_integer(badge) and badge >= 0 do
     %{message | badge: badge}
@@ -139,6 +145,7 @@ defmodule PushX.Message do
   @doc """
   Sets the notification sound.
   """
+  @doc since: "0.1.0"
   @spec sound(t(), String.t()) :: t()
   def sound(%__MODULE__{} = message, sound) do
     %{message | sound: sound}
@@ -147,6 +154,7 @@ defmodule PushX.Message do
   @doc """
   Sets custom data payload.
   """
+  @doc since: "0.1.0"
   @spec data(t(), map()) :: t()
   def data(%__MODULE__{} = message, data) when is_map(data) do
     %{message | data: data}
@@ -155,6 +163,7 @@ defmodule PushX.Message do
   @doc """
   Adds a key-value pair to the data payload.
   """
+  @doc since: "0.1.0"
   @spec put_data(t(), atom() | String.t(), any()) :: t()
   def put_data(%__MODULE__{} = message, key, value) do
     %{message | data: Map.put(message.data, key, value)}
@@ -163,6 +172,7 @@ defmodule PushX.Message do
   @doc """
   Sets the notification category (iOS).
   """
+  @doc since: "0.1.0"
   @spec category(t(), String.t()) :: t()
   def category(%__MODULE__{} = message, category) do
     %{message | category: category}
@@ -171,6 +181,7 @@ defmodule PushX.Message do
   @doc """
   Sets the thread ID for notification grouping (iOS).
   """
+  @doc since: "0.1.0"
   @spec thread_id(t(), String.t()) :: t()
   def thread_id(%__MODULE__{} = message, thread_id) do
     %{message | thread_id: thread_id}
@@ -179,6 +190,7 @@ defmodule PushX.Message do
   @doc """
   Sets the image URL for rich notifications.
   """
+  @doc since: "0.1.0"
   @spec image(t(), String.t()) :: t()
   def image(%__MODULE__{} = message, image_url) do
     %{message | image: image_url}
@@ -187,6 +199,7 @@ defmodule PushX.Message do
   @doc """
   Sets the priority (:high or :normal).
   """
+  @doc since: "0.1.0"
   @spec priority(t(), :high | :normal) :: t()
   def priority(%__MODULE__{} = message, priority) when priority in [:high, :normal] do
     %{message | priority: priority}
@@ -195,6 +208,7 @@ defmodule PushX.Message do
   @doc """
   Sets the TTL (time to live) in seconds.
   """
+  @doc since: "0.1.0"
   @spec ttl(t(), non_neg_integer()) :: t()
   def ttl(%__MODULE__{} = message, ttl) when is_integer(ttl) and ttl >= 0 do
     %{message | ttl: ttl}
@@ -203,6 +217,7 @@ defmodule PushX.Message do
   @doc """
   Sets the collapse key for message deduplication.
   """
+  @doc since: "0.1.0"
   @spec collapse_key(t(), String.t()) :: t()
   def collapse_key(%__MODULE__{} = message, key) do
     %{message | collapse_key: key}
@@ -212,6 +227,7 @@ defmodule PushX.Message do
   Sets the subtitle (APNS `alert.subtitle`; for FCM, delivered to iOS via the
   `apns` override).
   """
+  @doc since: "0.14.0"
   @spec subtitle(t(), String.t()) :: t()
   def subtitle(%__MODULE__{} = message, subtitle) when is_binary(subtitle) do
     %{message | subtitle: subtitle}
@@ -222,6 +238,7 @@ defmodule PushX.Message do
   (APNS `mutable-content: 1`) — required for rich media (image attachments,
   decrypting content on device). Passes through to iOS via FCM too.
   """
+  @doc since: "0.14.0"
   @spec mutable_content(t(), boolean()) :: t()
   def mutable_content(%__MODULE__{} = message, flag \\ true) when is_boolean(flag) do
     %{message | mutable_content: flag}
@@ -233,6 +250,7 @@ defmodule PushX.Message do
   title/body) for a silent push; with a visible alert it becomes an
   alert-plus-background-fetch notification.
   """
+  @doc since: "0.14.0"
   @spec content_available(t(), boolean()) :: t()
   def content_available(%__MODULE__{} = message, flag \\ true) when is_boolean(flag) do
     %{message | content_available: flag}
@@ -244,6 +262,7 @@ defmodule PushX.Message do
   Time Sensitive entitlement) or `:critical` (needs Apple's critical-alerts
   entitlement).
   """
+  @doc since: "0.14.0"
   @spec interruption_level(t(), interruption_level()) :: t()
   def interruption_level(%__MODULE__{} = message, level)
       when level in [:passive, :active, :time_sensitive, :critical] do
@@ -254,6 +273,7 @@ defmodule PushX.Message do
   Sets the APNS relevance score (`0.0`..`1.0`) used to sort notifications in
   the iOS notification summary.
   """
+  @doc since: "0.14.0"
   @spec relevance_score(t(), float()) :: t()
   def relevance_score(%__MODULE__{} = message, score)
       when is_number(score) and score >= 0 and score <= 1 do
@@ -266,6 +286,7 @@ defmodule PushX.Message do
   `title_loc_key`/`title_loc_args`). Any literal title set with `title/2` is
   still sent as a fallback for clients without the key.
   """
+  @doc since: "0.14.0"
   @spec localized_title(t(), String.t(), [String.t()]) :: t()
   def localized_title(%__MODULE__{} = message, key, args \\ [])
       when is_binary(key) and is_list(args) do
@@ -273,6 +294,7 @@ defmodule PushX.Message do
   end
 
   @doc "Localizes the subtitle (APNS `subtitle-loc-key`/`subtitle-loc-args`)."
+  @doc since: "0.14.0"
   @spec localized_subtitle(t(), String.t(), [String.t()]) :: t()
   def localized_subtitle(%__MODULE__{} = message, key, args \\ [])
       when is_binary(key) and is_list(args) do
@@ -283,6 +305,7 @@ defmodule PushX.Message do
   Localizes the body (APNS `loc-key`/`loc-args`, FCM `body_loc_key`/
   `body_loc_args`).
   """
+  @doc since: "0.14.0"
   @spec localized_body(t(), String.t(), [String.t()]) :: t()
   def localized_body(%__MODULE__{} = message, key, args \\ [])
       when is_binary(key) and is_list(args) do
@@ -297,6 +320,7 @@ defmodule PushX.Message do
   visible-but-silent notification, build the raw APNS payload map yourself
   (omit `"sound"`) instead of using the `Message` builder.
   """
+  @doc since: "0.1.0"
   @spec to_apns_payload(t()) :: map()
   def to_apns_payload(%__MODULE__{} = message) do
     alert = apns_alert(message)
@@ -331,6 +355,7 @@ defmodule PushX.Message do
       [priority: 5]
 
   """
+  @doc since: "0.12.0"
   @spec to_apns_options(t()) :: keyword()
   def to_apns_options(%__MODULE__{} = message) do
     []
@@ -369,6 +394,7 @@ defmodule PushX.Message do
       nil
 
   """
+  @doc since: "0.12.0"
   @spec to_fcm_android(t()) :: map() | nil
   def to_fcm_android(%__MODULE__{} = message) do
     notification =
@@ -399,6 +425,7 @@ defmodule PushX.Message do
   @doc """
   Converts the message to an FCM payload map.
   """
+  @doc since: "0.1.0"
   @spec to_fcm_payload(t()) :: map()
   def to_fcm_payload(%__MODULE__{} = message) do
     notification =
@@ -464,6 +491,7 @@ defmodule PushX.Message do
       nil
 
   """
+  @doc since: "0.14.0"
   @spec to_fcm_apns(t()) :: map() | nil
   def to_fcm_apns(%__MODULE__{} = message) do
     # Only the alert keys FCM does not already carry (it sends title/body).
@@ -494,6 +522,7 @@ defmodule PushX.Message do
       %{"title" => "Hi", "body" => "There", "data" => %{"url" => "/inbox"}}
 
   """
+  @doc since: "0.15.0"
   @spec to_webpush_payload(t()) :: map()
   def to_webpush_payload(%__MODULE__{} = message) do
     %{}
@@ -521,6 +550,7 @@ defmodule PushX.Message do
       [ttl: 3600, urgency: :high]
 
   """
+  @doc since: "0.15.0"
   @spec to_webpush_options(t()) :: keyword()
   def to_webpush_options(%__MODULE__{} = message) do
     []

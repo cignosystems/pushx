@@ -1,4 +1,5 @@
 defmodule PushX do
+  @moduledoc since: "0.1.0"
   @moduledoc """
   Push notifications for Elixir: APNS, FCM and Web Push in one call.
 
@@ -194,6 +195,7 @@ defmodule PushX do
   audiences prefer `retry: :none` and requeue failures yourself.
 
   """
+  @doc since: "0.1.0"
   @spec push(provider() | instance_name(), target(), message(), [option()]) ::
           {:ok, Response.t()} | {:error, Response.t()}
   def push(provider, device_token, message, opts \\ [])
@@ -256,6 +258,7 @@ defmodule PushX do
       PushX.push_data(:my_fcm, token, %{action: "sync", id: 123})
 
   """
+  @doc since: "0.10.0"
   @spec push_data(provider() | instance_name(), target(), map(), [option()]) ::
           {:ok, Response.t()} | {:error, Response.t()}
   def push_data(provider_or_instance, device_token, data, opts \\ [])
@@ -365,6 +368,7 @@ defmodule PushX do
       end
 
   """
+  @doc since: "0.1.0"
   @spec push!(provider() | instance_name(), target(), message(), [option()]) :: :ok | :error
   def push!(provider, device_token, message, opts \\ []) do
     case push(provider, device_token, message, opts) do
@@ -385,6 +389,7 @@ defmodule PushX do
         |> PushX.Message.body("World")
 
   """
+  @doc since: "0.1.0"
   @spec message() :: Message.t()
   def message, do: Message.new()
 
@@ -398,6 +403,7 @@ defmodule PushX do
       message = PushX.message("Hello", "World")
 
   """
+  @doc since: "0.1.0"
   @spec message(String.t(), String.t()) :: Message.t()
   def message(title, body), do: Message.new(title, body)
 
@@ -470,6 +476,7 @@ defmodule PushX do
   provider blip doesn't park batch tasks in backoff.
 
   """
+  @doc since: "0.4.0"
   @spec push_batch(provider() | instance_name(), Enumerable.t(), message(), [option()]) ::
           [{target(), {:ok, Response.t()} | {:error, Response.t()}}]
   def push_batch(provider, device_tokens, message, opts \\ []) do
@@ -545,6 +552,7 @@ defmodule PushX do
         PushX.push_batch!(:fcm, tokens, "Hello!")
 
   """
+  @doc since: "0.4.0"
   @spec push_batch!(provider() | instance_name(), [token()], message(), [option()]) ::
           %{success: non_neg_integer(), failure: non_neg_integer(), total: non_neg_integer()}
   def push_batch!(provider, device_tokens, message, opts \\ []) do
@@ -616,6 +624,7 @@ defmodule PushX do
       #=> }
 
   """
+  @doc since: "0.8.0"
   @spec health_check() :: %{
           apns: map(),
           fcm: map(),
@@ -659,6 +668,7 @@ defmodule PushX do
       #=> :ok
 
   """
+  @doc since: "0.7.1"
   @spec reconnect() :: :ok | {:error, term()}
   def reconnect do
     name = PushX.Config.finch_name()

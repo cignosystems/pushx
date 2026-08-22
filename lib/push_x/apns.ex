@@ -1,4 +1,5 @@
 defmodule PushX.APNS do
+  @moduledoc since: "0.1.0"
   @moduledoc """
   Apple Push Notification Service (APNS) client.
 
@@ -108,6 +109,7 @@ defmodule PushX.APNS do
     * `{:error, %PushX.Response{}}` on failure
 
   """
+  @doc since: "0.1.0"
   @spec send(token(), payload(), [option()]) :: {:ok, Response.t()} | {:error, Response.t()}
   def send(device_token, payload, opts \\ []) do
     Retry.maybe_with_retry(:apns, opts, fn -> send_once(device_token, payload, opts) end)
@@ -118,6 +120,7 @@ defmodule PushX.APNS do
 
   Use this when you want to handle retries yourself or for testing.
   """
+  @doc since: "0.2.3"
   @spec send_once(token(), payload(), [option()]) :: {:ok, Response.t()} | {:error, Response.t()}
   def send_once(device_token, payload, opts \\ []) do
     case SendGate.check(:apns, :apns) do
@@ -298,6 +301,7 @@ defmodule PushX.APNS do
 
   A list of `{token, result}` tuples.
   """
+  @doc since: "0.4.0"
   @spec send_batch(Enumerable.t(), payload(), [option()]) ::
           [{token(), {:ok, Response.t()} | {:error, Response.t()}}]
   def send_batch(device_tokens, payload, opts \\ []) do
@@ -317,6 +321,7 @@ defmodule PushX.APNS do
       %{"aps" => %{"alert" => %{"title" => "Hello", "body" => "World"}, "sound" => "default"}}
 
   """
+  @doc since: "0.1.0"
   @spec notification(String.t(), String.t(), non_neg_integer() | nil) :: map()
   def notification(title, body, badge \\ nil) do
     aps = %{
@@ -331,6 +336,7 @@ defmodule PushX.APNS do
   @doc """
   Creates a notification with custom data.
   """
+  @doc since: "0.1.0"
   @spec notification_with_data(String.t(), String.t(), map(), non_neg_integer() | nil) :: map()
   def notification_with_data(title, body, data, badge \\ nil) do
     notification(title, body, badge)
@@ -340,6 +346,7 @@ defmodule PushX.APNS do
   @doc """
   Creates a silent/background notification.
   """
+  @doc since: "0.1.0"
   @spec silent_notification(map()) :: map()
   def silent_notification(data \\ %{}) do
     %{"aps" => %{"content-available" => 1}}
@@ -375,6 +382,7 @@ defmodule PushX.APNS do
       PushX.APNS.web_notification("Update", "New feature available", nil, url_args: ["features", "v2"])
 
   """
+  @doc since: "0.5.0"
   @spec web_notification(String.t(), String.t(), String.t() | nil, keyword()) :: map()
   def web_notification(title, body, url \\ nil, opts \\ []) do
     action = Keyword.get(opts, :action, "View")
@@ -411,6 +419,7 @@ defmodule PushX.APNS do
       )
 
   """
+  @doc since: "0.5.0"
   @spec web_notification_with_data(String.t(), String.t(), String.t() | nil, map(), keyword()) ::
           map()
   def web_notification_with_data(title, body, url, data, opts \\ []) do

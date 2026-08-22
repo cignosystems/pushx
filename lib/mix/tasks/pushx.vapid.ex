@@ -1,6 +1,7 @@
 defmodule Mix.Tasks.Pushx.Vapid do
   @shortdoc "Generates a VAPID key pair for Web Push"
 
+  @moduledoc since: "0.15.0"
   @moduledoc """
   Generates a VAPID (RFC 8292) application-server key pair for Web Push and
   prints it with the config and front-end snippets that use it:

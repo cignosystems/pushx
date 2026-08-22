@@ -1,4 +1,5 @@
 defmodule PushX.Retry do
+  @moduledoc since: "0.2.3"
   @moduledoc """
   Retry logic for push notification delivery following Apple and Google best practices.
 
@@ -56,6 +57,7 @@ defmodule PushX.Retry do
   `{:error, %Response{status: :invalid_request}}` for `provider` without
   calling `fun`.
   """
+  @doc since: "0.13.0"
   @spec maybe_with_retry(
           :apns | :fcm | :webpush,
           keyword(),
@@ -116,6 +118,7 @@ defmodule PushX.Retry do
       PushX.Retry.with_retry(fn -> PushX.APNS.send_once(token, payload, opts) end)
 
   """
+  @doc since: "0.2.3"
   @spec with_retry((-> {:ok, Response.t()} | {:error, Response.t()}), keyword()) ::
           {:ok, Response.t()} | {:error, Response.t()}
   def with_retry(fun, opts \\ []) do
@@ -245,6 +248,7 @@ defmodule PushX.Retry do
       delay = min(base_delay * 2^(attempt-1) + jitter, max_delay)
 
   """
+  @doc since: "0.2.3"
   @spec calculate_delay(Response.t(), pos_integer(), pos_integer(), pos_integer()) ::
           pos_integer()
   def calculate_delay(

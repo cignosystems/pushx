@@ -1,4 +1,5 @@
 defmodule PushX.JWTCache do
+  @moduledoc since: "0.11.0"
   @moduledoc """
   Cache for short-lived, expensively-derived values: APNS JWTs, per-origin
   VAPID JWTs and resolved VAPID key pairs.
@@ -32,6 +33,7 @@ defmodule PushX.JWTCache do
   `generate_fn` must return `{:ok, value}` or `{:error, reason}`; only
   `{:ok, _}` results are cached.
   """
+  @doc since: "0.11.0"
   @spec get_or_generate(cache_key(), (-> {:ok, term()} | {:error, term()}), pos_integer()) ::
           {:ok, term()} | {:error, term()}
   def get_or_generate(cache_key, generate_fn, ttl_ms)
@@ -48,6 +50,7 @@ defmodule PushX.JWTCache do
   end
 
   @doc "Removes a cached entry. Used when an instance is stopped."
+  @doc since: "0.11.0"
   @spec invalidate(cache_key()) :: :ok
   def invalidate(cache_key) do
     safe_delete(cache_key)
@@ -59,6 +62,7 @@ defmodule PushX.JWTCache do
   `{:vapid_jwt, :tenant_web, :_}` for all of an instance's per-origin VAPID
   JWTs. Used when an instance is stopped or reconfigured.
   """
+  @doc since: "0.15.0"
   @spec invalidate_match(tuple()) :: :ok
   def invalidate_match(pattern) do
     :ets.match_delete(@table, {pattern, :_, :_})

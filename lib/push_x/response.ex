@@ -1,4 +1,5 @@
 defmodule PushX.Response do
+  @moduledoc since: "0.1.0"
   @moduledoc """
   A struct representing the response from a push notification request.
 
@@ -73,6 +74,7 @@ defmodule PushX.Response do
   @doc """
   Creates a successful response.
   """
+  @doc since: "0.1.0"
   @spec success(provider :: :apns | :fcm | :webpush | :unknown, id :: String.t() | nil) :: t()
   def success(provider, id \\ nil) do
     %__MODULE__{
@@ -85,6 +87,7 @@ defmodule PushX.Response do
   @doc """
   Creates an error response.
   """
+  @doc since: "0.1.0"
   @spec error(
           provider :: :apns | :fcm | :webpush | :unknown,
           status :: status(),
@@ -102,6 +105,7 @@ defmodule PushX.Response do
   @doc """
   Creates an error response with raw data.
   """
+  @doc since: "0.1.0"
   @spec error(
           provider :: :apns | :fcm | :webpush | :unknown,
           status :: status(),
@@ -120,6 +124,7 @@ defmodule PushX.Response do
   @doc """
   Creates an error response with raw data and retry_after value.
   """
+  @doc since: "0.1.0"
   @spec error(
           provider :: :apns | :fcm | :webpush | :unknown,
           status :: status(),
@@ -181,6 +186,7 @@ defmodule PushX.Response do
       nil
 
   """
+  @doc since: "0.10.0"
   @spec extract_fcm_error_code(map()) :: String.t() | nil
   def extract_fcm_error_code(%{"error" => %{"details" => details}}) when is_list(details) do
     Enum.find_value(details, fn
@@ -199,6 +205,7 @@ defmodule PushX.Response do
 
   See: https://firebase.google.com/docs/reference/fcm/rest/v1/ErrorCode
   """
+  @doc since: "0.1.0"
   @spec fcm_error_to_status(String.t()) :: status()
   def fcm_error_to_status(error_code) do
     case error_code do
@@ -228,6 +235,7 @@ defmodule PushX.Response do
       false
 
   """
+  @doc since: "0.1.0"
   @spec success?(t()) :: boolean()
   def success?(%__MODULE__{status: :sent}), do: true
   def success?(%__MODULE__{}), do: false
@@ -244,6 +252,7 @@ defmodule PushX.Response do
       false
 
   """
+  @doc since: "0.1.0"
   @spec should_remove_token?(t()) :: boolean()
   def should_remove_token?(%__MODULE__{status: status}) do
     status in [:invalid_token, :expired_token, :unregistered]
@@ -266,6 +275,7 @@ defmodule PushX.Response do
       false
 
   """
+  @doc since: "0.2.3"
   @spec retryable?(t()) :: boolean()
   def retryable?(%__MODULE__{status: status}) do
     status in [:connection_error, :rate_limited, :server_error]

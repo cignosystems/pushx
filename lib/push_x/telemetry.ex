@@ -1,4 +1,5 @@
 defmodule PushX.Telemetry do
+  @moduledoc since: "0.3.0"
   @moduledoc """
   Telemetry integration for PushX.
 
@@ -276,6 +277,7 @@ defmodule PushX.Telemetry do
       "short"
 
   """
+  @doc since: "0.14.0"
   @spec truncate_token(String.t()) :: String.t()
   def truncate_token(token) when is_binary(token) and byte_size(token) > 16 do
     first = binary_part(token, 0, 8)

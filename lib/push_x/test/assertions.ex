@@ -1,4 +1,5 @@
 defmodule PushX.Test.Assertions do
+  @moduledoc since: "0.14.0"
   @moduledoc """
   ExUnit assertions for `PushX.Test` (test delivery mode).
 
@@ -20,6 +21,7 @@ defmodule PushX.Test.Assertions do
   first match. `pattern` is a match pattern, e.g.
   `%{provider: :apns, target: ^token, instance: nil}`.
   """
+  @doc since: "0.14.0"
   defmacro assert_pushed(pattern) do
     pattern_string = Macro.to_string(pattern)
 
@@ -40,6 +42,7 @@ defmodule PushX.Test.Assertions do
   end
 
   @doc "Asserts that no recorded push matches `pattern`."
+  @doc since: "0.14.0"
   defmacro refute_pushed(pattern) do
     pattern_string = Macro.to_string(pattern)
 
@@ -60,6 +63,7 @@ defmodule PushX.Test.Assertions do
   end
 
   @doc "Asserts that the current test process recorded no pushes at all."
+  @doc since: "0.14.0"
   defmacro assert_no_pushes do
     quote do
       case PushX.Test.pushes() do

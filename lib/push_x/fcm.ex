@@ -1,4 +1,5 @@
 defmodule PushX.FCM do
+  @moduledoc since: "0.1.0"
   @moduledoc """
   Firebase Cloud Messaging (FCM) client.
 
@@ -129,6 +130,7 @@ defmodule PushX.FCM do
     * `{:error, %PushX.Response{}}` on failure
 
   """
+  @doc since: "0.1.0"
   @spec send(target(), payload(), [option()]) :: {:ok, Response.t()} | {:error, Response.t()}
   def send(device_token, payload, opts \\ []) do
     Retry.maybe_with_retry(:fcm, opts, fn -> send_once(device_token, payload, opts) end)
@@ -139,6 +141,7 @@ defmodule PushX.FCM do
 
   Use this when you want to handle retries yourself or for testing.
   """
+  @doc since: "0.2.3"
   @spec send_once(target(), payload(), [option()]) :: {:ok, Response.t()} | {:error, Response.t()}
   def send_once(device_token, payload, opts \\ []) do
     case SendGate.check(:fcm, :fcm) do
@@ -278,6 +281,7 @@ defmodule PushX.FCM do
 
   A list of `{token, result}` tuples.
   """
+  @doc since: "0.4.0"
   @spec send_batch(Enumerable.t(), payload(), [option()]) ::
           [{target(), {:ok, Response.t()} | {:error, Response.t()}}]
   def send_batch(device_tokens, payload, opts \\ []) do
@@ -316,11 +320,13 @@ defmodule PushX.FCM do
       for {token, {:error, "NOT_FOUND"}} <- results, do: MyApp.Tokens.delete(token)
 
   """
+  @doc since: "0.14.0"
   @spec subscribe([token()], String.t(), keyword()) ::
           {:ok, [topic_result()]} | {:error, Response.t()}
   def subscribe(tokens, topic, opts \\ []), do: manage_topic(:subscribe, tokens, topic, opts)
 
   @doc "Unsubscribes device tokens from an FCM topic (`iid/v1:batchRemove`). See `subscribe/3`."
+  @doc since: "0.14.0"
   @spec unsubscribe([token()], String.t(), keyword()) ::
           {:ok, [topic_result()]} | {:error, Response.t()}
   def unsubscribe(tokens, topic, opts \\ []), do: manage_topic(:unsubscribe, tokens, topic, opts)
@@ -489,6 +495,7 @@ defmodule PushX.FCM do
       %{"title" => "Hello", "body" => "World"}
 
   """
+  @doc since: "0.1.0"
   @spec notification(String.t(), String.t(), keyword()) :: map()
   def notification(title, body, opts \\ []) do
     %{"title" => title, "body" => body}
@@ -529,6 +536,7 @@ defmodule PushX.FCM do
       )
 
   """
+  @doc since: "0.5.0"
   @spec web_notification(String.t(), String.t(), String.t(), keyword()) :: map()
   def web_notification(title, body, link, opts \\ []) do
     notification_payload =
@@ -570,6 +578,7 @@ defmodule PushX.FCM do
       )
 
   """
+  @doc since: "0.5.0"
   @spec send_web(token(), String.t(), String.t(), String.t(), keyword()) ::
           {:ok, Response.t()} | {:error, Response.t()}
   def send_web(device_token, title, body, link, opts \\ []) do
@@ -583,6 +592,7 @@ defmodule PushX.FCM do
   @doc """
   Sends a data-only message (no visible notification) with automatic retry.
   """
+  @doc since: "0.1.0"
   @spec send_data(target(), map(), [option()]) :: {:ok, Response.t()} | {:error, Response.t()}
   def send_data(device_token, data, opts \\ []) do
     Retry.maybe_with_retry(:fcm, opts, fn -> send_data_once(device_token, data, opts) end)
@@ -591,6 +601,7 @@ defmodule PushX.FCM do
   @doc """
   Sends a data-only message without retry.
   """
+  @doc since: "0.2.3"
   @spec send_data_once(target(), map(), [option()]) ::
           {:ok, Response.t()} | {:error, Response.t()}
   def send_data_once(device_token, data, opts \\ []) do

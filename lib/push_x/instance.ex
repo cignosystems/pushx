@@ -1,4 +1,5 @@
 defmodule PushX.Instance do
+  @moduledoc since: "0.9.0"
   @moduledoc """
   Runtime management of named push notification instances.
 
@@ -154,6 +155,7 @@ defmodule PushX.Instance do
   the OAuth process after start (FCM).
 
   """
+  @doc since: "0.9.0"
   @spec start(atom(), :apns | :fcm | :webpush, keyword()) :: {:ok, atom()} | {:error, term()}
   def start(name, provider, config)
       when is_atom(name) and provider in [:apns, :fcm, :webpush] and is_list(config) do
@@ -176,6 +178,7 @@ defmodule PushX.Instance do
   @doc """
   Stops a named instance and cleans up all resources.
   """
+  @doc since: "0.9.0"
   @spec stop(atom()) :: :ok | {:error, :not_found}
   def stop(name) when is_atom(name) do
     sup_name = PushX.Instance.Supervisor.sup_name(name)
@@ -215,6 +218,7 @@ defmodule PushX.Instance do
       PushX.Instance.reconfigure(:apns_prod, mode: :sandbox)
 
   """
+  @doc since: "0.9.0"
   @spec reconfigure(atom(), keyword()) :: {:ok, atom()} | {:error, term()}
   def reconfigure(name, new_config) when is_atom(name) and is_list(new_config) do
     case lookup(name) do
@@ -237,6 +241,7 @@ defmodule PushX.Instance do
   @doc """
   Disables an instance. New pushes are rejected, but the pool stays warm.
   """
+  @doc since: "0.9.0"
   @spec disable(atom()) :: :ok | {:error, :not_found}
   def disable(name) when is_atom(name) do
     case :ets.lookup(@table, name) do
@@ -252,6 +257,7 @@ defmodule PushX.Instance do
   @doc """
   Re-enables a disabled instance.
   """
+  @doc since: "0.9.0"
   @spec enable(atom()) :: :ok | {:error, :not_found}
   def enable(name) when is_atom(name) do
     case :ets.lookup(@table, name) do
@@ -267,6 +273,7 @@ defmodule PushX.Instance do
   @doc """
   Returns the status of a named instance.
   """
+  @doc since: "0.9.0"
   @spec status(atom()) :: {:ok, map()} | {:error, :not_found}
   def status(name) when is_atom(name) do
     case :ets.lookup(@table, name) do
@@ -281,6 +288,7 @@ defmodule PushX.Instance do
   @doc """
   Lists all running instances.
   """
+  @doc since: "0.9.0"
   @spec list() :: [map()]
   def list do
     :ets.tab2list(@table)
@@ -295,6 +303,7 @@ defmodule PushX.Instance do
   Returns `{:error, :disabled}` if the instance exists but is disabled,
   `{:error, :not_found}` if it doesn't exist.
   """
+  @doc since: "0.9.0"
   @spec resolve(atom()) :: {:ok, map()} | {:error, :not_found | :disabled}
   def resolve(name) do
     case :ets.lookup(@table, name) do
@@ -312,6 +321,7 @@ defmodule PushX.Instance do
   @doc """
   Restarts the Finch HTTP pool for a named instance.
   """
+  @doc since: "0.9.0"
   @spec reconnect(atom()) :: :ok | {:error, term()}
   def reconnect(name) when is_atom(name) do
     case :ets.lookup(@table, name) do

@@ -1,4 +1,5 @@
 defmodule PushX.Test do
+  @moduledoc since: "0.14.0"
   @moduledoc """
   Test delivery mode: assert what your application pushed without touching
   APNS or FCM.
@@ -90,6 +91,7 @@ defmodule PushX.Test do
   @stubs_table :pushx_test_stubs
 
   defmodule Push do
+    @moduledoc since: "0.14.0"
     @moduledoc """
     One recorded push. Fields:
 
@@ -120,6 +122,7 @@ defmodule PushX.Test do
   end
 
   @doc "True when `delivery: :test` is configured."
+  @doc since: "0.14.0"
   @spec active?() :: boolean()
   def active?, do: Config.delivery() == :test
 
@@ -128,6 +131,7 @@ defmodule PushX.Test do
   in recording order — for concurrent batch workers that is completion order,
   not input order.
   """
+  @doc since: "0.14.0"
   @spec pushes() :: [Push.t()]
   def pushes do
     owner = owner()
@@ -136,6 +140,7 @@ defmodule PushX.Test do
   end
 
   @doc "The most recent recorded push for the current test process, or `nil`."
+  @doc since: "0.14.0"
   @spec last_push() :: Push.t() | nil
   def last_push, do: pushes() |> List.last()
 
@@ -145,6 +150,7 @@ defmodule PushX.Test do
   Not required between tests (records are per process), but handy inside a
   test that exercises several scenarios.
   """
+  @doc since: "0.14.0"
   @spec clear() :: :ok
   def clear do
     Store.purge(owner())
@@ -160,6 +166,7 @@ defmodule PushX.Test do
 
   Pass `nil` to remove the stub.
   """
+  @doc since: "0.14.0"
   @spec stub(
           (Push.t() -> :ok | {:error, atom()} | {:ok, Response.t()} | {:error, Response.t()})
           | nil
@@ -264,6 +271,7 @@ defmodule PushX.Test do
   Generated once per VM and cached; tied to no Apple account. For starting
   APNS instances in tests.
   """
+  @doc since: "0.14.0"
   @spec apns_private_key() :: String.t()
   def apns_private_key do
     cached({__MODULE__, :apns_key}, fn ->
@@ -287,6 +295,7 @@ defmodule PushX.Test do
       PushX.push(:webpush, sub, "Hi")
       assert_pushed(%{provider: :webpush, target: ^sub})
   """
+  @doc since: "0.15.0"
   @spec webpush_subscription(keyword()) :: map()
   def webpush_subscription(opts \\ []) do
     {public, _private} = :crypto.generate_key(:ecdh, :prime256v1)
@@ -310,6 +319,7 @@ defmodule PushX.Test do
   for `PushX.Instance.start/3`'s credential validation. Generated once per VM
   and cached; tied to no Google project.
   """
+  @doc since: "0.14.0"
   @spec fcm_credentials() :: map()
   def fcm_credentials do
     cached({__MODULE__, :fcm_credentials}, fn ->

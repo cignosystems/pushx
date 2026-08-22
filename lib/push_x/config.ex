@@ -1,6 +1,7 @@
 defmodule PushX.Config do
   require Logger
 
+  @moduledoc since: "0.1.0"
   @moduledoc """
   Configuration management for PushX.
 
@@ -137,6 +138,7 @@ defmodule PushX.Config do
   @doc """
   Gets a configuration value.
   """
+  @doc since: "0.1.0"
   @spec get(atom(), any()) :: any()
   def get(key, default \\ nil) do
     Application.get_env(:pushx, key, default)
@@ -146,6 +148,7 @@ defmodule PushX.Config do
   Gets a required configuration value.
   Raises if the value is not configured.
   """
+  @doc since: "0.1.0"
   @spec get!(atom()) :: any()
   def get!(key) do
     case get(key) do
@@ -157,12 +160,14 @@ defmodule PushX.Config do
   @doc """
   Gets the APNS Key ID.
   """
+  @doc since: "0.1.0"
   @spec apns_key_id() :: String.t()
   def apns_key_id, do: get!(:apns_key_id)
 
   @doc """
   Gets the APNS Team ID.
   """
+  @doc since: "0.1.0"
   @spec apns_team_id() :: String.t()
   def apns_team_id, do: get!(:apns_team_id)
 
@@ -170,6 +175,7 @@ defmodule PushX.Config do
   Gets the APNS private key content.
   Supports file paths, environment variables, and raw strings.
   """
+  @doc since: "0.1.0"
   @spec apns_private_key() :: String.t()
   def apns_private_key do
     case get!(:apns_private_key) do
@@ -187,12 +193,14 @@ defmodule PushX.Config do
   @doc """
   Gets the APNS mode (:prod or :sandbox).
   """
+  @doc since: "0.1.0"
   @spec apns_mode() :: :prod | :sandbox
   def apns_mode, do: get(:apns_mode, :prod)
 
   @doc """
   Gets the FCM project ID.
   """
+  @doc since: "0.1.0"
   @spec fcm_project_id() :: String.t()
   def fcm_project_id, do: get!(:fcm_project_id)
 
@@ -200,6 +208,7 @@ defmodule PushX.Config do
   Gets the FCM credentials for Goth.
   Returns a map suitable for Goth configuration.
   """
+  @doc since: "0.1.0"
   @spec fcm_credentials() :: map() | {:file, String.t()}
   def fcm_credentials do
     case get!(:fcm_credentials) do
@@ -224,6 +233,7 @@ defmodule PushX.Config do
   @doc """
   Gets the Finch pool name.
   """
+  @doc since: "0.1.0"
   @spec finch_name() :: atom()
   def finch_name, do: get(:finch_name, PushX.Finch)
 
@@ -232,6 +242,7 @@ defmodule PushX.Config do
 
   Default: 25 (increased from 10 in v0.6.0 to handle traffic bursts better)
   """
+  @doc since: "0.1.0"
   @spec finch_pool_size() :: pos_integer()
   def finch_pool_size, do: get(:finch_pool_size, 25)
 
@@ -240,6 +251,7 @@ defmodule PushX.Config do
 
   Default: 2 (increased from 1 in v0.6.0 to handle traffic bursts better)
   """
+  @doc since: "0.1.0"
   @spec finch_pool_count() :: pos_integer()
   def finch_pool_count, do: get(:finch_pool_count, 2)
 
@@ -250,6 +262,7 @@ defmodule PushX.Config do
   them (< 0.22). `overrides` (e.g. an instance's config) win over the global
   config.
   """
+  @doc since: "0.15.0"
   @spec finch_http2_opts(keyword()) :: keyword()
   def finch_http2_opts(overrides \\ []) do
     if finch_http2_options_supported?() do
@@ -328,6 +341,7 @@ defmodule PushX.Config do
   @doc """
   Checks if APNS is configured.
   """
+  @doc since: "0.1.0"
   @spec apns_configured?() :: boolean()
   def apns_configured? do
     get(:apns_key_id) != nil and
@@ -338,6 +352,7 @@ defmodule PushX.Config do
   @doc """
   Checks if FCM is configured.
   """
+  @doc since: "0.1.0"
   @spec fcm_configured?() :: boolean()
   def fcm_configured? do
     get(:fcm_project_id) != nil and
@@ -345,6 +360,7 @@ defmodule PushX.Config do
   end
 
   @doc "Checks if Web Push (VAPID subject + private key) is configured."
+  @doc since: "0.15.0"
   @spec webpush_configured?() :: boolean()
   def webpush_configured? do
     get(:webpush_vapid_subject) != nil and get(:webpush_vapid_private_key) != nil
@@ -354,6 +370,7 @@ defmodule PushX.Config do
   Delivery mode: `:live` (default) sends to the providers; `:test` records
   sends locally instead — see `PushX.Test`.
   """
+  @doc since: "0.14.0"
   @spec delivery() :: :live | :test
   def delivery, do: get(:delivery, :live)
 
@@ -400,6 +417,7 @@ defmodule PushX.Config do
   The test suite uses this seam to exercise the real FCM send path without
   Google.
   """
+  @doc since: "0.13.0"
   @spec fcm_token_fetcher() :: {module(), atom(), list()} | nil
   def fcm_token_fetcher, do: get(:fcm_token_fetcher)
 
@@ -408,12 +426,14 @@ defmodule PushX.Config do
   @doc """
   Checks if retry is enabled.
   """
+  @doc since: "0.13.0"
   @spec retry_enabled?() :: boolean()
   def retry_enabled?, do: get(:retry_enabled, true)
 
   @doc """
   Gets the maximum number of retry attempts.
   """
+  @doc since: "0.13.0"
   @spec retry_max_attempts() :: pos_integer()
   def retry_max_attempts, do: get(:retry_max_attempts, 3)
 
@@ -421,6 +441,7 @@ defmodule PushX.Config do
   Gets the base delay for exponential backoff in milliseconds.
   Default: 10 seconds (Google's recommended minimum).
   """
+  @doc since: "0.13.0"
   @spec retry_base_delay_ms() :: pos_integer()
   def retry_base_delay_ms, do: get(:retry_base_delay_ms, 10_000)
 
@@ -428,6 +449,7 @@ defmodule PushX.Config do
   Gets the maximum delay for exponential backoff in milliseconds.
   Default: 60 seconds.
   """
+  @doc since: "0.13.0"
   @spec retry_max_delay_ms() :: pos_integer()
   def retry_max_delay_ms, do: get(:retry_max_delay_ms, 60_000)
 
@@ -451,6 +473,7 @@ defmodule PushX.Config do
   `:timeout` option on `PushX.push_batch/4` / `send_batch/3` always takes
   precedence.
   """
+  @doc since: "0.13.0"
   @spec batch_timeout_ms() :: pos_integer()
   def batch_timeout_ms, do: batch_timeout_ms(retry: :blocking)
 
@@ -458,6 +481,7 @@ defmodule PushX.Config do
   Like `batch_timeout_ms/0`, but for a specific per-call retry policy:
   `retry: :none` means a single attempt, so the budget is the 30 s floor.
   """
+  @doc since: "0.13.0"
   @spec batch_timeout_ms(retry: :blocking | :none) :: pos_integer()
   def batch_timeout_ms(retry: :none), do: @batch_timeout_floor_ms
 
@@ -476,20 +500,10 @@ defmodule PushX.Config do
   # Request timeout configuration
 
   @doc """
-  Gets the overall request timeout in milliseconds.
-  Default: 30 seconds.
-
-  > Note: This value is not currently passed to Finch requests.
-  > Use `:receive_timeout` and `:pool_timeout` instead.
-  """
-  @deprecated "Not used by Finch. Use receive_timeout/0 and pool_timeout/0 instead."
-  @spec request_timeout() :: pos_integer()
-  def request_timeout, do: get(:request_timeout, 30_000)
-
-  @doc """
   Gets the receive timeout (time to wait for response data) in milliseconds.
   Default: 15 seconds.
   """
+  @doc since: "0.13.0"
   @spec receive_timeout() :: pos_integer()
   def receive_timeout, do: get(:receive_timeout, 15_000)
 
@@ -497,6 +511,7 @@ defmodule PushX.Config do
   Gets the pool timeout (time to wait for a connection from pool) in milliseconds.
   Default: 5 seconds.
   """
+  @doc since: "0.13.0"
   @spec pool_timeout() :: pos_integer()
   def pool_timeout, do: get(:pool_timeout, 5_000)
 
@@ -504,12 +519,14 @@ defmodule PushX.Config do
   Gets the TCP connection timeout in milliseconds.
   Default: 10 seconds.
   """
+  @doc since: "0.13.0"
   @spec connect_timeout() :: pos_integer()
   def connect_timeout, do: get(:connect_timeout, 10_000)
 
   @doc """
   Returns the Finch request options with configured timeouts.
   """
+  @doc since: "0.13.0"
   @spec finch_request_opts() :: keyword()
   def finch_request_opts do
     [
@@ -524,6 +541,7 @@ defmodule PushX.Config do
   Checks if the circuit breaker is enabled.
   Default: `false` (opt-in feature).
   """
+  @doc since: "0.13.0"
   @spec circuit_breaker_enabled?() :: boolean()
   def circuit_breaker_enabled?, do: get(:circuit_breaker_enabled, false)
 
@@ -531,6 +549,7 @@ defmodule PushX.Config do
   Gets the number of consecutive failures before the circuit opens.
   Default: 5.
   """
+  @doc since: "0.13.0"
   @spec circuit_breaker_threshold() :: pos_integer()
   def circuit_breaker_threshold, do: get(:circuit_breaker_threshold, 5)
 
@@ -539,6 +558,7 @@ defmodule PushX.Config do
   from `:open` to `:half_open`.
   Default: 30 seconds.
   """
+  @doc since: "0.13.0"
   @spec circuit_breaker_cooldown_ms() :: pos_integer()
   def circuit_breaker_cooldown_ms, do: get(:circuit_breaker_cooldown_ms, 30_000)
 
@@ -558,6 +578,7 @@ defmodule PushX.Config do
         on_invalid_token: {MyApp.Push, :handle_invalid_token, []}
 
   """
+  @doc since: "0.13.0"
   @spec on_invalid_token() :: {module(), atom(), list()} | nil
   def on_invalid_token, do: get(:on_invalid_token, nil)
 end

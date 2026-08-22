@@ -1,0 +1,48 @@
+name: Bug report
+description: Something does not behave as documented
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: PushX version
+      placeholder: "0.15.0"
+    validations:
+      required: true
+  - type: input
+    id: elixir
+    attributes:
+      label: Elixir / OTP version
+      placeholder: "1.20.3 / 29"
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Provider
+      options: [APNS, FCM, Web Push, named instance, other / not provider-specific]
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: Include the `%PushX.Response{}` (status + reason) or the stack trace. Never paste tokens, keys or credentials.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: The `PushX.push/4` call (or `push_batch`, `Instance.start`, ...) and relevant `config :pushx` keys (redacted). `mix pushx.doctor` output helps.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      render: shell

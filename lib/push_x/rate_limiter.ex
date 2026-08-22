@@ -1,4 +1,5 @@
 defmodule PushX.RateLimiter do
+  @moduledoc since: "0.4.0"
   @moduledoc """
   Client-side rate limiting for push notifications.
 
@@ -54,6 +55,7 @@ defmodule PushX.RateLimiter do
   @doc """
   Starts the rate limiter process.
   """
+  @doc since: "0.4.0"
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
@@ -67,6 +69,7 @@ defmodule PushX.RateLimiter do
   atom) while taking the limit from `provider`'s config — each instance has
   its own credentials and therefore its own provider-side budget.
   """
+  @doc since: "0.4.0"
   @spec check_and_increment(provider()) :: :ok | {:error, :rate_limited}
   def check_and_increment(provider), do: check_and_increment(provider, provider)
 
@@ -82,6 +85,7 @@ defmodule PushX.RateLimiter do
   @doc """
   Checks if a request would be allowed without incrementing.
   """
+  @doc since: "0.4.0"
   @spec check(provider()) :: :ok | {:error, :rate_limited}
   def check(provider) do
     if enabled?() do
@@ -100,6 +104,7 @@ defmodule PushX.RateLimiter do
 
   Counts attempts, including ones that were rejected over the limit.
   """
+  @doc since: "0.4.0"
   @spec current_count(key()) :: non_neg_integer()
   def current_count(key) do
     case :ets.lookup(@table_name, {key, current_window_id()}) do
@@ -111,6 +116,7 @@ defmodule PushX.RateLimiter do
   @doc """
   Returns the configured limit for a provider.
   """
+  @doc since: "0.4.0"
   @spec limit(provider()) :: pos_integer()
   def limit(:apns), do: PushX.Config.get(:rate_limit_apns, @default_limit)
   def limit(:fcm), do: PushX.Config.get(:rate_limit_fcm, @default_limit)
@@ -119,6 +125,7 @@ defmodule PushX.RateLimiter do
   @doc """
   Returns remaining requests before rate limit is hit.
   """
+  @doc since: "0.4.0"
   @spec remaining(provider()) :: non_neg_integer()
   def remaining(provider) do
     max(0, limit(provider) - current_count(provider))
@@ -127,6 +134,7 @@ defmodule PushX.RateLimiter do
   @doc """
   Resets the rate limiter for a key. Useful for testing.
   """
+  @doc since: "0.4.0"
   @spec reset(key()) :: :ok
   def reset(key) do
     :ets.match_delete(@table_name, {{key, :_}, :_})
@@ -136,6 +144,7 @@ defmodule PushX.RateLimiter do
   @doc """
   Resets all rate limiters.
   """
+  @doc since: "0.4.0"
   @spec reset_all() :: :ok
   def reset_all do
     :ets.delete_all_objects(@table_name)

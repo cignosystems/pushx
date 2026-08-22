@@ -1,4 +1,5 @@
 defmodule PushX.ReconnectGuard do
+  @moduledoc since: "0.12.0"
   @moduledoc """
   Coalesces HTTP pool reconnects so concurrent failures cause one restart.
 
@@ -33,6 +34,7 @@ defmodule PushX.ReconnectGuard do
   underway). `key` is `:default` for the shared static pool, or the instance
   name for `PushX.Instance` pools.
   """
+  @doc since: "0.12.0"
   @spec acquire(term()) :: boolean()
   def acquire(key) do
     GenServer.call(__MODULE__, {:acquire, key, cooldown_ms()})

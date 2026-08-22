@@ -1,6 +1,7 @@
 defmodule Mix.Tasks.Pushx.Doctor do
   @shortdoc "Checks the PushX configuration and credentials without sending anything"
 
+  @moduledoc since: "0.14.0"
   @moduledoc """
   Validates the PushX configuration offline — the same checks the library
   runs at start/send time, reported all at once:

@@ -13,8 +13,10 @@ plan is to reach **1.0 as a stability promise**, not as a feature milestone.
 - **0.14** — test delivery mode (`PushX.Test`), `apns_id`, FCM `validate_only`,
   Message iOS/localization builders, topic subscription management,
   `Telemetry.metrics/0`, `Instance.Loader`, `mix pushx.doctor`.
+- **0.15** — standards-based Web Push (VAPID + RFC 8291), HTTP/2 keepalive
+  options, pool-sizing fixes, Expo design note.
 
-## 0.15 (in progress)
+## 0.15 — shipped 2026-08-22
 
 - **Standards-based Web Push** (`:webpush`: RFC 8030/8291/8292, VAPID) —
   also the stress test that the `provider`/`target`/`Response`/`Instance`
@@ -26,13 +28,14 @@ plan is to reach **1.0 as a stability promise**, not as a feature milestone.
 
 ## 1.0 — boring on purpose
 
-- Remove `Config.request_timeout/0` (deprecated since 0.11).
-- `@since` annotations; supported-versions (Elixir ≥ 1.18 / OTP ≥ 26), semver
-  and deprecation policy in the README; "Upgrading to 1.0" note.
-- `SECURITY.md`, Dependabot config, issue/PR templates.
-- A real-RTT load test against the APNS sandbox / FCM before the word
-  "production-ready" goes next to 1.0.
-- Response docs: `status: :sent` = "accepted by the provider".
+- [x] Remove `Config.request_timeout/0` (deprecated since 0.11). *(on main)*
+- [x] `@since` annotations; supported-versions (Elixir ≥ 1.18 / OTP ≥ 26), semver
+  and deprecation policy in the README; "Upgrading to 1.0" note. *(on main)*
+- [x] `SECURITY.md`, Dependabot config, issue/PR templates. *(on main)*
+- [x] Response docs: `status: :sent` = "accepted by the provider". *(0.15)*
+- [ ] A real-RTT load test against the APNS sandbox / FCM before the word
+  "production-ready" goes next to 1.0 (needs sandbox credentials).
+- [ ] Let 0.15 bake in production for a couple of weeks first.
 
 ## 1.x candidates
 

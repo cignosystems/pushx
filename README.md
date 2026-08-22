@@ -38,6 +38,7 @@
 - [Delivery Semantics](#delivery-semantics)
 - [Testing Your App](#testing-your-app)
 - [Troubleshooting](#troubleshooting)
+- [Versioning and Support](#versioning-and-support)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -1220,6 +1221,36 @@ end, nil)
 ```
 
 ---
+
+## Versioning and Support
+
+PushX follows [Semantic Versioning](https://semver.org). From 1.0 on:
+
+- **Public API** = every module and function documented on
+  [hexdocs.pm/pushx](https://hexdocs.pm/pushx) (each carries a `since` badge),
+  the `PushX.Response` struct and its documented `status` atoms, the
+  `PushX.Test` assertions, the telemetry events, the Mix tasks and the
+  `config :pushx` keys listed in `PushX.Config`. Modules marked
+  `@moduledoc false` and anything prefixed "test-only" are internal.
+- **Breaking changes only in a new major version.** Within 1.x, a change is
+  additive or deprecated first: a function or option gets `@deprecated` (a
+  compile-time warning) in one minor release and is removed no earlier than
+  the next major. New `Response.status` atoms and new `provider` atoms are
+  considered additive — match with a catch-all clause.
+- **Supported platforms:** Elixir ≥ 1.18 / OTP ≥ 26 (the CI matrix, which
+  also covers the latest Elixir and OTP). Dropping a version is a minor-release
+  change announced in the CHANGELOG one release ahead.
+- **Provider behaviour** (Apple, Google, browser push services) is outside
+  semver — PushX tracks it in minors and documents it in the CHANGELOG.
+
+### Upgrading to 1.0
+
+Nothing changes at runtime; 1.0 is the stability promise above, not a
+feature release. The one removal: the `request_timeout/0` function on `PushX.Config`
+(deprecated since 0.11, never passed to Finch) — use `:receive_timeout` /
+`:pool_timeout`. Everything shipped in 0.13–0.15 is the 1.0 API.
+
+Security reports: see [SECURITY.md](https://github.com/cignosystems/pushx/blob/main/SECURITY.md).
 
 ## Contributing
 

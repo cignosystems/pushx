@@ -1,4 +1,5 @@
 defmodule PushX.WebPush do
+  @moduledoc since: "0.15.0"
   @moduledoc """
   Standards-based Web Push: send to any browser's push service — Chrome,
   Firefox, Edge, Safari 16+ (macOS Ventura / iOS 16.4 and later), Opera,
@@ -145,6 +146,7 @@ defmodule PushX.WebPush do
   Sends a Web Push message to `subscription` with automatic retry
   (see `PushX.push/4` for the retry semantics and the `:retry` option).
   """
+  @doc since: "0.15.0"
   @spec send(subscription(), payload(), [option()]) ::
           {:ok, Response.t()} | {:error, Response.t()}
   def send(subscription, payload, opts \\ []) do
@@ -160,6 +162,7 @@ defmodule PushX.WebPush do
   end
 
   @doc "Sends a Web Push message without retry."
+  @doc since: "0.15.0"
   @spec send_once(subscription(), payload(), [option()]) ::
           {:ok, Response.t()} | {:error, Response.t()}
   def send_once(subscription, payload, opts \\ []) do
@@ -178,6 +181,7 @@ defmodule PushX.WebPush do
   Generates a VAPID key pair (base64url, the format the `web-push` CLI and
   browsers use). Do this once per application and keep the private key secret.
   """
+  @doc since: "0.15.0"
   @spec generate_vapid_keys() :: %{public_key: String.t(), private_key: String.t()}
   def generate_vapid_keys, do: VAPID.generate()
 
@@ -186,6 +190,7 @@ defmodule PushX.WebPush do
   P-256 `p256dh` key and a 16-byte `auth` secret (both base64url). Returns the
   parsed form used internally or `{:error, %Response{status: :invalid_token}}`.
   """
+  @doc since: "0.15.0"
   @spec validate_subscription(term()) ::
           {:ok, %{endpoint: String.t(), ua_public: binary(), auth: binary()}}
           | {:error, Response.t()}

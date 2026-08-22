@@ -1,4 +1,5 @@
 defmodule PushX.CircuitBreaker do
+  @moduledoc since: "0.8.0"
   @moduledoc """
   Circuit breaker for push notification providers.
 
@@ -49,6 +50,7 @@ defmodule PushX.CircuitBreaker do
   @doc """
   Starts the circuit breaker process.
   """
+  @doc since: "0.8.0"
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
@@ -59,6 +61,7 @@ defmodule PushX.CircuitBreaker do
   Returns `:ok` if the circuit is closed or half-open (probe),
   `{:error, :circuit_open}` if the circuit is open.
   """
+  @doc since: "0.8.0"
   @spec allow?(key()) :: :ok | {:error, :circuit_open}
   def allow?(provider) do
     if enabled?() do
@@ -81,6 +84,7 @@ defmodule PushX.CircuitBreaker do
   at worst opens the breaker one failure early — the next non-steady
   success resets the count through the GenServer as before.
   """
+  @doc since: "0.8.0"
   @spec record_success(key()) :: :ok
   def record_success(provider) do
     if enabled?() and not steady_state_closed?(provider) do
@@ -95,6 +99,7 @@ defmodule PushX.CircuitBreaker do
 
   Serialized through the GenServer.
   """
+  @doc since: "0.8.0"
   @spec record_failure(key()) :: :ok
   def record_failure(provider) do
     if enabled?() do
@@ -107,6 +112,7 @@ defmodule PushX.CircuitBreaker do
   @doc """
   Returns the current circuit breaker state for a provider.
   """
+  @doc since: "0.8.0"
   @spec state(key()) :: state()
   def state(provider) do
     case :ets.lookup(@table_name, provider) do
@@ -121,6 +127,7 @@ defmodule PushX.CircuitBreaker do
   @doc """
   Resets the circuit breaker for a provider. Useful for testing or manual recovery.
   """
+  @doc since: "0.8.0"
   @spec reset(key()) :: :ok
   def reset(provider) do
     :ets.insert(@table_name, {provider, :closed, 0, nil})
