@@ -42,8 +42,18 @@ defmodule PushX.Instance.Server do
   def terminate(_reason, %{name: name, provider: provider}) do
     :ets.delete(@table, name)
 
-    if provider == :apns do
-      PushX.JWTCache.invalidate({:apns_jwt, name})
+    case provider do
+      :apns ->
+        PushX.JWTCache.invalidate({:apns_jwt, name})
+
+      :webpush ->
+        # Per-origin VAPID JWTs and the resolved key pair are scoped by name;
+        # a reconfigure (stop + start with new keys) must not keep serving them.
+        PushX.JWTCache.invalidate_match({:vapid_jwt, name, :_})
+        PushX.JWTCache.invalidate_match({:vapid_keys, name, :_})
+
+      _ ->
+        :ok
     end
 
     :ok

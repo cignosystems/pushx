@@ -193,10 +193,8 @@ defmodule Mix.Tasks.Pushx.Doctor do
         ["Web Push: missing VAPID subject or private key" | failures]
 
       true ->
-        resolved =
-          with :ok <- VAPID.validate_subject(subject) do
-            VAPID.resolve_keys(public, private)
-          end
+        # Exactly the check PushX.Instance.start/3 and the send path run.
+        resolved = VAPID.resolve(subject, public, private)
 
         case resolved do
           {:ok, keys} ->

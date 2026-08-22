@@ -52,7 +52,8 @@ defmodule PushX.Batch do
     |> Task.Supervisor.async_stream_nolink(
       targets,
       fn target ->
-        if validate and is_binary(target) and not Token.valid?(validate_provider, target) do
+        if validate and (is_binary(target) or is_map(target)) and
+             not Token.valid?(validate_provider, target) do
           {target,
            {:error, Response.error(validate_provider, :invalid_token, "Invalid token format")}}
         else

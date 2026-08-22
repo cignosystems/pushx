@@ -371,6 +371,60 @@ defmodule PushX.ConfigTest do
     end
   end
 
+  describe "finch_http2_pool_entry/1" do
+    test "is [http2: opts] on the locked finch (>= 0.22)" do
+      assert [http2: opts] = Config.finch_http2_pool_entry()
+      assert opts == Config.finch_http2_opts()
+
+      assert [http2: [{:ping_interval, 5} | _]] = Config.finch_http2_pool_entry(ping_interval: 5)
+    end
+
+    test "omits the :http2 key entirely on finch < 0.22, warning once about configured options" do
+      Application.put_env(:pushx, :finch_version_override, "0.21.0")
+      Application.put_env(:pushx, :finch_http2_ping_interval, 30_000)
+
+      on_exit(fn ->
+        Application.delete_env(:pushx, :finch_version_override)
+        Application.delete_env(:pushx, :finch_http2_ping_interval)
+      end)
+
+      refute Config.finch_http2_options_supported?()
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert Config.finch_http2_pool_entry() == []
+          assert Config.finch_http2_opts() == []
+        end)
+
+      assert log =~ "need finch >= 0.22 (installed: 0.21.0); ignored"
+
+      # A Finch started from such a pool config must still boot — this is the
+      # path a user with finch 0.21 in their lock takes (no :http2 key at all).
+      name = :"finch_021_#{System.unique_integer([:positive])}"
+      pool = [protocols: [:http2], count: 1] ++ Config.finch_http2_pool_entry()
+      assert {:ok, pid} = Finch.start_link(name: name, pools: %{"https://example.test" => pool})
+      GenServer.stop(pid)
+    end
+
+    test "named instances start on finch < 0.22 (the :http2 key is dropped from their pools)" do
+      Application.put_env(:pushx, :finch_version_override, "0.21.0")
+      on_exit(fn -> Application.delete_env(:pushx, :finch_version_override) end)
+
+      name = :"old_finch_#{System.unique_integer([:positive])}"
+
+      assert {:ok, ^name} =
+               PushX.Instance.start(name, :apns,
+                 key_id: "K",
+                 team_id: "T",
+                 private_key: PushX.Test.apns_private_key(),
+                 mode: :sandbox,
+                 connect_timeout: 1
+               )
+
+      PushX.Instance.stop(name)
+    end
+  end
+
   describe "batch_timeout_ms/0" do
     test "covers the worst-case retry budget with default config" do
       # 3 attempts × (15s receive + 5s pool) + 2 delays × 60s = 180s

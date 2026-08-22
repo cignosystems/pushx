@@ -141,6 +141,25 @@ defmodule PushX.TestDeliveryTest do
       assert_no_pushes()
     end
 
+    test "PushX.Test.webpush_subscription/1 is a valid Web Push target in test mode" do
+      sub = PushX.Test.webpush_subscription(endpoint: "https://push.example/abc")
+
+      assert %{"endpoint" => "https://push.example/abc", "keys" => %{"p256dh" => _, "auth" => _}} =
+               sub
+
+      assert {:ok, _} = PushX.WebPush.validate_subscription(sub)
+
+      assert {:ok, %PushX.Response{provider: :webpush, status: :sent}} =
+               PushX.push(:webpush, sub, "Hi")
+
+      assert_pushed(%{provider: :webpush, target: ^sub})
+
+      # Hand-written keys are rejected locally, exactly as in production.
+      bad = put_in(sub, ["keys", "p256dh"], "abc")
+      assert {:error, %PushX.Response{status: :invalid_token}} = PushX.push(:webpush, bad, "Hi")
+      refute PushX.Test.webpush_subscription() == PushX.Test.webpush_subscription()
+    end
+
     test "needs no credentials: works with APNS unconfigured" do
       original = Application.get_env(:pushx, :apns_key_id)
       Application.delete_env(:pushx, :apns_key_id)

@@ -41,6 +41,22 @@ defmodule PushX.HTTP do
         _other ->
           reraise e, __STACKTRACE__
       end
+
+    # Finch's HTTP/1 pool *raises* (rather than returns) when no connection
+    # could be checked out within :pool_timeout — every task of a Web Push
+    # batch queuing on a small per-origin pool would otherwise crash instead
+    # of getting a retryable :connection_error.
+    e in RuntimeError ->
+      if String.starts_with?(e.message, "Finch was unable to provide a connection") do
+        Logger.warning(
+          "[#{label}] HTTP/1 pool exhausted: no connection within :pool_timeout — " <>
+            "raise :finch_pool_size (static Web Push) / instance :pool_size, or lower batch :concurrency"
+        )
+
+        {:error, :pool_timeout}
+      else
+        reraise e, __STACKTRACE__
+      end
   end
 
   @doc """

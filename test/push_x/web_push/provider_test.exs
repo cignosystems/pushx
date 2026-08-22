@@ -388,6 +388,184 @@ defmodule PushX.WebPush.ProviderTest do
     end
   end
 
+  describe "unified API semantics (PushX.push/4, push_data/4)" do
+    test "maps go through PushX.push(:webpush, ...) verbatim — Notification API options survive",
+         %{bypass: bypass} do
+      {sub, ua_private, auth} = browser_subscription(bypass)
+
+      Bypass.expect_once(bypass, "POST", "/push/sub-1", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        {:ok, plaintext} = Encryption.decrypt(body, ua_private, auth)
+
+        assert JSON.decode!(plaintext) == %{
+                 "title" => "Hi",
+                 "body" => "x",
+                 "icon" => "/icon.png",
+                 "actions" => [%{"action" => "open", "title" => "Open"}]
+               }
+
+        Plug.Conn.resp(conn, 201, "")
+      end)
+
+      assert {:ok, %Response{status: :sent}} =
+               PushX.push(:webpush, sub, %{
+                 "title" => "Hi",
+                 "body" => "x",
+                 "icon" => "/icon.png",
+                 "actions" => [%{"action" => "open", "title" => "Open"}]
+               })
+    end
+
+    test "Message ttl/priority become the TTL / Urgency headers; explicit opts win",
+         %{bypass: bypass} do
+      {sub, _, _} = browser_subscription(bypass)
+      parent = self()
+
+      Bypass.expect(bypass, "POST", "/push/sub-1", fn conn ->
+        send(
+          parent,
+          {:headers, Plug.Conn.get_req_header(conn, "ttl"),
+           Plug.Conn.get_req_header(conn, "urgency")}
+        )
+
+        Plug.Conn.resp(conn, 201, "")
+      end)
+
+      message =
+        PushX.Message.new("Hi", "There")
+        |> PushX.Message.ttl(120)
+        |> PushX.Message.priority(:high)
+
+      assert {:ok, _} = PushX.push(:webpush, sub, message)
+      assert_receive {:headers, ["120"], ["high"]}
+
+      assert {:ok, _} = PushX.push(:webpush, sub, message, ttl: 5, urgency: :low)
+      assert_receive {:headers, ["5"], ["low"]}
+
+      # badge is an iOS count, not a Notification API image URL — not emitted.
+      refute Map.has_key?(
+               PushX.Message.to_webpush_payload(PushX.Message.badge(message, 3)),
+               "badge"
+             )
+    end
+
+    test "push_data/4 through a :webpush instance sends the map as-is (same as the static path)",
+         %{bypass: bypass} do
+      tenant = VAPID.generate()
+
+      {:ok, :tenant_data} =
+        PushX.Instance.start(:tenant_data, :webpush,
+          vapid_subject: "mailto:tenant@example.com",
+          vapid_private_key: tenant.private_key
+        )
+
+      on_exit(fn -> PushX.Instance.stop(:tenant_data) end)
+
+      {sub, ua_private, auth} = browser_subscription(bypass, "/push/data")
+
+      Bypass.expect(bypass, "POST", "/push/data", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        {:ok, plaintext} = Encryption.decrypt(body, ua_private, auth)
+        assert JSON.decode!(plaintext) == %{"action" => "sync"}
+        Plug.Conn.resp(conn, 201, "")
+      end)
+
+      assert {:ok, _} = PushX.push_data(:tenant_data, sub, %{"action" => "sync"})
+      assert {:ok, _} = PushX.push_data(:webpush, sub, %{"action" => "sync"})
+    end
+
+    test "plain http endpoints are rejected unless the test-only :webpush_allow_http is set",
+         %{bypass: bypass} do
+      {sub, _, _} = browser_subscription(bypass)
+      Application.put_env(:pushx, :webpush_allow_http, false)
+      on_exit(fn -> Application.put_env(:pushx, :webpush_allow_http, true) end)
+
+      assert {:error, %Response{status: :invalid_token, reason: reason}} =
+               WebPush.send_once(sub, "x")
+
+      assert reason =~ "https"
+      assert {:error, _} = WebPush.validate_subscription(sub)
+      assert {:error, :invalid_format} = PushX.validate_token(:webpush, sub)
+
+      https = %{sub | "endpoint" => "https://push.example.test/abc"}
+      assert {:ok, _} = WebPush.validate_subscription(https)
+      assert :ok = PushX.validate_token(:webpush, https)
+    end
+
+    test "validate_tokens: true rejects malformed subscriptions locally in batches", %{
+      bypass: bypass
+    } do
+      {good, _, _} = browser_subscription(bypass)
+      bad = put_in(good, ["keys", "auth"], "short")
+
+      Bypass.expect_once(bypass, "POST", "/push/sub-1", fn conn ->
+        Plug.Conn.resp(conn, 201, "")
+      end)
+
+      assert [
+               {^good, {:ok, %Response{status: :sent}}},
+               {^bad, {:error, %Response{provider: :webpush, status: :invalid_token}}}
+             ] = PushX.push_batch(:webpush, [good, bad], "Hi", validate_tokens: true)
+    end
+
+    test "an exhausted HTTP/1 pool is a retryable :connection_error, not a raise", %{
+      bypass: bypass
+    } do
+      tenant = VAPID.generate()
+
+      {:ok, :tenant_tiny} =
+        PushX.Instance.start(:tenant_tiny, :webpush,
+          vapid_subject: "mailto:tenant@example.com",
+          vapid_private_key: tenant.private_key,
+          pool_size: 1,
+          pool_timeout: 50
+        )
+
+      on_exit(fn -> PushX.Instance.stop(:tenant_tiny) end)
+      {sub, _, _} = browser_subscription(bypass, "/push/slow")
+
+      Bypass.expect(bypass, "POST", "/push/slow", fn conn ->
+        Process.sleep(400)
+        Plug.Conn.resp(conn, 201, "")
+      end)
+
+      results =
+        PushX.push_batch(:tenant_tiny, [sub, sub, sub], "Hi", concurrency: 3, retry: :none)
+
+      statuses = Enum.map(results, fn {_, {_, %Response{status: s}}} -> s end)
+      assert :sent in statuses
+      assert :connection_error in statuses
+      assert Enum.all?(statuses, &(&1 in [:sent, :connection_error]))
+
+      assert Enum.any?(results, fn
+               {_, {:error, %Response{reason: reason}}} -> reason =~ "pool_timeout"
+               _ -> false
+             end)
+    end
+
+    test "stopping a :webpush instance drops its cached VAPID JWTs and keys", %{bypass: bypass} do
+      tenant = VAPID.generate()
+
+      {:ok, :tenant_jwt} =
+        PushX.Instance.start(:tenant_jwt, :webpush,
+          vapid_subject: "mailto:tenant@example.com",
+          vapid_private_key: tenant.private_key
+        )
+
+      {sub, _, _} = browser_subscription(bypass, "/push/jwt")
+
+      Bypass.expect_once(bypass, "POST", "/push/jwt", fn conn -> Plug.Conn.resp(conn, 201, "") end)
+
+      assert {:ok, _} = PushX.push(:tenant_jwt, sub, "Hi")
+
+      cached = fn -> :ets.match(:pushx_jwt_cache, {{:"$1", :tenant_jwt, :_}, :_, :_}) end
+      assert [[:vapid_jwt], [:vapid_keys]] = Enum.sort(cached.())
+
+      :ok = PushX.Instance.stop(:tenant_jwt)
+      assert cached.() == []
+    end
+  end
+
   describe "batch and test delivery mode" do
     test "push_batch/4 over subscriptions", %{bypass: bypass} do
       {s1, _, _} = browser_subscription(bypass, "/push/a")

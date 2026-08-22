@@ -41,24 +41,21 @@ defmodule PushX.Instance.Supervisor do
        PushX.URLs.apns_prod() => http2_pool_opts(config),
        PushX.URLs.apns_sandbox() => http2_pool_opts(config)
      }}
+    |> bind_http2_once()
   end
 
   defp finch_child(:webpush, config, finch_name) do
     # Push service endpoints are per-subscription (Google, Mozilla, Apple,
     # Microsoft, ...), so there is no fixed origin to pool for: one HTTP/1.1
-    # default pool sized by the instance config serves them all.
+    # default pool sized by the instance config serves them all. For HTTP/1.1
+    # `:pool_size` (default 2) × `:pool_count` is the per-origin concurrency cap.
     {Finch,
      name: finch_name,
      pools: %{
        default: [
          size: Keyword.get(config, :pool_size, 2),
          count: Keyword.get(config, :pool_count, 1),
-         conn_opts: [
-           transport_opts: [
-             timeout: Keyword.get(config, :connect_timeout, 10_000),
-             verify: :verify_peer
-           ]
-         ]
+         conn_opts: [transport_opts: transport_opts(config)]
        ]
      }}
   end
@@ -72,6 +69,7 @@ defmodule PushX.Instance.Supervisor do
        # transport options as the send pool, so instance settings apply.
        PushX.URLs.fcm_iid_origin() => http2_pool_opts(config)
      }}
+    |> bind_http2_once()
   end
 
   defp maybe_add_goth(children, :fcm, config, goth_name) do
@@ -107,17 +105,35 @@ defmodule PushX.Instance.Supervisor do
       count: Keyword.get(config, :pool_count, 1),
       protocols: [:http2],
       # Per-instance :ping_interval / :max_connection_age / ... override the
-      # global :finch_http2_* config.
-      http2: PushX.Config.finch_http2_opts(config),
-      conn_opts: [
-        transport_opts: [
-          timeout: Keyword.get(config, :connect_timeout, 10_000),
-          keepalive: true,
-          # Explicit so a future refactor can't silently disable TLS peer
-          # verification (this is already Mint's default on OTP 25+).
-          verify: :verify_peer
-        ]
-      ]
+      # global :finch_http2_* config; resolved once per Finch spec in
+      # bind_http2_once/1 (placeholder here).
+      http2: config,
+      conn_opts: [transport_opts: transport_opts(config)]
+    ]
+  end
+
+  # Resolve the HTTP/2 options once for all of an instance's pools: on
+  # finch < 0.22 the `:http2` key is dropped (older finch rejects it) and the
+  # "ignored" warning is logged once, not once per pool.
+  defp bind_http2_once({Finch, spec}) do
+    [{_origin, first} | _] = Map.to_list(spec[:pools])
+    entry = PushX.Config.finch_http2_pool_entry(Keyword.fetch!(first, :http2))
+
+    pools =
+      Map.new(spec[:pools], fn {origin, opts} ->
+        {origin, Keyword.delete(opts, :http2) ++ entry}
+      end)
+
+    {Finch, Keyword.put(spec, :pools, pools)}
+  end
+
+  defp transport_opts(config) do
+    [
+      timeout: Keyword.get(config, :connect_timeout, 10_000),
+      keepalive: true,
+      # Explicit so a future refactor can't silently disable TLS peer
+      # verification (this is already Mint's default on OTP 25+).
+      verify: :verify_peer
     ]
   end
 end

@@ -70,7 +70,7 @@ defmodule PushX.Instance do
   alias PushX.WebPush.VAPID
 
   @table :pushx_instances
-  @reserved_names [:apns, :fcm]
+  @reserved_names [:apns, :fcm, :webpush]
 
   @jwt_cache_ttl_ms 50 * 60 * 1000
 
@@ -106,8 +106,11 @@ defmodule PushX.Instance do
     * `:vapid_public_key` - (optional) base64url 65-byte point; derived from the
       private key when omitted. Give this to the tenant's front end as
       `applicationServerKey`.
-    * `:pool_size` / `:pool_count` / timeouts - as for APNS (HTTP/1.1 to the
-      browsers' push services)
+    * `:pool_size` / `:pool_count` / timeouts - as for APNS, but the pool is
+      HTTP/1.1 (one per push-service origin), so `pool_size × pool_count`
+      (default 2) is the instance's per-origin concurrency cap: a batch beyond
+      it queues for `:pool_timeout`, then fails with a retryable
+      `:connection_error` (`pool_timeout`)
 
   ## FCM Config Keys
 
@@ -129,7 +132,9 @@ defmodule PushX.Instance do
   ## Returns
 
     * `{:ok, name}` on success
-    * `{:error, :reserved_name}` if name is `:apns` or `:fcm`
+    * `{:error, :reserved_name}` if name is `:apns`, `:fcm` or `:webpush` (the
+      static config-based providers — `PushX.push/4` routes those atoms to the
+      static path, so an instance by that name would be unreachable)
     * `{:error, :already_started}` if instance already exists
     * `{:error, {:missing_config, keys}}` if required config is missing
     * `{:error, {:invalid_private_key, reason}}` if an APNS `:private_key`
@@ -140,8 +145,9 @@ defmodule PushX.Instance do
       or hold a key that cannot sign RS256
     * `{:error, {:invalid_token_fetcher, reason}}` if an FCM `:token_fetcher` is
       not an `{module, function, args}` tuple
-    * `{:error, {:invalid_vapid_key, reason}}` if a Web Push `:vapid_private_key`
-      cannot be decoded / does not match `:vapid_public_key`
+    * `{:error, {:invalid_vapid_key, reason}}` if a Web Push `:vapid_subject` is
+      not a `mailto:`/`https:` URI, or `:vapid_private_key` cannot be decoded /
+      does not match `:vapid_public_key`
 
   Credentials are verified with a test signature before the instance starts,
   so a bad key fails here rather than on the first push (APNS) or by crashing
@@ -341,10 +347,7 @@ defmodule PushX.Instance do
       goth_name: info.goth_name,
       token_fetcher: Keyword.get(info.config, :token_fetcher),
       finch_name: info.finch_name,
-      request_opts: [
-        receive_timeout: Keyword.get(info.config, :receive_timeout, 15_000),
-        pool_timeout: Keyword.get(info.config, :pool_timeout, 5_000)
-      ],
+      request_opts: request_opts(info),
       # A connection error must restart *this* instance's pool, not the static one.
       retry_opts: [reconnect_fn: fn -> reconnect(name) end, reconnect_key: name]
     })
@@ -373,14 +376,13 @@ defmodule PushX.Instance do
   # -- Web Push Send --
 
   defp webpush_send(info, subscription, payload, opts) do
-    name = info.name
-
+    # No pool reconnect for Web Push (see PushX.WebPush.send/3): the HTTP/1.1
+    # pool recovers by itself; restarting it would only kill in-flight sends.
     Retry.maybe_with_retry(
       :webpush,
       opts,
       fn -> webpush_send_once(info, subscription, payload, opts) end,
-      reconnect_fn: fn -> reconnect(name) end,
-      reconnect_key: name
+      reconnect: false
     )
   end
 
@@ -396,6 +398,14 @@ defmodule PushX.Instance do
     end
   end
 
+  # Per-instance Finch request options (defaults documented in the moduledoc).
+  defp request_opts(info) do
+    [
+      receive_timeout: Keyword.get(info.config, :receive_timeout, 15_000),
+      pool_timeout: Keyword.get(info.config, :pool_timeout, 5_000)
+    ]
+  end
+
   defp webpush_ctx(info) do
     %{
       vapid:
@@ -403,10 +413,7 @@ defmodule PushX.Instance do
          Keyword.fetch!(info.config, :vapid_private_key)},
       subject: Keyword.fetch!(info.config, :vapid_subject),
       finch_name: info.finch_name,
-      request_opts: [
-        receive_timeout: Keyword.get(info.config, :receive_timeout, 15_000),
-        pool_timeout: Keyword.get(info.config, :pool_timeout, 5_000)
-      ],
+      request_opts: request_opts(info),
       # VAPID JWTs are cached per (instance, origin) so tenants never share one.
       scope: info.name,
       configured?: true,
@@ -546,10 +553,7 @@ defmodule PushX.Instance do
     Telemetry.start(:apns, device_token)
     start_time = System.monotonic_time()
 
-    request_opts = [
-      receive_timeout: Keyword.get(info.config, :receive_timeout, 15_000),
-      pool_timeout: Keyword.get(info.config, :pool_timeout, 5_000)
-    ]
+    request_opts = request_opts(info)
 
     # HTTP.finch_request carries the shared NimblePool CaseClauseError
     # rescue — the same hardening the static path has.
@@ -645,10 +649,7 @@ defmodule PushX.Instance do
     Telemetry.start(:fcm, device_token)
     start_time = System.monotonic_time()
 
-    request_opts = [
-      receive_timeout: Keyword.get(info.config, :receive_timeout, 15_000),
-      pool_timeout: Keyword.get(info.config, :pool_timeout, 5_000)
-    ]
+    request_opts = request_opts(info)
 
     # HTTP.finch_request carries the shared NimblePool CaseClauseError
     # rescue — the same hardening the static path has.
@@ -706,14 +707,12 @@ defmodule PushX.Instance do
 
     case missing do
       [] ->
-        with :ok <- VAPID.validate_subject(Keyword.fetch!(config, :vapid_subject)),
-             {:ok, _keys} <-
-               VAPID.resolve_keys(
-                 Keyword.get(config, :vapid_public_key),
-                 Keyword.fetch!(config, :vapid_private_key)
-               ) do
-          :ok
-        else
+        case VAPID.resolve(
+               Keyword.fetch!(config, :vapid_subject),
+               Keyword.get(config, :vapid_public_key),
+               Keyword.fetch!(config, :vapid_private_key)
+             ) do
+          {:ok, _keys} -> :ok
           {:error, reason} -> {:error, {:invalid_vapid_key, reason}}
         end
 

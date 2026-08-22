@@ -12,8 +12,14 @@ Notes for humans and AI assistants modifying this library itself. If you are
 - `lib/push_x/instance.ex` + `lib/push_x/instance/` — runtime-configured
   named instances (multi-tenant), backed by an ETS registry and per-instance
   Finch pool + JWT/OAuth process
+- `lib/push_x/web_push.ex` + `lib/push_x/web_push/` — standards Web Push
+  provider (RFC 8030 delivery, `encryption.ex` RFC 8291, `vapid.ex` RFC 8292)
+- `lib/push_x/batch.ex` — shared batch engine behind `push_batch*`
+- `lib/push_x/send_gate.ex` — breaker + limiter gate on every send path
+- `lib/push_x/test.ex` + `lib/push_x/test/` — `delivery: :test` mode
+- `lib/mix/tasks/` — `mix pushx.doctor`, `mix pushx.vapid`
 - `lib/push_x/message.ex` — fluent struct + provider conversion
-  (`to_apns_payload/1`, `to_fcm_payload/1`)
+  (`to_apns_payload/1`, `to_fcm_payload/1`, `to_webpush_payload/1`)
 - `lib/push_x/response.ex` — normalized result struct + `should_remove_token?/1`
 - `lib/push_x/http.ex` — internal Finch wrapper, `safe_encode/1` for payload
   serialization (kept hidden — error handling for un-encodable terms lives here)
@@ -37,9 +43,11 @@ Notes for humans and AI assistants modifying this library itself. If you are
   per-send overhead over a raw HTTP request and batch throughput against a
   local stub; the baseline is recorded in the script header. Run it before
   and after touching the send path, `Retry`, `SendGate`, or the JWT cache.
-- Property tests (`stream_data`) live in `test/push_x/properties_test.exs`;
-  add one whenever you touch a pure function with an input space worth
-  sweeping (validators, payload builders, parsers, classification tables)
+- Property tests (`stream_data`) live in `test/push_x/properties_test.exs`
+  (a provider-local one next to its unit tests is fine when it needs that
+  file's fixtures); add one whenever you touch a pure function with an input
+  space worth sweeping (validators, payload builders, parsers, classification
+  tables)
 - Integration tests must call the **real** public functions (`PushX.push/4`,
   `PushX.APNS.send/3`, `PushX.FCM.send/3`, `PushX.Instance` via `PushX.push/4`)
   — never re-implement the send pipeline inside a test helper. Three
@@ -74,8 +82,9 @@ Notes for humans and AI assistants modifying this library itself. If you are
 
 - Public modules get `@moduledoc` + `@doc` on every public function with
   `## Examples`. Hidden internal modules (`HTTP`, `URLs`, `JWTCache`,
-  `Application`, `Instance.Server`, `Instance.Supervisor`) use
-  `@moduledoc false`.
+  `Batch`, `SendGate`, `Application`, `Instance.Server`,
+  `Instance.Supervisor`, `Test.Store`, `WebPush.Encryption`, `WebPush.VAPID`)
+  use `@moduledoc false`.
 - Errors are `{:error, %PushX.Response{status: atom_status, ...}}` —
   do not return ad-hoc `{:error, reason}` tuples from public functions.
 - Add new error semantics by extending `Response.status` *and*

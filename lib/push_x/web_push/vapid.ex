@@ -13,6 +13,18 @@ defmodule PushX.WebPush.VAPID do
   @type keys :: %{public: binary(), private: binary()}
 
   @doc """
+  Validates the VAPID configuration in one step: the subject (RFC 8292 §2.1)
+  and the key pair. This is what the send path, `PushX.Instance.start/3` and
+  `mix pushx.doctor` all call, so the three can't drift.
+  """
+  @spec resolve(term(), String.t() | nil, term()) :: {:ok, keys()} | {:error, String.t()}
+  def resolve(subject, public, private) do
+    with :ok <- validate_subject(subject) do
+      resolve_keys(public, private)
+    end
+  end
+
+  @doc """
   Resolves `{public_b64url_or_nil, private_b64url_or_pem}` into raw key
   binaries, deriving the public key from the private one when missing.
   """

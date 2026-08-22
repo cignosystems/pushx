@@ -34,13 +34,23 @@ defmodule PushX.WebPush do
         "keys" => %{"p256dh" => "BNc...", "auth" => "tBH..."}
       }
 
-      PushX.push(:webpush, subscription, "Hello")                      # via the unified API
+      PushX.push(:webpush, subscription, %{title: "Hi", body: "...", icon: "/icon.png"})  # unified API
       PushX.WebPush.send(subscription, %{"title" => "Hi", "body" => "...", "icon" => "/icon.png"})
 
   A `PushX.Message` maps to the Notification API shape your service worker
-  shows (`title`, `body`, `icon`, `tag`, `data` — `Message.to_webpush_payload/1`);
-  a map is sent as JSON as-is; a binary is sent verbatim (your service worker
-  reads it with `event.data.text()` / `.json()`).
+  shows (`title`, `body`, `icon`, `tag`, `data` — `Message.to_webpush_payload/1`;
+  its `ttl/2` and `priority/2` become the `TTL` / `Urgency` headers, see
+  `Message.to_webpush_options/1`); a map is sent as JSON as-is — through
+  `PushX.push/4` too, which never rewrites Web Push maps; a binary is sent
+  verbatim by `send/3`, while `PushX.push(:webpush, sub, "Hello")` treats the
+  string as the title (`{"title": "Hello", "body": ""}`), as it does for
+  APNS/FCM. The service worker reads the payload with `event.data.json()` /
+  `.text()`.
+
+  The circuit breaker and rate limiter are keyed per provider: for `:webpush`
+  that is one key across every push service (Google, Mozilla, Apple,
+  Microsoft, ...). Consecutive 5xx from one service can open the breaker for
+  all of them; they are off by default.
 
   ## Options
 
@@ -138,7 +148,15 @@ defmodule PushX.WebPush do
   @spec send(subscription(), payload(), [option()]) ::
           {:ok, Response.t()} | {:error, Response.t()}
   def send(subscription, payload, opts \\ []) do
-    Retry.maybe_with_retry(:webpush, opts, fn -> send_once(subscription, payload, opts) end)
+    # No pool reconnect on connection errors: the HTTP/1.1 pool recovers by
+    # itself, and the shared PushX.Finch also hosts the APNS/FCM HTTP/2 pools
+    # — a dead third-party push-service endpoint must not restart those.
+    Retry.maybe_with_retry(
+      :webpush,
+      opts,
+      fn -> send_once(subscription, payload, opts) end,
+      reconnect: false
+    )
   end
 
   @doc "Sends a Web Push message without retry."
@@ -198,6 +216,10 @@ defmodule PushX.WebPush do
   #   request_opts:, scope: (JWT cache key part), configured?: boolean,
   #   instance: name | nil, retry_opts: keyword}
   def do_send(ctx, subscription, payload, opts) do
+    # Message delivery fields (ttl/priority) become :ttl / :urgency options;
+    # explicit call-site opts win.
+    opts = merge_message_options(payload, opts)
+
     with :ok <- ensure_configured(ctx),
          {:ok, sub} <- validate_subscription(subscription),
          :ok <- validate_opts(opts),
@@ -205,31 +227,46 @@ defmodule PushX.WebPush do
          :ok <- check_size(body) do
       if PushX.Test.active?(),
         do: PushX.Test.deliver(:webpush, subscription, body, opts, ctx.instance),
-        else: send_encrypted(ctx, subscription, sub, body, opts, false)
+        else: send_encrypted(ctx, subscription, sub, body, opts)
     end
   end
 
-  defp send_encrypted(ctx, subscription, sub, body, opts, reauthed?) do
+  defp merge_message_options(%Message{} = message, opts),
+    do: Keyword.merge(Message.to_webpush_options(message), opts)
+
+  defp merge_message_options(_payload, opts), do: opts
+
+  defp send_encrypted(ctx, subscription, sub, body, opts) do
+    # Encrypt once; only the Authorization header changes on the re-auth retry.
     with {:ok, keys} <- vapid_keys(ctx),
-         {:ok, authorization} <- VAPID.authorization(sub.endpoint, keys, ctx.subject, ctx.scope),
          {:ok, encrypted} <- encrypt(body, sub) do
-      case request(ctx, subscription, sub, authorization, encrypted, opts) do
-        {:error, %Response{status: :auth_error}} when not reauthed? ->
-          # A stale/rotated VAPID JWT: drop the cached token for this origin and try once more.
-          PushX.JWTCache.invalidate({:vapid_jwt, ctx.scope, VAPID.origin(sub.endpoint)})
-
-          Logger.warning(
-            "[PushX.WebPush] push service rejected VAPID auth; re-signing and retrying once"
-          )
-
-          send_encrypted(ctx, subscription, sub, body, opts, true)
-
-        result ->
-          result
-      end
+      authorized_request(ctx, subscription, sub, keys, encrypted, opts, false)
     else
       {:error, %Response{} = response} -> {:error, response}
       {:error, reason} -> {:error, Response.error(:webpush, :auth_error, to_string(reason))}
+    end
+  end
+
+  defp authorized_request(ctx, subscription, sub, keys, encrypted, opts, reauthed?) do
+    case VAPID.authorization(sub.endpoint, keys, ctx.subject, ctx.scope) do
+      {:ok, authorization} ->
+        case request(ctx, subscription, sub, authorization, encrypted, opts) do
+          {:error, %Response{status: :auth_error}} when not reauthed? ->
+            # A stale/rotated VAPID JWT: drop the cached token for this origin and try once more.
+            PushX.JWTCache.invalidate({:vapid_jwt, ctx.scope, VAPID.origin(sub.endpoint)})
+
+            Logger.warning(
+              "[PushX.WebPush] push service rejected VAPID auth; re-signing and retrying once"
+            )
+
+            authorized_request(ctx, subscription, sub, keys, encrypted, opts, true)
+
+          result ->
+            result
+        end
+
+      {:error, reason} ->
+        {:error, Response.error(:webpush, :auth_error, to_string(reason))}
     end
   end
 
@@ -237,6 +274,16 @@ defmodule PushX.WebPush do
     Telemetry.start(:webpush, subscription)
     start_time = System.monotonic_time()
 
+    try do
+      do_request(ctx, subscription, sub, authorization, encrypted, opts, start_time)
+    rescue
+      e ->
+        Telemetry.exception(:webpush, subscription, start_time, :error, e, __STACKTRACE__)
+        reraise e, __STACKTRACE__
+    end
+  end
+
+  defp do_request(ctx, subscription, sub, authorization, encrypted, opts, start_time) do
     headers =
       [
         {"authorization", authorization},
@@ -342,10 +389,18 @@ defmodule PushX.WebPush do
          )}
   end
 
-  defp vapid_keys(%{vapid: {public, private}, subject: subject}) do
-    with :ok <- VAPID.validate_subject(subject) do
-      VAPID.resolve_keys(public, private)
-    end
+  # Decoding the key material and deriving/checking the public point is an EC
+  # scalar multiplication — done once per distinct configuration, not per send.
+  # The fingerprint keys the cache, so rotated keys resolve afresh; errors are
+  # not cached (JWTCache only stores {:ok, _}).
+  defp vapid_keys(%{vapid: {public, private}, subject: subject, scope: scope}) do
+    fingerprint = :crypto.hash(:sha256, :erlang.term_to_binary({subject, public, private}))
+
+    PushX.JWTCache.get_or_generate(
+      {:vapid_keys, scope, fingerprint},
+      fn -> VAPID.resolve(subject, public, private) end,
+      :timer.hours(24)
+    )
   end
 
   @doc false
@@ -423,10 +478,18 @@ defmodule PushX.WebPush do
 
   defp validate_endpoint(endpoint) when is_binary(endpoint) do
     case URI.parse(endpoint) do
-      %URI{scheme: "https", host: host} when is_binary(host) and host != "" -> :ok
-      # http is accepted so PushX's own tests can use a local push service.
-      %URI{scheme: "http", host: host} when is_binary(host) and host != "" -> :ok
-      _ -> invalid_subscription("endpoint must be an https URL")
+      %URI{scheme: "https", host: host} when is_binary(host) and host != "" ->
+        :ok
+
+      # RFC 8030 requires TLS. Plain http is only accepted under the test-only
+      # :webpush_allow_http flag (PushX's own suite runs a local push service).
+      %URI{scheme: "http", host: host} when is_binary(host) and host != "" ->
+        if Config.get(:webpush_allow_http, false),
+          do: :ok,
+          else: invalid_subscription("endpoint must be an https URL")
+
+      _ ->
+        invalid_subscription("endpoint must be an https URL")
     end
   end
 

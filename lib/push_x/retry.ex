@@ -125,7 +125,8 @@ defmodule PushX.Retry do
         base_delay: Keyword.get(opts, :base_delay_ms, config_base_delay()),
         max_delay: Keyword.get(opts, :max_delay_ms, config_max_delay()),
         reconnect_fn: Keyword.get(opts, :reconnect_fn, &PushX.reconnect/0),
-        reconnect_key: Keyword.get(opts, :reconnect_key, :default)
+        reconnect_key: Keyword.get(opts, :reconnect_key, :default),
+        reconnect: Keyword.get(opts, :reconnect, true)
       }
 
       do_retry(fun, 1, retry_opts)
@@ -178,7 +179,8 @@ defmodule PushX.Retry do
   defp reconnect_opts(retry_opts) do
     %{
       reconnect_fn: Keyword.get(retry_opts, :reconnect_fn, &PushX.reconnect/0),
-      reconnect_key: Keyword.get(retry_opts, :reconnect_key, :default)
+      reconnect_key: Keyword.get(retry_opts, :reconnect_key, :default),
+      reconnect: Keyword.get(retry_opts, :reconnect, true)
     }
   end
 
@@ -188,6 +190,12 @@ defmodule PushX.Retry do
   # so N concurrent requests observing a blip must trigger at most one
   # restart per cooldown window, not N restarts that kill each other's
   # healthy in-flight requests.
+  # `reconnect: false` (Web Push) skips it entirely — the HTTP/1.1 pool drops
+  # dead connections on checkout by itself, and a connection error to one
+  # third-party push service says nothing about the APNS/FCM sockets that a
+  # reconnect would tear down.
+  defp maybe_reconnect(%{reconnect: false}), do: :ok
+
   defp maybe_reconnect(%{reconnect_fn: reconnect_fn, reconnect_key: key}) do
     if ReconnectGuard.acquire(key) do
       case reconnect_fn.() do

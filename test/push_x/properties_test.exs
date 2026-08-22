@@ -8,7 +8,8 @@ defmodule PushX.PropertiesTest do
   use ExUnit.Case
   use ExUnitProperties
 
-  alias PushX.{Config, FCM, HTTP, Message, Response, Token}
+  alias PushX.{Config, FCM, HTTP, Message, Response, Token, WebPush}
+  alias PushX.WebPush.VAPID
 
   @statuses [
     :sent,
@@ -399,6 +400,111 @@ defmodule PushX.PropertiesTest do
         Application.put_env(:pushx, :retry_max_delay_ms, max_delay)
 
         assert Config.batch_timeout_ms() == 30_000
+      end
+    end
+  end
+
+  # -- Web Push ---------------------------------------------------------------
+
+  defp b64url(bin), do: Base.url_encode64(bin, padding: false)
+
+  defp valid_subscription do
+    gen all(
+          host <- string(:alphanumeric, min_length: 1, max_length: 20),
+          path <- string(:alphanumeric, max_length: 30),
+          auth <- binary(length: 16)
+        ) do
+      {ua_public, _} = :crypto.generate_key(:ecdh, :prime256v1)
+
+      %{
+        "endpoint" => "https://#{host}.example/#{path}",
+        "keys" => %{"p256dh" => b64url(ua_public), "auth" => b64url(auth)}
+      }
+    end
+  end
+
+  describe "PushX.WebPush.validate_subscription/1" do
+    property "accepts any https endpoint with a real P-256 point and a 16-byte auth secret" do
+      check all(sub <- valid_subscription()) do
+        assert {:ok,
+                %{endpoint: endpoint, ua_public: <<4, _::binary-64>>, auth: <<_::binary-16>>}} =
+                 WebPush.validate_subscription(sub)
+
+        assert endpoint == sub["endpoint"]
+        assert :ok = Token.validate(:webpush, sub)
+      end
+    end
+
+    property "a p256dh or auth of the wrong length is always :invalid_token, never a raise" do
+      check all(
+              sub <- valid_subscription(),
+              p_len <- integer(0..130) |> filter(&(&1 != 65)),
+              a_len <- integer(0..40) |> filter(&(&1 != 16)),
+              which <- member_of([:p256dh, :auth])
+            ) do
+        bad =
+          case which do
+            :p256dh -> put_in(sub, ["keys", "p256dh"], b64url(:crypto.strong_rand_bytes(p_len)))
+            :auth -> put_in(sub, ["keys", "auth"], b64url(:crypto.strong_rand_bytes(a_len)))
+          end
+
+        assert {:error, %Response{provider: :webpush, status: :invalid_token}} =
+                 WebPush.validate_subscription(bad)
+
+        assert {:error, :invalid_format} = Token.validate(:webpush, bad)
+      end
+    end
+
+    property "never raises for arbitrary terms" do
+      check all(term <- term()) do
+        assert match?({:ok, _}, WebPush.validate_subscription(term)) or
+                 match?(
+                   {:error, %Response{status: :invalid_token}},
+                   WebPush.validate_subscription(term)
+                 )
+      end
+    end
+  end
+
+  describe "PushX.WebPush.VAPID.validate_subject/1" do
+    property "mailto:/https: with a non-empty rest is :ok; anything else is an error with a reason" do
+      check all(
+              rest <- string(:printable, min_length: 1, max_length: 40),
+              scheme <- member_of(["mailto:", "https://", "http://", "", "ftp://"])
+            ) do
+        case VAPID.validate_subject(scheme <> rest) do
+          :ok -> assert scheme in ["mailto:", "https://"]
+          {:error, reason} -> assert reason =~ "mailto: or https:"
+        end
+      end
+    end
+
+    property "never raises for arbitrary terms" do
+      check all(term <- term()) do
+        assert VAPID.validate_subject(term) in [:ok] or
+                 match?({:error, _}, VAPID.validate_subject(term))
+      end
+    end
+  end
+
+  describe "PushX.Message Web Push builders" do
+    property "to_webpush_payload/1 is JSON-encodable, never emits nil values and never a badge" do
+      check all(message <- message()) do
+        payload = Message.to_webpush_payload(message)
+        assert {:ok, _} = HTTP.safe_encode(payload)
+        refute Enum.any?(payload, fn {_k, v} -> is_nil(v) end)
+        refute Map.has_key?(payload, "badge")
+        assert Map.keys(payload) -- ["title", "body", "icon", "tag", "data"] == []
+        if message.title, do: assert(payload["title"] == message.title)
+      end
+    end
+
+    property "to_webpush_options/1 only ever yields valid :ttl / :urgency values" do
+      check all(message <- message()) do
+        opts = Message.to_webpush_options(message)
+        assert Keyword.keys(opts) -- [:ttl, :urgency] == []
+        if ttl = opts[:ttl], do: assert(is_integer(ttl) and ttl >= 0)
+        if urgency = opts[:urgency], do: assert(urgency in [:high, :normal])
       end
     end
   end

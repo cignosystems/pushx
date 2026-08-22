@@ -111,4 +111,36 @@ defmodule PushX.JWTCacheTest do
   end
 
   defp make_unique_key, do: {:test, :erlang.unique_integer([:positive])}
+
+  test "invalidate_match/1 removes every key matching the pattern" do
+    scope = :"scope_#{System.unique_integer([:positive])}"
+
+    {:ok, "a"} =
+      PushX.JWTCache.get_or_generate({:vapid_jwt, scope, "o1"}, fn -> {:ok, "a"} end, 60_000)
+
+    {:ok, "b"} =
+      PushX.JWTCache.get_or_generate({:vapid_jwt, scope, "o2"}, fn -> {:ok, "b"} end, 60_000)
+
+    {:ok, "c"} =
+      PushX.JWTCache.get_or_generate({:vapid_jwt, :other, "o1"}, fn -> {:ok, "c"} end, 60_000)
+
+    :ok = PushX.JWTCache.invalidate_match({:vapid_jwt, scope, :_})
+
+    assert {:ok, "fresh"} =
+             PushX.JWTCache.get_or_generate(
+               {:vapid_jwt, scope, "o1"},
+               fn -> {:ok, "fresh"} end,
+               60_000
+             )
+
+    assert {:ok, "c"} =
+             PushX.JWTCache.get_or_generate(
+               {:vapid_jwt, :other, "o1"},
+               fn -> {:ok, "nope"} end,
+               60_000
+             )
+
+    PushX.JWTCache.invalidate({:vapid_jwt, :other, "o1"})
+    PushX.JWTCache.invalidate_match({:vapid_jwt, scope, :_})
+  end
 end

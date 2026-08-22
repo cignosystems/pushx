@@ -265,7 +265,7 @@ defmodule PushX do
      Response.error(
        :apns,
        :invalid_request,
-       "push_data is only supported for FCM. For APNS silent push, use push/4 with push_type: \"background\""
+       "push_data is only supported for FCM and Web Push. For APNS silent push, use push/4 with push_type: \"background\""
      )}
   end
 
@@ -290,8 +290,12 @@ defmodule PushX do
          Response.error(
            :apns,
            :invalid_request,
-           "push_data is only supported for FCM. For APNS silent push, use push/4 with push_type: \"background\""
+           "push_data is only supported for FCM and Web Push. For APNS silent push, use push/4 with push_type: \"background\""
          )}
+
+      # Web Push: the map *is* the payload — same wire shape as push_data(:webpush, ...).
+      {:ok, %{provider: :webpush}} ->
+        push(instance_name, device_token, data, opts)
 
       _ ->
         push(instance_name, device_token, %{"data" => data}, opts)
@@ -512,7 +516,7 @@ defmodule PushX do
           Enumerable.t()
   def push_batch_stream(provider, device_tokens, message, opts \\ []) do
     send_opts = Keyword.drop(opts, PushX.Batch.batch_option_keys())
-    validate_provider = if provider in [:apns, :fcm], do: provider
+    validate_provider = if provider in [:apns, :fcm, :webpush], do: provider
 
     PushX.Batch.stream(
       device_tokens,
@@ -704,6 +708,10 @@ defmodule PushX do
   defp normalize_payload(%Message{} = message, _provider) do
     message
   end
+
+  # Web Push maps are the payload itself (Notification API options such as
+  # icon/tag/actions live next to title/body) — never rewritten.
+  defp normalize_payload(map, :webpush) when is_map(map), do: map
 
   defp normalize_payload(%{"title" => _, "body" => _} = map, _provider) do
     Message.new(map["title"], map["body"])

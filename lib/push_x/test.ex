@@ -276,6 +276,36 @@ defmodule PushX.Test do
   end
 
   @doc """
+  A Web Push subscription map that passes validation (an `https` endpoint, a
+  real P-256 `p256dh` point and a 16-byte `auth` secret), for sending through
+  `PushX.push(:webpush, ...)` in test delivery mode — unlike an APNS/FCM token
+  string, a subscription is checked cryptographically before it is recorded,
+  so a hand-written `%{"keys" => %{"p256dh" => "abc"}}` is rejected as
+  `:invalid_token` (and would fire `:on_invalid_token`). Fresh keys every call.
+
+      sub = PushX.Test.webpush_subscription(endpoint: "https://push.example/abc")
+      PushX.push(:webpush, sub, "Hi")
+      assert_pushed(%{provider: :webpush, target: ^sub})
+  """
+  @spec webpush_subscription(keyword()) :: map()
+  def webpush_subscription(opts \\ []) do
+    {public, _private} = :crypto.generate_key(:ecdh, :prime256v1)
+
+    %{
+      "endpoint" =>
+        Keyword.get(
+          opts,
+          :endpoint,
+          "https://push.example.test/send/#{System.unique_integer([:positive])}"
+        ),
+      "keys" => %{
+        "p256dh" => Base.url_encode64(public, padding: false),
+        "auth" => Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
+      }
+    }
+  end
+
+  @doc """
   A service-account credentials map with a freshly generated RSA key, valid
   for `PushX.Instance.start/3`'s credential validation. Generated once per VM
   and cached; tied to no Google project.

@@ -26,77 +26,8 @@ defmodule PushX.Application do
         PushX.ReconnectGuard,
         # Circuit breaker (always started, but only tracks when enabled)
         PushX.CircuitBreaker,
-        # Finch HTTP client pool with HTTP/2 for APNS and FCM
-        {Finch,
-         name: PushX.Config.finch_name(),
-         pools: %{
-           # APNS Production
-           PushX.URLs.apns_prod() => [
-             size: PushX.Config.finch_pool_size(),
-             count: PushX.Config.finch_pool_count(),
-             protocols: [:http2],
-             http2: PushX.Config.finch_http2_opts(),
-             conn_opts: [
-               transport_opts: [
-                 timeout: PushX.Config.connect_timeout(),
-                 keepalive: true,
-                 # Explicit so a future refactor can't silently disable TLS peer
-                 # verification (this is already Mint's default on OTP 25+).
-                 verify: :verify_peer
-               ]
-             ]
-           ],
-           # APNS Sandbox
-           PushX.URLs.apns_sandbox() => [
-             size: PushX.Config.finch_pool_size(),
-             count: PushX.Config.finch_pool_count(),
-             protocols: [:http2],
-             http2: PushX.Config.finch_http2_opts(),
-             conn_opts: [
-               transport_opts: [
-                 timeout: PushX.Config.connect_timeout(),
-                 keepalive: true,
-                 # Explicit so a future refactor can't silently disable TLS peer
-                 # verification (this is already Mint's default on OTP 25+).
-                 verify: :verify_peer
-               ]
-             ]
-           ],
-           # FCM (Firebase Cloud Messaging)
-           PushX.URLs.fcm_origin() => [
-             size: PushX.Config.finch_pool_size(),
-             count: PushX.Config.finch_pool_count(),
-             protocols: [:http2],
-             http2: PushX.Config.finch_http2_opts(),
-             conn_opts: [
-               transport_opts: [
-                 timeout: PushX.Config.connect_timeout(),
-                 keepalive: true,
-                 # Explicit so a future refactor can't silently disable TLS peer
-                 # verification (this is already Mint's default on OTP 25+).
-                 verify: :verify_peer
-               ]
-             ]
-           ],
-           # FCM Instance ID API (topic subscription management)
-           PushX.URLs.fcm_iid_origin() => [
-             size: PushX.Config.finch_pool_size(),
-             count: PushX.Config.finch_pool_count(),
-             protocols: [:http2],
-             http2: PushX.Config.finch_http2_opts(),
-             conn_opts: [
-               transport_opts: [
-                 timeout: PushX.Config.connect_timeout(),
-                 keepalive: true,
-                 verify: :verify_peer
-               ]
-             ]
-           ],
-           :default => [
-             size: PushX.Config.finch_pool_size(),
-             count: PushX.Config.finch_pool_count()
-           ]
-         }}
+        # Finch HTTP client pool: HTTP/2 for APNS and FCM, HTTP/1.1 for Web Push
+        finch_child()
       ]
       |> maybe_add_goth()
 
@@ -126,5 +57,46 @@ defmodule PushX.Application do
       credentials when is_map(credentials) ->
         {:service_account, credentials}
     end
+  end
+
+  defp finch_child do
+    # Bound once: finch_http2_pool_entry/0 reads config and, on finch < 0.22,
+    # logs its "ignored" warning — four pools must not mean four warnings.
+    http2 = PushX.Config.finch_http2_pool_entry()
+
+    transport_opts = [
+      timeout: PushX.Config.connect_timeout(),
+      keepalive: true,
+      # Explicit so a future refactor can't silently disable TLS peer
+      # verification (this is already Mint's default on OTP 25+).
+      verify: :verify_peer
+    ]
+
+    http2_pool =
+      [
+        size: PushX.Config.finch_pool_size(),
+        count: PushX.Config.finch_pool_count(),
+        protocols: [:http2],
+        conn_opts: [transport_opts: transport_opts]
+      ] ++ http2
+
+    {Finch,
+     name: PushX.Config.finch_name(),
+     pools: %{
+       PushX.URLs.apns_prod() => http2_pool,
+       PushX.URLs.apns_sandbox() => http2_pool,
+       PushX.URLs.fcm_origin() => http2_pool,
+       # FCM Instance ID API (topic subscription management)
+       PushX.URLs.fcm_iid_origin() => http2_pool,
+       # HTTP/1.1 pool for Web Push: push-service origins are per subscription,
+       # so one default pool serves them all. `finch_pool_size` is the
+       # per-origin connection cap here; `count` stays 1 because
+       # `finch_pool_count` is documented as the HTTP/2 connection knob.
+       :default => [
+         size: PushX.Config.finch_pool_size(),
+         count: 1,
+         conn_opts: [transport_opts: transport_opts]
+       ]
+     }}
   end
 end

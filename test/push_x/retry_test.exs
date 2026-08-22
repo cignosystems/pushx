@@ -356,6 +356,30 @@ defmodule PushX.RetryTest do
       refute_received :reconnected
     end
 
+    test "reconnect: false skips the pool reconnect on connection errors (Web Push)" do
+      parent = self()
+      key = {:retry_noreconnect_test, System.unique_integer([:positive])}
+
+      retry_opts = [
+        reconnect: false,
+        reconnect_fn: fn -> send(parent, :reconnected) end,
+        reconnect_key: key
+      ]
+
+      for retry <- [:none, :blocking] do
+        Retry.maybe_with_retry(
+          :webpush,
+          [retry: retry],
+          fn -> {:error, Response.error(:webpush, :connection_error, "refused")} end,
+          retry_opts
+        )
+      end
+
+      refute_received :reconnected
+      # The guard was never consumed either, so a real APNS/FCM reconnect may proceed.
+      assert PushX.ReconnectGuard.acquire(key)
+    end
+
     test "retry: :blocking (and the default) retries retryable failures" do
       for opts <- [[retry: :blocking], []] do
         {:ok, counter} = Agent.start_link(fn -> 0 end)

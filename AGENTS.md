@@ -9,7 +9,7 @@ model and the mistakes agents most often make.
 
 ## What PushX is
 
-A single hex package (`{:pushx, "~> 0.14"}`) that sends push notifications to
+A single hex package (`{:pushx, "~> 0.15"}`) that sends push notifications to
 **Apple APNS**, **Google FCM** and **browsers via standards-based Web Push**
 (VAPID + RFC 8291 encryption) — with JWT/OAuth/VAPID handled automatically. Concretely, what's in the box:
 
@@ -35,7 +35,7 @@ single set of credentials in config?
 │            └── many tokens at once?  → PushX.push_batch/4 (list) or
 │            │                            PushX.push_batch_stream/4 (lazy; big audiences)
 │            └── only need :ok / :error? → PushX.push!/4
-│            └── data-only (silent, FCM)? → PushX.push_data(:fcm, ...)
+│            └── data-only?               → PushX.push_data(:fcm | :webpush, ...) (FCM data message; Web Push: the map is the payload)
 │            └── APNS silent push?       → PushX.push(:apns, ..., push_type: "background")
 │            └── FCM topic / condition?   → PushX.push(:fcm, {:topic, "news"}, msg)
 │            │     manage subscriptions   → PushX.subscribe/4, PushX.unsubscribe/4
@@ -43,7 +43,7 @@ single set of credentials in config?
 │            └── must not block on backoff? → add retry: :none to any call
 │            └── browser (any)?            → PushX.push(:webpush, subscription, msg) [VAPID config]
 └── no — multiple tenants / per-customer credentials at runtime
-         → PushX.Instance.start(name, :apns | :fcm, config)
+         → PushX.Instance.start(name, :apns | :fcm | :webpush, config)
            then PushX.push(name, token, msg, opts)
 ```
 
@@ -88,7 +88,9 @@ single set of credentials in config?
   failing, the breaker opens and `push/4` returns
   `{:error, %Response{status: :circuit_open}}` *without* hitting the network.
   Call `PushX.health_check/0` to inspect breaker state (static providers
-  under `:apns`/`:fcm`, each named instance under `:instances`).
+  under `:apns`/`:fcm`/`:webpush`, each named instance under `:instances`).
+  The breaker is keyed per provider — for `:webpush` one key spans every
+  push service (Google, Mozilla, Apple, ...).
 - **Test your app with `config :pushx, delivery: :test`** — sends are
   validated then recorded, not sent; assert with
   `import PushX.Test.Assertions` → `assert_pushed(%{provider: :apns, target: ^token})`,
@@ -97,8 +99,9 @@ single set of credentials in config?
 - **HTTP/2 pools are long-lived** — `finch_pool_count` is the number of
   HTTP/2 connections per origin (default 2; never 1 in prod); `finch_pool_size`
   is *ignored* for HTTP/2. Stale idle sockets on cloud infra are prevented by
-  the HTTP/2 PING keepalive (`finch_http2_ping_interval`, default 60 s) — not
-  by shrinking pools. `PushX.reconnect/0` for manual recovery.
+  the HTTP/2 PING keepalive (`finch_http2_ping_interval`, default 60 s;
+  needs finch ≥ 0.22, ignored with a boot warning before) — not by shrinking
+  pools. `PushX.reconnect/0` for manual recovery.
 
 ## Idiomatic patterns
 
@@ -169,8 +172,8 @@ PushX.push(:tenant_42_apns, token, msg, topic: tenant.bundle_id)
 PushX.Instance.reconfigure(:tenant_42_apns, private_key: new_pem)
 ```
 
-Reserved instance names: `:apns` and `:fcm` (those resolve to the default
-config-based pools — don't use as instance names).
+Reserved instance names: `:apns`, `:fcm` and `:webpush` (those resolve to the
+default config-based pools — `Instance.start/3` returns `{:error, :reserved_name}`).
 
 ### Web push
 
@@ -179,8 +182,10 @@ Safari 16+): the target is the browser's subscription map, auth is VAPID
 (`webpush_vapid_*` config, `mix pushx.vapid` to generate keys):
 
 ```elixir
-PushX.push(:webpush, subscription, %{title: "Hi", body: "There"}, ttl: 3600)
+PushX.push(:webpush, subscription, %{title: "Hi", body: "There", icon: "/i.png"}, ttl: 3600)
+# maps are sent as-is (Notification API options survive); a string is the title
 # 404/410 → :unregistered → :on_invalid_token receives the subscription map
+# in tests: PushX.Test.webpush_subscription/1 builds a valid subscription
 ```
 
 Only use the two below for apps *already* on the Firebase JS SDK or
@@ -207,13 +212,14 @@ not the iOS bundle ID.
   push ID). Without it `push/4` returns
   `{:error, %Response{status: :invalid_request, reason: ":topic option is required"}}` —
   no network call is made. There is no per-config default.
-- **Calling `push_data/4` for APNS.** It's FCM-only. For an APNS silent
+- **Calling `push_data/4` for APNS.** It's for FCM (data message) and Web
+  Push (the map is the payload) only. For an APNS silent
   push, call `PushX.push(:apns, token, payload, push_type: "background", priority: 5, topic: ...)`
   — the function returns an explicit error explaining this.
-- **Confusing the `:apns`/`:fcm` symbols with named instance atoms.** Both
-  work as the first argument to `push/4`, but mean different things. `:apns`
-  and `:fcm` use *config-based* credentials and are reserved; any other atom
-  must first be started via `PushX.Instance.start/3`.
+- **Confusing the `:apns`/`:fcm`/`:webpush` symbols with named instance atoms.**
+  Both work as the first argument to `push/4`, but mean different things.
+  `:apns`, `:fcm` and `:webpush` use *config-based* credentials and are
+  reserved; any other atom must first be started via `PushX.Instance.start/3`.
 - **Wrong `apns_mode`.** Sandbox tokens fail silently in `:prod` mode and
   vice versa — APNS returns `BadDeviceToken`, which PushX surfaces as
   `:invalid_token`. Make sure dev/sandbox tokens go to `:sandbox` and TestFlight

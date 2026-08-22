@@ -38,6 +38,8 @@ plan is to reach **1.0 as a stability promise**, not as a feature milestone.
 
 - Expo push (see design note), Huawei HMS, APNS Live Activity broadcast
   channels, `PushX.Batch` chunked multi-target sends.
+- Per-origin circuit breaker / rate-limit keys for Web Push (today one
+  `:webpush` key spans every push service; the breaker is off by default).
 
 ## Not planned
 

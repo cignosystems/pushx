@@ -1,6 +1,7 @@
 defmodule PushX.JWTCache do
   @moduledoc """
-  Cache for short-lived bearer tokens (currently APNS JWTs).
+  Cache for short-lived, expensively-derived values: APNS JWTs, per-origin
+  VAPID JWTs and resolved VAPID key pairs.
 
   Reads are lock-free via a public ETS table. On a cache miss, refresh is
   serialized through this GenServer to prevent a thundering-herd of JWT
@@ -28,10 +29,11 @@ defmodule PushX.JWTCache do
   Returns a cached token if still fresh, otherwise asks the cache process
   to generate a new one via `generate_fn` and caches it for `ttl_ms`.
 
-  `generate_fn` must return `{:ok, token}` or `{:error, reason}`.
+  `generate_fn` must return `{:ok, value}` or `{:error, reason}`; only
+  `{:ok, _}` results are cached.
   """
-  @spec get_or_generate(cache_key(), (-> {:ok, String.t()} | {:error, term()}), pos_integer()) ::
-          {:ok, String.t()} | {:error, term()}
+  @spec get_or_generate(cache_key(), (-> {:ok, term()} | {:error, term()}), pos_integer()) ::
+          {:ok, term()} | {:error, term()}
   def get_or_generate(cache_key, generate_fn, ttl_ms)
       when is_function(generate_fn, 0) and is_integer(ttl_ms) and ttl_ms > 0 do
     now = System.system_time(:millisecond)
@@ -50,6 +52,19 @@ defmodule PushX.JWTCache do
   def invalidate(cache_key) do
     safe_delete(cache_key)
     :ok
+  end
+
+  @doc """
+  Removes every entry whose key matches an ETS match pattern, e.g.
+  `{:vapid_jwt, :tenant_web, :_}` for all of an instance's per-origin VAPID
+  JWTs. Used when an instance is stopped or reconfigured.
+  """
+  @spec invalidate_match(tuple()) :: :ok
+  def invalidate_match(pattern) do
+    :ets.match_delete(@table, {pattern, :_, :_})
+    :ok
+  rescue
+    ArgumentError -> :ok
   end
 
   ## GenServer Callbacks

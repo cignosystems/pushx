@@ -46,6 +46,18 @@ defmodule PushX.InstanceTest do
                Instance.start(:fcm, :fcm, project_id: "proj", credentials: %{})
     end
 
+    test "rejects reserved name :webpush (PushX.push(:webpush, ...) is the static path)" do
+      keys = PushX.WebPush.generate_vapid_keys()
+
+      assert {:error, :reserved_name} =
+               Instance.start(:webpush, :webpush,
+                 vapid_subject: "mailto:a@b.c",
+                 vapid_private_key: keys.private_key
+               )
+
+      assert {:error, :reserved_name} = Instance.start(:webpush, :apns, apns_config())
+    end
+
     test "rejects duplicate name" do
       start_and_cleanup(:dup_test, :apns, apns_config())
 

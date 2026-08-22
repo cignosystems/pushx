@@ -83,7 +83,7 @@ Add `pushx` to your dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:pushx, "~> 0.14"}
+    {:pushx, "~> 0.15"}
   ]
 end
 ```
@@ -364,7 +364,7 @@ PushX.push(:webpush, subscription, %{title: "Order shipped", body: "Arrives Tues
   ttl: 3600, urgency: :high, topic: "order-42")
 ```
 
-`PushX.Message` maps to the Notification API shape (`title`, `body`, `icon`, `tag`, `data`) your service worker shows; a map is sent as JSON; a binary verbatim. A `404`/`410` from the push service means the subscription is gone → `:unregistered`, and `:on_invalid_token` fires with the subscription map so you can delete it. Payloads are limited to ~4 KB; `:ttl`, `:urgency` (`:very_low | :low | :normal | :high`) and `:topic` (collapse key) are the RFC 8030 knobs. Multi-tenant: `PushX.Instance.start(name, :webpush, vapid_subject: ..., vapid_private_key: ...)`. See `PushX.WebPush`.
+`PushX.Message` maps to the Notification API shape (`title`, `body`, `icon`, `tag`, `data`) your service worker shows, and its `ttl`/`priority` become the `TTL`/`Urgency` headers; a map is sent as JSON exactly as given (also through `PushX.push/4` — Notification API options like `icon`/`actions` survive); a string is the title via `PushX.push/4` (`{"title": ..., "body": ""}`, as for APNS/FCM) and verbatim via `PushX.WebPush.send/3`. A `404`/`410` from the push service means the subscription is gone → `:unregistered`, and `:on_invalid_token` fires with the subscription map so you can delete it. Payloads are limited to ~4 KB; `:ttl`, `:urgency` (`:very_low | :low | :normal | :high`) and `:topic` (collapse key) are the RFC 8030 knobs. Multi-tenant: `PushX.Instance.start(name, :webpush, vapid_subject: ..., vapid_private_key: ...)`. See `PushX.WebPush`.
 
 #### FCM Web Push (apps using the Firebase JS SDK)
 
@@ -446,7 +446,7 @@ config :pushx,
   # === HTTP/2 Pool (tune for your traffic level) ===
   finch_pool_count: 2,         # HTTP/2 connections per origin (default: 2; never 1 in prod)
   # finch_pool_size does NOT apply to APNS/FCM (HTTP/2) — it only sizes the HTTP/1 pool (Web Push)
-  finch_http2_ping_interval: 60_000,   # HTTP/2 PING keepalive after 60 s idle (default)
+  finch_http2_ping_interval: 60_000,   # HTTP/2 PING keepalive after 60 s idle (default; finch ≥ 0.22)
 
   # === Timeouts ===
   receive_timeout: 15_000,     # wait for response data (default: 15s)
@@ -504,7 +504,7 @@ config :pushx,
 APNS and FCM are spoken over **HTTP/2**, and in Finch an HTTP/2 "pool" is **one multiplexed connection**. So for APNS/FCM:
 
 - **`finch_pool_count`** = number of HTTP/2 connections per provider origin (default `2`). This is the capacity *and* redundancy knob. Each connection multiplexes up to the server's stream limit (APNS ≈ 1 000 concurrent streams, FCM ≈ 100). Don't run `1` in production: a single socket is a single point of failure, and after a reconnect a retry burst lands entirely on it (`too_many_concurrent_requests`).
-- **`finch_pool_size`** is **ignored for HTTP/2** pools. It only sizes the HTTP/1 default pool (Web Push, fallback traffic). Earlier versions of this README recommended lowering it for low-traffic apps — that had no effect on APNS/FCM.
+- **`finch_pool_size`** is **ignored for HTTP/2** pools. It only sizes the HTTP/1 default pool (Web Push): connections per push-service origin (default 25; the pool's `count` is fixed at 1). If a Web Push batch outruns it, the excess queues for `:pool_timeout` and then fails with a retryable `:connection_error` (`pool_timeout`) — raise `finch_pool_size` or lower batch `:concurrency`. Earlier versions of this README recommended lowering it for low-traffic apps — that had no effect on APNS/FCM.
 
 | Traffic | `finch_pool_count` | Approx. concurrent streams (APNS) |
 |---------|--------------------|-----------------------------------|
@@ -629,7 +629,7 @@ PushX.Instance.start(:my_fcm, :fcm,
 )
 ```
 
-The names `:apns` and `:fcm` are reserved for the static config path and cannot be used as instance names.
+The names `:apns`, `:fcm` and `:webpush` are reserved for the static config path and cannot be used as instance names.
 
 ### Sending via Instances
 
@@ -988,7 +988,7 @@ end
 
 ## Circuit Breaker
 
-PushX includes an optional circuit breaker that temporarily blocks requests to a provider after consecutive failures. This prevents wasting resources on dead connections.
+PushX includes an optional circuit breaker that temporarily blocks requests to a provider after consecutive failures. This prevents wasting resources on dead connections. It is keyed per provider (and per named instance): for `:webpush` one key covers every push service, so a run of 5xx from one vendor can open it for all browsers.
 
 ```elixir
 config :pushx,
@@ -1097,6 +1097,11 @@ Set test delivery mode and every send is validated exactly as in production (req
 config :pushx, delivery: :test
 ```
 
+Web Push targets are checked cryptographically before they are recorded (a
+real P-256 `p256dh` point, 16-byte `auth`, `https` endpoint) — use
+`PushX.Test.webpush_subscription/1` for a valid fixture instead of hand-writing
+keys.
+
 ```elixir
 defmodule MyApp.OrdersTest do
   use ExUnit.Case, async: true
@@ -1185,7 +1190,7 @@ config :pushx,
 
 ### Stale connections after idle periods
 
-On cloud infrastructure (Fly.io, AWS, GCP) idle HTTP/2 connections are silently dropped; the first send after a quiet period then fails with a connection error and is recovered by the retry path (which reconnects the pool) — a second or two late. Prevent it instead of recovering from it: HTTP/2 PING keepalive is on by default (`finch_http2_ping_interval: 60_000`); lower it if your platform drops faster, or add `finch_http2_max_connection_age` to recycle connections proactively. Manual: `PushX.reconnect()`.
+On cloud infrastructure (Fly.io, AWS, GCP) idle HTTP/2 connections are silently dropped; the first send after a quiet period then fails with a connection error and is recovered by the retry path (which reconnects the pool) — a second or two late. Prevent it instead of recovering from it: HTTP/2 PING keepalive is on by default (`finch_http2_ping_interval: 60_000`, finch ≥ 0.22 — older finch ignores it with a boot warning); lower it if your platform drops faster, or add `finch_http2_max_connection_age` to recycle connections proactively. Manual: `PushX.reconnect()`.
 
 ### `request_timeout` Error
 

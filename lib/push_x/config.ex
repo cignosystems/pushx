@@ -115,8 +115,12 @@ defmodule PushX.Config do
   ### Internal / test-only
 
     * `:apns_url_override`, `:fcm_url_override` - point the real send paths at
-      a local HTTP server. Used by PushX's own test suite; not for production.
-      For testing *your* application use `:delivery` (`PushX.Test`) instead.
+      a local HTTP server; `:webpush_allow_http` (default `false`) lets Web Push
+      subscriptions carry plain `http://` endpoints (RFC 8030 requires TLS, so
+      production rejects them as `:invalid_token`); `:finch_version_override`
+      makes the HTTP/2-option checks believe another finch version is installed.
+      Used by PushX's own test suite; not for production. For testing *your*
+      application use `:delivery` (`PushX.Test`) instead.
 
   ## Example Configuration
 
@@ -294,12 +298,28 @@ defmodule PushX.Config do
   end
 
   @doc false
+  # The pool-config entry for the HTTP/2 options: `[http2: opts]` on finch ≥ 0.22,
+  # `[]` before — the `:http2` key must not reach a finch that does not know it
+  # (0.21's pool schema rejects unknown keys and the pool would fail to boot).
+  # Callers bind the result once per Finch spec so the "ignored" warning is
+  # logged once, not once per pool.
+  @spec finch_http2_pool_entry(keyword()) :: keyword()
+  def finch_http2_pool_entry(overrides \\ []) do
+    case finch_http2_opts(overrides) do
+      [] -> []
+      opts -> [http2: opts]
+    end
+  end
+
+  @doc false
   def finch_http2_options_supported? do
     Version.match?(finch_version(), ">= 0.22.0")
   end
 
+  # `:finch_version_override` is a test-only seam so the finch < 0.22 path can
+  # be exercised against the locked (newer) finch.
   defp finch_version do
-    case Application.spec(:finch, :vsn) do
+    case get(:finch_version_override) || Application.spec(:finch, :vsn) do
       nil -> "0.0.0"
       vsn -> to_string(vsn)
     end

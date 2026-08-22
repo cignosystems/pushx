@@ -34,8 +34,8 @@ defmodule PushX.Token do
 
   """
 
-  @type provider :: :apns | :fcm
-  @type token :: String.t()
+  @type provider :: :apns | :fcm | :webpush
+  @type token :: String.t() | map()
   @type validation_error :: :empty | :invalid_format | :invalid_length
 
   # APNS tokens are currently 64 hex characters (32 bytes), but Apple warns
@@ -110,8 +110,18 @@ defmodule PushX.Token do
     end
   end
 
+  # Web Push "tokens" are subscription maps (endpoint + keys); the shape check
+  # is PushX.WebPush.validate_subscription/1 (https endpoint, 65-byte P-256
+  # point, 16-byte auth secret).
+  def validate(:webpush, subscription) when is_map(subscription) do
+    case PushX.WebPush.validate_subscription(subscription) do
+      {:ok, _} -> :ok
+      {:error, _} -> {:error, :invalid_format}
+    end
+  end
+
   # Total over any term so callers (and property tests) can rely on it never
-  # raising: a non-binary is not a token of either provider.
+  # raising: anything else is not a token of any provider.
   def validate(_provider, _other), do: {:error, :invalid_format}
 
   @doc """

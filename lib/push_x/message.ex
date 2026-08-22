@@ -482,7 +482,11 @@ defmodule PushX.Message do
   @doc """
   Converts the message to the Notification API shape a service worker shows
   via `registration.showNotification(title, options)`: `title`, `body`,
-  `icon` (from `image/2`), `tag` (from `collapse_key/2`), `badge` and `data`.
+  `icon` (from `image/2`), `tag` (from `collapse_key/2`) and `data`.
+
+  `badge/2` (an iOS app-icon count) is *not* mapped — the Notification API's
+  `badge` is an image URL; put one in `data/2` if your service worker wants it.
+  Delivery fields (`ttl/2`, `priority/2`) become headers, see `to_webpush_options/1`.
 
   ## Examples
 
@@ -497,8 +501,38 @@ defmodule PushX.Message do
     |> maybe_put("body", message.body)
     |> maybe_put("icon", message.image)
     |> maybe_put("tag", message.collapse_key)
-    |> maybe_put("badge", message.badge)
     |> maybe_put("data", if(message.data == %{}, do: nil, else: message.data))
+  end
+
+  @doc """
+  Translates the message's delivery fields into Web Push send options
+  (RFC 8030 headers), for merging into the `opts` of `PushX.WebPush.send/3` —
+  explicit call-site options take precedence.
+
+    * `ttl` (seconds) → `ttl:` (the `TTL` header)
+    * `priority: :high` → `urgency: :high`, `priority: :normal` → `urgency: :normal`
+
+  `collapse_key/2` is already the payload's `tag`, so it is not turned into
+  the `Topic` header (whose 32-char base64url alphabet it may not fit).
+
+  ## Examples
+
+      iex> PushX.Message.new("Hi", "There") |> PushX.Message.ttl(3600) |> PushX.Message.priority(:high) |> PushX.Message.to_webpush_options()
+      [ttl: 3600, urgency: :high]
+
+  """
+  @spec to_webpush_options(t()) :: keyword()
+  def to_webpush_options(%__MODULE__{} = message) do
+    []
+    |> maybe_put_kw(
+      :urgency,
+      case message.priority do
+        :high -> :high
+        :normal -> :normal
+        nil -> nil
+      end
+    )
+    |> maybe_put_kw(:ttl, message.ttl)
   end
 
   defp maybe_put(map, _key, nil), do: map

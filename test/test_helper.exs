@@ -2,6 +2,9 @@
 Application.put_env(:pushx, :apns_key_id, "TEST_KEY_ID")
 Application.put_env(:pushx, :apns_team_id, "TEST_TEAM_ID")
 Application.put_env(:pushx, :fcm_project_id, "test-project")
+# The Web Push tests run a local (plain http) push service; production only
+# accepts https endpoints.
+Application.put_env(:pushx, :webpush_allow_http, true)
 
 # Throwaway APNS signing key: generated per VM by PushX.Test (the same helper
 # library users get for starting instances in tests). APNS ES256 requires a
