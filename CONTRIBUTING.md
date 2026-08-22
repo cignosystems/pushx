@@ -76,7 +76,11 @@ Notes for humans and AI assistants modifying this library itself. If you are
    in `README.md` / `AGENTS.md`.
 2. Commit, then `git tag vx.y.z && git push --tags`.
 3. The release workflow verifies the tag matches `@version`, runs the suite
-   with the coverage gate, and only then publishes the package and docs to Hex.
+   with the coverage gate, and only then publishes the package and docs to Hex
+   — and creates the GitHub Release for the tag, with that version's
+   CHANGELOG section as the notes (`scripts/release_notes.sh <version>`).
+   Every tag gets a GitHub Release; if the workflow's last job ever fails,
+   run `gh release create vX.Y.Z --verify-tag --title vX.Y.Z --notes-file <(scripts/release_notes.sh X.Y.Z)`.
 
 ## Coding conventions
 

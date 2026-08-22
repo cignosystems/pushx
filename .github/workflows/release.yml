@@ -81,3 +81,28 @@ jobs:
         env:
           HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
         run: mix hex.publish docs --yes
+
+  # The GitHub Release is the human-facing counterpart of the Hex release:
+  # notes are the version's CHANGELOG section, attached to the same tag.
+  github_release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: publish
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Create release from CHANGELOG
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          scripts/release_notes.sh "$VERSION" > /tmp/notes.md
+          test -s /tmp/notes.md || { echo "::error::no CHANGELOG section for $VERSION"; exit 1; }
+          gh release create "$GITHUB_REF_NAME" \
+            --verify-tag \
+            --title "v$VERSION" \
+            --notes-file /tmp/notes.md
