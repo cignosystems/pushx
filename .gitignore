@@ -26,3 +26,6 @@ erl_crash.dump
 pushx-*.tar
 
 priv/plts/
+
+# Provider credentials for local load tests (bench/real_rtt.exs) — never commit.
+/priv/keys/
