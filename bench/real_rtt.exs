@@ -128,12 +128,10 @@ fcm_msg = PushX.Message.new("PushX load test", "validate_only unless PUSHX_LOAD_
   "real-rtt",
   [[:pushx, :retry, :attempt], [:pushx, :push, :error]],
   fn
-    [:pushx, :retry, :attempt], _m, meta, _ ->
+    [:pushx, :retry, :attempt], m, meta, _ ->
       Agent.update(counters, &update_in(&1.retries, fn r -> r + 1 end))
 
-      IO.puts(
-        "  retry: #{meta.provider} #{meta.status} attempt #{meta.attempt} (#{meta.delay_ms}ms)"
-      )
+      IO.puts("  retry: #{meta.provider} #{meta.status} attempt #{m.attempt} (#{m.delay_ms}ms)")
 
     [:pushx, :push, :error], _m, meta, _ ->
       Agent.update(
