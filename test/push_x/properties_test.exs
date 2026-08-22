@@ -59,12 +59,18 @@ defmodule PushX.PropertiesTest do
     end)
   end
 
+  # Keys may be atoms or strings, but never both spellings of the same name
+  # (`:R` and `"R"`): providers stringify keys, and the collision would make a
+  # "keys are preserved" property fail for a reason that is the generator's.
   defp data_map do
     map_of(
       one_of([string(:alphanumeric, min_length: 1), atom(:alphanumeric)]),
       json_term(),
       max_length: 5
     )
+    |> filter(fn map ->
+      map |> Map.keys() |> Enum.map(&to_string/1) |> Enum.uniq() |> length() == map_size(map)
+    end)
   end
 
   defp message do
