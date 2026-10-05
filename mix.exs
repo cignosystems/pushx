@@ -43,6 +43,12 @@ defmodule PushX.MixProject do
       {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: :dev, runtime: false},
       {:bypass, "~> 2.1", only: :test},
+      # Transitive test dep (bypass -> cowboy). Pinned: cowlib 2.20.0 uses the
+      # `?=` maybe-expression and no longer compiles on OTP 26, our supported
+      # floor. Drop the pin when cowlib compiles on OTP 26 again or the floor
+      # moves to OTP 27. (2.19.0 has two more known EEF-CVEs than 2.20.0 —
+      # all test-only, never shipped to library consumers.)
+      {:cowlib, "~> 2.19.0", only: :test, override: true},
       {:stream_data, "~> 1.1", only: [:dev, :test]}
     ]
   end
