@@ -75,7 +75,7 @@ jobs:
         run: mix compile --warnings-as-errors
 
       # mix_audit (GitHub advisory DB) rather than hex.audit: the latter still
-      # lists three EEF-CVEs against cowlib 2.19.0 (a test-only dep via Bypass;
+      # lists two EEF-CVEs against cowlib 2.20.0 (a test-only dep via Bypass;
       # latest release, no fix published) with no way to acknowledge them.
       # No advisories are ignored here — if this step goes red, look, don't pin.
       - name: Check for security vulnerabilities
@@ -198,28 +198,33 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Setup Elixir
+        id: beam
         uses: erlef/setup-beam@v1
         with:
           elixir-version: ${{ env.ELIXIR_VERSION }}
           otp-version: ${{ env.OTP_VERSION }}
 
+      # Cache keys use the exact versions setup-beam resolved (not the loose
+      # env values): a PLT built under one OTP patch release is rejected by
+      # the next ("Old PLT file"), which broke a weekly run when the runner's
+      # OTP 29.x moved while the key stayed "29".
       - name: Cache deps
         uses: actions/cache@v6
         with:
           path: |
             deps
             _build
-          key: ${{ runner.os }}-mix-dialyzer-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('**/mix.lock') }}
+          key: ${{ runner.os }}-mix-dialyzer-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.lock') }}
           restore-keys: |
-            ${{ runner.os }}-mix-dialyzer-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-
+            ${{ runner.os }}-mix-dialyzer-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-
 
       - name: Cache PLT
         uses: actions/cache@v6
         with:
           path: priv/plts
-          key: ${{ runner.os }}-plt-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('**/mix.lock') }}
+          key: ${{ runner.os }}-plt-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.lock') }}
           restore-keys: |
-            ${{ runner.os }}-plt-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-
+            ${{ runner.os }}-plt-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-
 
       - name: Install dependencies
         run: mix deps.get
