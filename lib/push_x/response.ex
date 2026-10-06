@@ -162,6 +162,7 @@ defmodule PushX.Response do
     "TooManyProviderTokenUpdates" => :auth_error
   }
 
+  @doc since: "0.1.0"
   @spec apns_reason_to_status(String.t()) :: status()
   def apns_reason_to_status(reason) do
     Map.get(@apns_reason_statuses, reason, :unknown_error)
@@ -275,7 +276,7 @@ defmodule PushX.Response do
       false
 
   """
-  @doc since: "0.2.3"
+  @doc since: "0.2.0"
   @spec retryable?(t()) :: boolean()
   def retryable?(%__MODULE__{status: status}) do
     status in [:connection_error, :rate_limited, :server_error]

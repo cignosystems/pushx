@@ -75,8 +75,10 @@ jobs:
         run: mix compile --warnings-as-errors
 
       # mix_audit (GitHub advisory DB) rather than hex.audit: the latter still
-      # lists two EEF-CVEs against cowlib 2.20.0 (a test-only dep via Bypass;
-      # latest release, no fix published) with no way to acknowledge them.
+      # lists EEF-CVEs against cowlib 2.19.0 (a test-only dep via Bypass,
+      # pinned in mix.exs because 2.20.0 drops OTP 26; two of its four
+      # advisories remain unfixed even in 2.20.0) with no way to acknowledge
+      # them.
       # No advisories are ignored here — if this step goes red, look, don't pin.
       - name: Check for security vulnerabilities
         run: mix deps.audit

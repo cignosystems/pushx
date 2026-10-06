@@ -22,6 +22,8 @@ defmodule PushX.ReconnectGuard do
 
   @default_cooldown_ms 5_000
 
+  # Started by PushX's own supervisor, never by users.
+  @doc false
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end

@@ -299,7 +299,10 @@ defmodule PushX.ConfigTest do
     end
   end
 
-  test "request_timeout/0 (deprecated since 0.11, never used by Finch) is gone in 1.0" do
+  test "request_timeout/0 (deprecated since 0.7.0, never used by Finch) is gone in 1.0" do
+    # function_exported?/3 is false for unloaded modules, which would make
+    # this pass vacuously.
+    Code.ensure_loaded!(Config)
     refute function_exported?(Config, :request_timeout, 0)
   end
 

@@ -73,6 +73,12 @@ defmodule PushX.RateLimiter do
   @spec check_and_increment(provider()) :: :ok | {:error, :rate_limited}
   def check_and_increment(provider), do: check_and_increment(provider, provider)
 
+  @doc """
+  Counts under `key` while taking the limit from `provider`'s config.
+
+  See `check_and_increment/1`.
+  """
+  @doc since: "0.12.0"
   @spec check_and_increment(key(), provider()) :: :ok | {:error, :rate_limited}
   def check_and_increment(key, provider) do
     if enabled?() do

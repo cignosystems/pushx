@@ -426,14 +426,14 @@ defmodule PushX.Config do
   @doc """
   Checks if retry is enabled.
   """
-  @doc since: "0.13.0"
+  @doc since: "0.2.0"
   @spec retry_enabled?() :: boolean()
   def retry_enabled?, do: get(:retry_enabled, true)
 
   @doc """
   Gets the maximum number of retry attempts.
   """
-  @doc since: "0.13.0"
+  @doc since: "0.2.0"
   @spec retry_max_attempts() :: pos_integer()
   def retry_max_attempts, do: get(:retry_max_attempts, 3)
 
@@ -441,7 +441,7 @@ defmodule PushX.Config do
   Gets the base delay for exponential backoff in milliseconds.
   Default: 10 seconds (Google's recommended minimum).
   """
-  @doc since: "0.13.0"
+  @doc since: "0.2.0"
   @spec retry_base_delay_ms() :: pos_integer()
   def retry_base_delay_ms, do: get(:retry_base_delay_ms, 10_000)
 
@@ -449,7 +449,7 @@ defmodule PushX.Config do
   Gets the maximum delay for exponential backoff in milliseconds.
   Default: 60 seconds.
   """
-  @doc since: "0.13.0"
+  @doc since: "0.2.0"
   @spec retry_max_delay_ms() :: pos_integer()
   def retry_max_delay_ms, do: get(:retry_max_delay_ms, 60_000)
 
@@ -473,7 +473,7 @@ defmodule PushX.Config do
   `:timeout` option on `PushX.push_batch/4` / `send_batch/3` always takes
   precedence.
   """
-  @doc since: "0.13.0"
+  @doc since: "0.12.0"
   @spec batch_timeout_ms() :: pos_integer()
   def batch_timeout_ms, do: batch_timeout_ms(retry: :blocking)
 
@@ -503,7 +503,7 @@ defmodule PushX.Config do
   Gets the receive timeout (time to wait for response data) in milliseconds.
   Default: 15 seconds.
   """
-  @doc since: "0.13.0"
+  @doc since: "0.6.1"
   @spec receive_timeout() :: pos_integer()
   def receive_timeout, do: get(:receive_timeout, 15_000)
 
@@ -511,7 +511,7 @@ defmodule PushX.Config do
   Gets the pool timeout (time to wait for a connection from pool) in milliseconds.
   Default: 5 seconds.
   """
-  @doc since: "0.13.0"
+  @doc since: "0.6.1"
   @spec pool_timeout() :: pos_integer()
   def pool_timeout, do: get(:pool_timeout, 5_000)
 
@@ -519,14 +519,14 @@ defmodule PushX.Config do
   Gets the TCP connection timeout in milliseconds.
   Default: 10 seconds.
   """
-  @doc since: "0.13.0"
+  @doc since: "0.6.1"
   @spec connect_timeout() :: pos_integer()
   def connect_timeout, do: get(:connect_timeout, 10_000)
 
   @doc """
   Returns the Finch request options with configured timeouts.
   """
-  @doc since: "0.13.0"
+  @doc since: "0.6.1"
   @spec finch_request_opts() :: keyword()
   def finch_request_opts do
     [
@@ -541,7 +541,7 @@ defmodule PushX.Config do
   Checks if the circuit breaker is enabled.
   Default: `false` (opt-in feature).
   """
-  @doc since: "0.13.0"
+  @doc since: "0.8.0"
   @spec circuit_breaker_enabled?() :: boolean()
   def circuit_breaker_enabled?, do: get(:circuit_breaker_enabled, false)
 
@@ -549,7 +549,7 @@ defmodule PushX.Config do
   Gets the number of consecutive failures before the circuit opens.
   Default: 5.
   """
-  @doc since: "0.13.0"
+  @doc since: "0.8.0"
   @spec circuit_breaker_threshold() :: pos_integer()
   def circuit_breaker_threshold, do: get(:circuit_breaker_threshold, 5)
 
@@ -558,7 +558,7 @@ defmodule PushX.Config do
   from `:open` to `:half_open`.
   Default: 30 seconds.
   """
-  @doc since: "0.13.0"
+  @doc since: "0.8.0"
   @spec circuit_breaker_cooldown_ms() :: pos_integer()
   def circuit_breaker_cooldown_ms, do: get(:circuit_breaker_cooldown_ms, 30_000)
 
@@ -578,7 +578,7 @@ defmodule PushX.Config do
         on_invalid_token: {MyApp.Push, :handle_invalid_token, []}
 
   """
-  @doc since: "0.13.0"
+  @doc since: "0.8.0"
   @spec on_invalid_token() :: {module(), atom(), list()} | nil
   def on_invalid_token, do: get(:on_invalid_token, nil)
 end

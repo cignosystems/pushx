@@ -4,24 +4,34 @@
 # given concurrency, retry/connection-error counts, and whether the first
 # send after an idle period hits a dead socket (HTTP/2 PING keepalive).
 #
-# Nothing is delivered unless you give real device tokens: FCM runs with
-# validate_only: true (full round trip, no delivery); APNS with a placeholder
-# token gets BadDeviceToken back (full TLS + auth + RTT, no delivery).
+# What gets delivered:
+#   - FCM runs with validate_only: true by default (full round trip, no
+#     delivery); PUSHX_LOAD_DELIVER=1 turns that off. This knob is FCM-only.
+#   - APNS has no dry-run mode. A placeholder token gets BadDeviceToken back
+#     (full TLS + auth + RTT, nothing delivered), but real tokens in
+#     PUSHX_APNS_TOKENS receive real (silent background) pushes on EVERY run
+#     — regardless of PUSHX_LOAD_DELIVER — and a run burns a few hundred of
+#     Apple's per-device background-push budget.
+#   - Web Push always delivers to the subscription's browser.
 #
 # Credentials come from env vars pointing at files you keep OUT of git
-# (priv/keys/ is gitignored). Run from the project root:
+# (priv/keys/ is gitignored). Run from the project root — the --no-start is
+# required (the script checks) so the config below is applied before PushX
+# boots:
 #
 #     set -a; source priv/keys/load.env; set +a
 #     mix run --no-start bench/real_rtt.exs
 #
-# priv/keys/load.env (all optional per provider — a provider without its
-# required vars is skipped):
+# priv/keys/load.env — each provider is optional, but all-or-nothing: a
+# provider with none of its vars set is skipped; one with some-but-not-all
+# aborts the run (a half-configured provider would fail locally and print
+# meaningless 0ms "RTTs"). Empty values count as unset.
 #
 #     PUSHX_APNS_KEY_FILE=priv/keys/AuthKey_XXXX.p8   # APNS auth key (.p8)
 #     PUSHX_APNS_KEY_ID=XXXXXXXXXX
 #     PUSHX_APNS_TEAM_ID=YYYYYYYYYY
 #     PUSHX_APNS_TOPIC=com.example.app                # bundle id of a dev build
-#     PUSHX_APNS_TOKENS=hex,hex                       # optional sandbox device tokens
+#     PUSHX_APNS_TOKENS=hex,hex                       # optional sandbox device tokens (real delivery!)
 #     PUSHX_FCM_CREDENTIALS_FILE=priv/keys/firebase.json   # service account
 #     PUSHX_FCM_PROJECT_ID=my-project
 #     PUSHX_FCM_TOKENS=tok,tok                        # optional registration tokens
@@ -35,23 +45,57 @@
 #     PUSHX_LOAD_POOL_COUNT=2     finch_pool_count (HTTP/2 connections per origin)
 #     PUSHX_LOAD_IDLE_S=0         seconds to sleep before the final "after idle" send
 #                                 (try 120–600 on Fly/AWS/GCP to test the PING keepalive)
-#     PUSHX_LOAD_DELIVER=0        1 = real APNS delivery to PUSHX_APNS_TOKENS / FCM
-#                                 without validate_only (your devices WILL get pushes)
+#     PUSHX_LOAD_DELIVER=0        1 = FCM sends without validate_only (FCM-only;
+#                                 your devices WILL get pushes). Has no effect on
+#                                 APNS — see "What gets delivered" above.
 
 Logger.configure(level: :warning)
 
-env = fn name, default -> System.get_env(name, default) end
-int = fn name, default -> env.(name, default) |> String.to_integer() end
+# The config below must land before PushX boots; under plain `mix run` the
+# app is already up, finch_pool_count would be silently ignored, and FCM
+# would have no Goth process (retry storms that look like provider trouble).
+if List.keymember?(Application.started_applications(), :pushx, 0) do
+  IO.puts("PushX is already running — use:  mix run --no-start bench/real_rtt.exs")
+  System.halt(1)
+end
+
+# Unset and empty/whitespace env values both count as "not set".
+env = fn name ->
+  case System.get_env(name) do
+    nil -> nil
+    s -> if String.trim(s) == "", do: nil, else: String.trim(s)
+  end
+end
+
+int = fn name, default -> String.to_integer(env.(name) || default) end
 n = int.("PUSHX_LOAD_N", "200")
 concurrency = int.("PUSHX_LOAD_CONCURRENCY", "20")
 pool_count = int.("PUSHX_LOAD_POOL_COUNT", "2")
 idle_s = int.("PUSHX_LOAD_IDLE_S", "0")
-deliver? = env.("PUSHX_LOAD_DELIVER", "0") == "1"
+deliver? = env.("PUSHX_LOAD_DELIVER") == "1"
 
 split = fn
   nil -> []
-  "" -> []
-  s -> s |> String.split(",") |> Enum.map(&String.trim/1)
+  s -> s |> String.split(",", trim: true) |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
+end
+
+# A provider is enabled only with its full var set: none → skipped, a strict
+# subset → abort (every send would fail in-process with no network I/O, and
+# the percentiles would measure local rejections in microseconds).
+check_vars = fn provider, vars ->
+  set = Enum.filter(vars, &env.(&1))
+
+  cond do
+    set == [] ->
+      false
+
+    length(set) == length(vars) ->
+      true
+
+    true ->
+      IO.puts("#{provider}: missing #{Enum.join(vars -- set, ", ")} (set all of them or none).")
+      System.halt(1)
+  end
 end
 
 # --- Configure PushX from the env (no config/ in this repo) ------------------
@@ -59,39 +103,42 @@ Application.put_env(:pushx, :finch_pool_count, pool_count)
 Application.put_env(:pushx, :retry_enabled, true)
 
 apns? =
-  if env.("PUSHX_APNS_KEY_FILE", nil) do
-    Application.put_env(:pushx, :apns_key_id, env.("PUSHX_APNS_KEY_ID", nil))
-    Application.put_env(:pushx, :apns_team_id, env.("PUSHX_APNS_TEAM_ID", nil))
-    Application.put_env(:pushx, :apns_private_key, {:file, env.("PUSHX_APNS_KEY_FILE", nil)})
-    Application.put_env(:pushx, :apns_mode, :sandbox)
-    true
-  end
+  check_vars.(
+    "APNS",
+    ~w(PUSHX_APNS_KEY_FILE PUSHX_APNS_KEY_ID PUSHX_APNS_TEAM_ID PUSHX_APNS_TOPIC)
+  ) &&
+    (
+      Application.put_env(:pushx, :apns_key_id, env.("PUSHX_APNS_KEY_ID"))
+      Application.put_env(:pushx, :apns_team_id, env.("PUSHX_APNS_TEAM_ID"))
+      Application.put_env(:pushx, :apns_private_key, {:file, env.("PUSHX_APNS_KEY_FILE")})
+      Application.put_env(:pushx, :apns_mode, :sandbox)
+      true
+    )
 
 fcm? =
-  if env.("PUSHX_FCM_CREDENTIALS_FILE", nil) do
-    Application.put_env(:pushx, :fcm_project_id, env.("PUSHX_FCM_PROJECT_ID", nil))
-
-    Application.put_env(
-      :pushx,
-      :fcm_credentials,
-      {:file, env.("PUSHX_FCM_CREDENTIALS_FILE", nil)}
+  check_vars.("FCM", ~w(PUSHX_FCM_CREDENTIALS_FILE PUSHX_FCM_PROJECT_ID)) &&
+    (
+      Application.put_env(:pushx, :fcm_project_id, env.("PUSHX_FCM_PROJECT_ID"))
+      Application.put_env(:pushx, :fcm_credentials, {:file, env.("PUSHX_FCM_CREDENTIALS_FILE")})
+      true
     )
-
-    true
-  end
 
 webpush? =
-  if env.("PUSHX_WEBPUSH_SUBSCRIPTION_FILE", nil) do
-    Application.put_env(:pushx, :webpush_vapid_subject, env.("PUSHX_WEBPUSH_VAPID_SUBJECT", nil))
+  check_vars.(
+    "Web Push",
+    ~w(PUSHX_WEBPUSH_SUBSCRIPTION_FILE PUSHX_WEBPUSH_VAPID_SUBJECT PUSHX_WEBPUSH_VAPID_PRIVATE_KEY_FILE)
+  ) &&
+    (
+      Application.put_env(:pushx, :webpush_vapid_subject, env.("PUSHX_WEBPUSH_VAPID_SUBJECT"))
 
-    Application.put_env(
-      :pushx,
-      :webpush_vapid_private_key,
-      env.("PUSHX_WEBPUSH_VAPID_PRIVATE_KEY_FILE", nil) |> File.read!() |> String.trim()
+      Application.put_env(
+        :pushx,
+        :webpush_vapid_private_key,
+        env.("PUSHX_WEBPUSH_VAPID_PRIVATE_KEY_FILE") |> File.read!() |> String.trim()
+      )
+
+      true
     )
-
-    true
-  end
 
 if !(apns? || fcm? || webpush?) do
   IO.puts("Nothing configured — set PUSHX_APNS_* / PUSHX_FCM_* / PUSHX_WEBPUSH_* (see header).")
@@ -101,24 +148,28 @@ end
 {:ok, _} = Application.ensure_all_started(:pushx)
 
 # --- Targets ------------------------------------------------------------------
+apns_placeholder = String.duplicate("ab", 32)
+
 apns_tokens =
-  case split.(env.("PUSHX_APNS_TOKENS", nil)) do
-    [] -> [String.duplicate("ab", 32)]
+  case split.(env.("PUSHX_APNS_TOKENS")) do
+    [] -> [apns_placeholder]
     toks -> toks
   end
 
+fcm_placeholder = "load-test-placeholder-token-" <> String.duplicate("x", 100)
+
 fcm_tokens =
-  case split.(env.("PUSHX_FCM_TOKENS", nil)) do
-    [] -> ["load-test-placeholder-token-" <> String.duplicate("x", 100)]
+  case split.(env.("PUSHX_FCM_TOKENS")) do
+    [] -> [fcm_placeholder]
     toks -> toks
   end
 
 webpush_sub =
-  if webpush?, do: File.read!(env.("PUSHX_WEBPUSH_SUBSCRIPTION_FILE", nil)) |> JSON.decode!()
+  if webpush?, do: File.read!(env.("PUSHX_WEBPUSH_SUBSCRIPTION_FILE")) |> JSON.decode!()
 
-apns_opts = [topic: env.("PUSHX_APNS_TOPIC", nil), push_type: "background", priority: 5]
+apns_opts = [topic: env.("PUSHX_APNS_TOPIC"), push_type: "background", priority: 5]
 fcm_opts = if deliver?, do: [], else: [validate_only: true]
-msg = %{"aps" => %{"content-available" => 1}, "load" => "pushx real_rtt"}
+msg = PushX.APNS.silent_notification(%{"load" => "pushx real_rtt"})
 fcm_msg = PushX.Message.new("PushX load test", "validate_only unless PUSHX_LOAD_DELIVER=1")
 
 # --- Telemetry counters -------------------------------------------------------
@@ -146,14 +197,12 @@ fcm_msg = PushX.Message.new("PushX load test", "validate_only unless PUSHX_LOAD_
 
 # --- Helpers ------------------------------------------------------------------
 defmodule RTT do
-  def time(fun) do
-    t0 = System.monotonic_time(:microsecond)
-    result = fun.()
-    {System.monotonic_time(:microsecond) - t0, result}
-  end
+  def time(fun), do: :timer.tc(fun)
 
+  # Nearest-rank percentile: the smallest sample with at least p% of the
+  # data at or below it (index ceil(p/100 * n) - 1 into the sorted list).
   def pct(sorted, p),
-    do: Enum.at(sorted, min(length(sorted) - 1, round(p / 100 * length(sorted))))
+    do: Enum.at(sorted, max(ceil(p / 100 * length(sorted)) - 1, 0))
 
   def summarize(label, micros) do
     s = Enum.sort(micros)
@@ -213,7 +262,7 @@ end
 
 if apns? do
   run.(
-    "APNS sandbox (#{if hd(apns_tokens) == String.duplicate("ab", 32), do: "placeholder token → expect :invalid_token", else: "#{length(apns_tokens)} device token(s)"})",
+    "APNS sandbox (#{if hd(apns_tokens) == apns_placeholder, do: "placeholder token → expect :invalid_token", else: "#{length(apns_tokens)} device token(s) — REAL background pushes will be delivered"})",
     apns_tokens,
     fn t -> {t, PushX.push(:apns, t, msg, apns_opts)} end,
     fn list ->
@@ -224,7 +273,7 @@ end
 
 if fcm? do
   run.(
-    "FCM (#{if fcm_opts[:validate_only], do: "validate_only", else: "DELIVERING"}; #{if String.starts_with?(hd(fcm_tokens), "load-test-placeholder"), do: "placeholder token → expect :invalid_token", else: "#{length(fcm_tokens)} token(s)"})",
+    "FCM (#{if fcm_opts[:validate_only], do: "validate_only", else: "DELIVERING"}; #{if hd(fcm_tokens) == fcm_placeholder, do: "placeholder token → expect :invalid_request/:unregistered", else: "#{length(fcm_tokens)} token(s)"})",
     fcm_tokens,
     fn t -> {t, PushX.push(:fcm, t, fcm_msg, fcm_opts)} end,
     fn list ->

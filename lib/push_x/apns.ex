@@ -120,7 +120,7 @@ defmodule PushX.APNS do
 
   Use this when you want to handle retries yourself or for testing.
   """
-  @doc since: "0.2.3"
+  @doc since: "0.2.0"
   @spec send_once(token(), payload(), [option()]) :: {:ok, Response.t()} | {:error, Response.t()}
   def send_once(device_token, payload, opts \\ []) do
     case SendGate.check(:apns, :apns) do

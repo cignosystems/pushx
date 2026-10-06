@@ -29,4 +29,6 @@ they ask not to be.
 - Provider credentials (APNS `.p8`, FCM service account, VAPID private key) are
   read from config / files you control; rotate them if leaked — PushX has no
   copy.
-- Dependency advisories are tracked by `mix deps.audit` / `mix hex.audit` in CI.
+- Dependency advisories are gated in CI by `mix deps.audit` (GitHub advisory
+  DB, weekly scheduled run included); `mix hex.audit` is run manually — it
+  has no way to acknowledge known advisories in test-only deps.

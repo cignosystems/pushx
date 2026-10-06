@@ -577,6 +577,7 @@ defmodule PushX do
       {:error, :invalid_length} = PushX.validate_token(:apns, "too-short")
 
   """
+  @doc since: "0.4.0"
   @spec validate_token(provider(), token()) :: :ok | {:error, Token.validation_error()}
   defdelegate validate_token(provider, token), to: Token, as: :validate
 
@@ -585,6 +586,7 @@ defmodule PushX do
 
   Delegates to `PushX.Token.valid?/2`.
   """
+  @doc since: "0.4.0"
   @spec valid_token?(provider(), token()) :: boolean()
   defdelegate valid_token?(provider, token), to: Token, as: :valid?
 
@@ -596,6 +598,7 @@ defmodule PushX do
   Delegates to `PushX.RateLimiter.check/1`.
   Only applies when rate limiting is enabled in config.
   """
+  @doc since: "0.4.0"
   @spec check_rate_limit(provider()) :: :ok | {:error, :rate_limited}
   defdelegate check_rate_limit(provider), to: RateLimiter, as: :check
 

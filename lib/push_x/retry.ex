@@ -1,5 +1,5 @@
 defmodule PushX.Retry do
-  @moduledoc since: "0.2.3"
+  @moduledoc since: "0.2.0"
   @moduledoc """
   Retry logic for push notification delivery following Apple and Google best practices.
 
@@ -118,7 +118,7 @@ defmodule PushX.Retry do
       PushX.Retry.with_retry(fn -> PushX.APNS.send_once(token, payload, opts) end)
 
   """
-  @doc since: "0.2.3"
+  @doc since: "0.2.0"
   @spec with_retry((-> {:ok, Response.t()} | {:error, Response.t()}), keyword()) ::
           {:ok, Response.t()} | {:error, Response.t()}
   def with_retry(fun, opts \\ []) do
@@ -230,6 +230,7 @@ defmodule PushX.Retry do
   - `:payload_too_large` - Payload exceeds size limit
   - `:unknown_error` - Unrecognized error (could be client-side issue)
   """
+  @doc since: "0.12.0"
   @spec retryable?(Response.t()) :: boolean()
   defdelegate retryable?(response), to: Response
 
@@ -248,7 +249,7 @@ defmodule PushX.Retry do
       delay = min(base_delay * 2^(attempt-1) + jitter, max_delay)
 
   """
-  @doc since: "0.2.3"
+  @doc since: "0.2.0"
   @spec calculate_delay(Response.t(), pos_integer(), pos_integer(), pos_integer()) ::
           pos_integer()
   def calculate_delay(

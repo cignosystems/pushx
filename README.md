@@ -1247,7 +1247,7 @@ PushX follows [Semantic Versioning](https://semver.org). From 1.0 on:
 
 Nothing changes at runtime; 1.0 is the stability promise above, not a
 feature release. The one removal: the `request_timeout/0` function on `PushX.Config`
-(deprecated since 0.11, never passed to Finch) — use `:receive_timeout` /
+(deprecated since 0.7.0, never passed to Finch) — use `:receive_timeout` /
 `:pool_timeout`. Everything shipped in 0.13–0.15 is the 1.0 API.
 
 Security reports: see [SECURITY.md](https://github.com/cignosystems/pushx/blob/main/SECURITY.md).

@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 1.0 is a stability promise, not a feature release — see README "Versioning and Support".
 
 ### Removed
-- **`request_timeout/0` on `PushX.Config`** (deprecated since 0.11; it was never passed to Finch). Use `:receive_timeout` / `:pool_timeout`.
+- **`request_timeout/0` on `PushX.Config`** (deprecated since 0.7.0; it was never passed to Finch). Use `:receive_timeout` / `:pool_timeout`.
 
 ### Added
 - `@doc since:` / `@moduledoc since:` on the whole public API (the version each function first shipped in; hexdocs shows it as a badge).

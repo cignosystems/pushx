@@ -40,6 +40,15 @@ jobs:
           echo "tag=$TAG mix.exs=$VERSION"
           test "$TAG" = "$VERSION" || { echo "::error::tag v$TAG does not match mix.exs @version $VERSION"; exit 1; }
 
+      # Fail BEFORE hex.publish (which is irreversible) if the CHANGELOG was
+      # not updated for this version — the github_release job needs the
+      # section for the release notes.
+      - name: Check CHANGELOG has a section for this version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          scripts/release_notes.sh "$VERSION" > /tmp/notes.md
+          test -s /tmp/notes.md || { echo "::error::CHANGELOG section for $VERSION is empty"; exit 1; }
+
       - name: Install dependencies
         run: mix deps.get
 
@@ -102,7 +111,16 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           scripts/release_notes.sh "$VERSION" > /tmp/notes.md
           test -s /tmp/notes.md || { echo "::error::no CHANGELOG section for $VERSION"; exit 1; }
-          gh release create "$GITHUB_REF_NAME" \
-            --verify-tag \
-            --title "v$VERSION" \
-            --notes-file /tmp/notes.md
+          # Idempotent: a re-run after the release exists (e.g. created
+          # manually per CONTRIBUTING.md) updates the notes instead of
+          # failing with HTTP 422.
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" \
+              --title "v$VERSION" \
+              --notes-file /tmp/notes.md
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --verify-tag \
+              --title "v$VERSION" \
+              --notes-file /tmp/notes.md
+          fi

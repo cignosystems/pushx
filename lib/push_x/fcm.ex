@@ -141,7 +141,7 @@ defmodule PushX.FCM do
 
   Use this when you want to handle retries yourself or for testing.
   """
-  @doc since: "0.2.3"
+  @doc since: "0.2.0"
   @spec send_once(target(), payload(), [option()]) :: {:ok, Response.t()} | {:error, Response.t()}
   def send_once(device_token, payload, opts \\ []) do
     case SendGate.check(:fcm, :fcm) do
@@ -601,7 +601,7 @@ defmodule PushX.FCM do
   @doc """
   Sends a data-only message without retry.
   """
-  @doc since: "0.2.3"
+  @doc since: "0.2.0"
   @spec send_data_once(target(), map(), [option()]) ::
           {:ok, Response.t()} | {:error, Response.t()}
   def send_data_once(device_token, data, opts \\ []) do

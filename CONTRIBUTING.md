@@ -80,7 +80,16 @@ Notes for humans and AI assistants modifying this library itself. If you are
    — and creates the GitHub Release for the tag, with that version's
    CHANGELOG section as the notes (`scripts/release_notes.sh <version>`).
    Every tag gets a GitHub Release; if the workflow's last job ever fails,
-   run `gh release create vX.Y.Z --verify-tag --title vX.Y.Z --notes-file <(scripts/release_notes.sh X.Y.Z)`.
+   run:
+
+   ```sh
+   scripts/release_notes.sh X.Y.Z > /tmp/notes.md &&
+     gh release create vX.Y.Z --verify-tag --title vX.Y.Z --notes-file /tmp/notes.md
+   ```
+
+   (not process substitution — `--notes-file <(…)` would silently publish an
+   empty body if the script fails; the `&&` stops on a missing CHANGELOG
+   section instead).
 
 ## Coding conventions
 
