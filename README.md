@@ -579,6 +579,28 @@ When enabled, rate limits are checked automatically before each `send` call.
 
 ## Performance and Pool Sizing
 
+### At a Glance
+
+Measured with `bench/real_rtt.exs` against the live endpoints (2026-10-07,
+EU residential fiber; your absolute numbers will differ, the shape won't):
+
+| | FCM (measured) | APNS sandbox (measured) |
+|---|---|---|
+| Cold send (TLS + OAuth/JWT) | 130–170 ms | 360–510 ms |
+| Warm send, p50 | ~23 ms | ~102 ms |
+| First send after 5 min idle | **33 ms** (no reconnect) | **157 ms** (no reconnect) |
+| Batch throughput, `finch_pool_count: 2` | ~800 sends/s (concurrency 50) | n/a — see below |
+| Batch throughput, `finch_pool_count: 4` | **~2 600 sends/s** (concurrency 200) | n/a — see below |
+
+APNS **production** throughput cannot be measured from the sandbox (the
+sandbox allows ~1 stream per connection; production advertises ~1 000). The
+expectation from the stream math — not a measurement: with ~1 000 streams
+per connection, APNS throughput is effectively never stream-limited at
+`finch_pool_count: 2+` — at a warm ~100 ms RTT, two connections already
+cover ~20 000 in-flight sends, so your CPU, bandwidth and batch
+`:concurrency` become the limit long before Apple's does. FCM is the
+provider where the stream limit bites (100/connection — the table below).
+
 ### HTTP/2 Pools
 
 APNS and FCM are spoken over **HTTP/2**, and in Finch an HTTP/2 "pool" is **one multiplexed connection**. So for APNS/FCM:
