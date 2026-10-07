@@ -9,7 +9,7 @@ model and the mistakes agents most often make.
 
 ## What PushX is
 
-A single hex package (`{:pushx, "~> 0.15"}`) that sends push notifications to
+A single hex package (`{:pushx, "~> 1.0"}`) that sends push notifications to
 **Apple APNS**, **Google FCM** and **browsers via standards-based Web Push**
 (VAPID + RFC 8291 encryption) — with JWT/OAuth/VAPID handled automatically. Concretely, what's in the box:
 

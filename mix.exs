@@ -1,7 +1,7 @@
 defmodule PushX.MixProject do
   use Mix.Project
 
-  @version "0.15.0"
+  @version "1.0.0"
   @source_url "https://github.com/cignosystems/pushx"
 
   def project do
