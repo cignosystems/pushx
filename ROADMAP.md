@@ -41,9 +41,10 @@ what is planned on top of it.
   in README "Performance and Pool Sizing" and the `bench/real_rtt.exs` header.
   FCM: PING keepalive confirmed across a 5-min idle; pool-sizing guidance
   confirmed by the concurrency-200 stream-exhaustion cliff. APNS sandbox:
-  keepalive confirmed (157 ms after 5-min idle vs 155 ms warm p50); sandbox
-  stream limit documented in Troubleshooting, including the invalid-key
-  variant where saturation masquerades as a capacity problem.)*
+  keepalive confirmed (157 ms after 5-min idle vs 155 ms warm p50); Apple's
+  fresh-connection one-stream rule measured from the SETTINGS frames and
+  documented in Troubleshooting. The runs also exposed — and 1.0 fixes — the
+  pool restart on stream-limit overshoots.)*
 - [x] Let 0.15 bake in production for a couple of weeks first. *(Shipped
   2026-08-22; six weeks, no issues reported.)*
 

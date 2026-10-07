@@ -302,9 +302,19 @@ defmodule PushX.Config do
           &(get(&1) != nil)
         )
 
-      if configured != [] do
+      overridden =
+        overrides
+        |> Keyword.take([
+          :ping_interval,
+          :max_connection_age,
+          :max_connection_age_jitter,
+          :wait_for_server_settings
+        ])
+        |> Keyword.keys()
+
+      if configured ++ overridden != [] do
         Logger.warning(
-          "[PushX] #{inspect(configured)} need finch >= 0.22 (installed: #{finch_version()}); ignored"
+          "[PushX] #{inspect(configured ++ overridden)} need finch >= 0.22 (installed: #{finch_version()}); ignored"
         )
       end
 

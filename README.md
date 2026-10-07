@@ -306,8 +306,7 @@ payload = PushX.APNS.silent_notification(%{action: "sync", resource: "messages"}
 
 PushX.APNS.send(token, payload,
   topic: "com.example.app",
-  push_type: "background",
-  priority: 5
+  push_type: "background"   # apns-priority 5 is applied automatically
 )
 ```
 
@@ -502,6 +501,8 @@ config :pushx,
 
 ### Pools and Keepalive
 
+<a id="pool-sizing-and-keepalive"></a>
+
 The pool knobs (`finch_pool_count`, `finch_pool_size`) and the HTTP/2
 keepalive options have their own chapter —
 [Performance and Pool Sizing](#performance-and-pool-sizing) — together with
@@ -585,54 +586,65 @@ EU residential fiber; your absolute numbers will differ, the shape won't):
 
 | | FCM (measured) | APNS sandbox (measured) |
 |---|---|---|
-| Cold send (TLS + OAuth/JWT) | 130–170 ms | 360–510 ms |
+| Cold send (TCP + TLS; OAuth for FCM) | 130–170 ms | 360–510 ms |
 | Warm send, p50 | ~23 ms | ~102 ms |
 | First send after 5 min idle | **33 ms** (no reconnect) | **157 ms** (no reconnect; vs 155 ms warm in that run) |
 | Batch throughput, `finch_pool_count: 2` | ~800 sends/s (concurrency 50) | n/a — see below |
 | Batch throughput, `finch_pool_count: 4` | **~2 600 sends/s** (concurrency 200) | n/a — see below |
 
-APNS **production** throughput cannot be measured from the sandbox (the
-sandbox allows ~1 stream per connection; production advertises ~1 000). The
-expectation from the stream math — not a measurement: with ~1 000 streams
-per connection, APNS throughput is effectively never stream-limited at
-`finch_pool_count: 2+` — at a warm ~100 ms RTT, two connections already
-cover ~20 000 in-flight sends, so your CPU, bandwidth and batch
-`:concurrency` become the limit long before Apple's does. FCM is the
-provider where the stream limit bites (100/connection — the table below).
+APNS **production** throughput was not measured (a placeholder-token flood
+against the production host is not something to do on purpose). What *was*
+measured, from the servers' HTTP/2 SETTINGS frames: **APNS advertises 200
+concurrent streams per connection — production and sandbox alike — and FCM
+100.** So `finch_pool_count: 2` gives ~400 in-flight sends on APNS (~200 on
+FCM); at a warm ~100 ms per send that is a ceiling of roughly 4 000 sends/s
+before the pool saturates, and it scales linearly with `finch_pool_count`
+(see the headroom rule under [Measured: FCM](#measured-fcm)). A *fresh* APNS
+connection additionally drops to a single stream after its first request
+until Apple accepts one — see Troubleshooting.
 
 ### HTTP/2 Pools
 
 APNS and FCM are spoken over **HTTP/2**, and in Finch an HTTP/2 "pool" is **one multiplexed connection**. So for APNS/FCM:
 
-- **`finch_pool_count`** = number of HTTP/2 connections per provider origin (default `2`). This is the capacity *and* redundancy knob. Each connection multiplexes up to the server's stream limit (APNS ≈ 1 000 concurrent streams, FCM ≈ 100). Don't run `1` in production: a single socket is a single point of failure, and after a reconnect a retry burst lands entirely on it (`too_many_concurrent_requests`).
+- **`finch_pool_count`** = number of HTTP/2 connections per provider origin (default `2`). This is the capacity *and* redundancy knob. Each connection multiplexes up to the server's advertised stream limit (measured from their SETTINGS frames on 2026-10-07: APNS 200 — production and sandbox alike — FCM 100). Don't run `1` in production: a single socket is a single point of failure, and after a reconnect a retry burst lands entirely on it (`too_many_concurrent_requests`).
 - **`finch_pool_size`** is **ignored for HTTP/2** pools. It only sizes the HTTP/1 default pool (Web Push): connections per push-service origin (default 25; the pool's `count` is fixed at 1). If a Web Push batch outruns it, the excess queues for `:pool_timeout` and then fails with a retryable `:connection_error` (`pool_timeout`) — raise `finch_pool_size` or lower batch `:concurrency`. Earlier versions of this README recommended lowering it for low-traffic apps — that had no effect on APNS/FCM.
 
-| Traffic | `finch_pool_count` | Approx. concurrent streams (APNS) |
-|---------|--------------------|-----------------------------------|
-| Low–moderate (≤ 1 000/min) | 2 (default) | ~2 000 |
-| High / big batches | 4–8 (FCM: ≥ concurrency / 100) | ~4 000–8 000 |
+| Traffic | `finch_pool_count` | Concurrent streams (APNS 200/conn · FCM 100/conn) |
+|---------|--------------------|---------------------------------------------------|
+| Low–moderate (≤ 1 000/min) | 2 (default) | 400 · 200 |
+| High / big batches | 4–8 (≥ 2 × concurrency / streams-per-connection) | 800–1 600 · 400–800 |
 
 ### Measured: FCM
 
 Measured against the real FCM endpoint (`bench/real_rtt.exs`, 2026-10-07,
-`validate_only`, EU residential fiber — your absolute numbers will differ,
-the shape won't): warm single-send p50 was ~23 ms (cold ~130–170 ms for
-TLS + OAuth), and the first send after **5 minutes idle took 33 ms** — the
-PING keepalive kept the connection warm, no dead-socket penalty. Throughput
+`validate_only` with a placeholder token — so every request is a full
+TLS + OAuth round trip answered with `400 INVALID_ARGUMENT`, the cheapest
+server path; real tokens will be somewhat slower — EU residential fiber; your
+absolute numbers will differ, the shape won't): warm single-send p50 was
+~23 ms (cold ~130–170 ms, almost all TCP + TLS), and the first send after **5 minutes idle took 33 ms** — no reconnect penalty
+with the default 60 s PING keepalive (on a residential link, which may not
+drop idle sockets at all; the cloud load-balancer drops the keepalive exists
+for were not reproduced here). Throughput
 of a 200–1 000-send batch:
 
 | Batch `:concurrency` | `finch_pool_count: 2` | `finch_pool_count: 4` |
 |---------------------:|----------------------:|----------------------:|
 | 10 | 368/s | 413/s |
 | 50 | 813/s | **1 515/s** |
-| 200 | 359/s (~230 retries) | **2 598/s** (0 retries) |
+| 200 | 698/s (38 retries) | **2 598/s** (0 retries) |
 
 The bottom-left cell is the pool-sizing lesson in one number: 200 concurrent
 requests on 2 connections exceeds FCM's ~100-streams-per-connection limit,
-so sends queue, fail with retryable `:connection_error` and only complete
-through PushX's jittered retries (nothing was lost — all 1 000 eventually
-got a provider response — but throughput collapsed 7×). Keep
-`finch_pool_count ≥ concurrency / 100` for FCM bursts, with 2 as the floor.
+so sends overshoot it, fail with retryable `:connection_error` and only
+complete through PushX's jittered retries (nothing was lost — all 1 000
+eventually got a provider response — but throughput collapsed ~4×; it was 7×
+with ~230 retries before 1.0 stopped restarting the pool on these errors). Finch picks a
+connection at random per request, so an exact 100-per-connection budget is
+routinely overshot: give each connection headroom with
+`finch_pool_count ≥ 2 × concurrency / 100` for FCM bursts (`/ 200` for APNS),
+with 2 as the floor — concurrency 200 therefore wants 4 connections, which is
+exactly the right-hand column.
 
 ### Measured: APNS Sandbox
 
@@ -642,11 +654,17 @@ warm serial p50 ~102 ms, and the first send after **5 minutes idle took
 157 ms vs a 155 ms warm p50 in that run** (the sandbox p50 drifts 102→155 ms
 across repeated placeholder-token runs — Apple throttling the `BadDeviceToken`
 flood) — keepalive confirmed on Apple's side too.
-Sandbox *throughput* is meaningless by design (~1 stream per connection vs
-~1 000 on production — see
+Sandbox *throughput* with placeholder tokens is not a capacity number: both
+APNS hosts advertise 200 streams on a fresh connection, then **re-advertise
+1 after the first request** and only raise it again once a request is
+accepted — with placeholder tokens (always `BadDeviceToken`) that never
+happens, so every connection stays at one stream (measured directly from the
+SETTINGS frames: 200 → 1, and a burst of 30 opened exactly one). Batches
+therefore run at `pool_count` streams in total (17 sends/s at concurrency 20
+on 2 connections, with `too_many_concurrent_requests` retries), see
 [`too_many_concurrent_requests`](#too_many_concurrent_requests-error) in
-Troubleshooting), so size production pools from the stream math above, not
-from sandbox runs.
+Troubleshooting. Size production pools from the stream math above, not from
+sandbox runs.
 
 ### Keepalive
 
@@ -828,7 +846,7 @@ Call `MyApp.PushAdmin.boot()` from your `Application.start/2` after PushX starts
 | `:project_id` | `String.t()` | required (FCM) | Firebase project ID |
 | `:credentials` | `map()` \| `String.t()` | required (FCM, unless `:token_fetcher`) | Service account (map or JSON string); validated at start |
 | `:token_fetcher` | `{module, function, args}` | — | Bring your own OAuth for this instance (no Goth started; makes `:credentials` optional). The global `:fcm_token_fetcher` never applies to instances. |
-| `:pool_count` | `integer()` | `1` | HTTP/2 connections per origin (APNS/FCM) — set `2`+ in production, as for `finch_pool_count`; for Web Push: HTTP/1 pool count |
+| `:pool_count` | `integer()` | `2` | HTTP/2 connections per origin (APNS/FCM), as for `finch_pool_count` — never `1` in production; for Web Push: HTTP/1 pool count |
 | `:pool_size` | `integer()` | `2` | HTTP/1 (Web Push) connections per pool; ignored for APNS/FCM (HTTP/2) |
 | `:receive_timeout` | `integer()` | `15_000` | Response timeout (ms) |
 | `:pool_timeout` | `integer()` | `5_000` | Pool checkout timeout (ms) |
@@ -1266,18 +1284,27 @@ config :pushx,
 Two situations produce this error where raising `finch_pool_count` is **not**
 the answer:
 
-- **APNS sandbox** (`apns_mode: :sandbox`): `api.sandbox.push.apple.com`
-  advertises roughly **1 concurrent stream per connection** (production
-  advertises ~1 000), so any real batch concurrency saturates it immediately
-  and throughput sits in the tens per second no matter how many connections
-  you add (measured: 9→15 sends/s going from 2 to 8 connections). This is
-  normal sandbox behavior, not a capacity signal — don't tune pool sizes
-  from sandbox runs.
-- **Invalid provider token** (wrong `.p8` / Key ID / Team ID): Apple keeps
-  the connection's stream limit at 1 **until a request authenticates**, so a
-  concurrent burst fails with `too_many_concurrent_requests` even though the
-  real problem is auth. The tell: the few requests that do get through come
-  back `403` → `status: :auth_error`. Fix the credentials, not the pool.
+- **A fresh APNS connection** — production and sandbox alike — advertises
+  200 streams, then **re-advertises 1 after the first request** and keeps it
+  there until Apple accepts a request on that connection (measured 2026-10-07
+  from the SETTINGS frames; Apple documents it as "one stream until you post
+  a request with a valid authentication token"). Two consequences:
+  - **Invalid provider token** (wrong `.p8` / Key ID / Team ID): nothing is
+    ever accepted, so a concurrent burst fails with
+    `too_many_concurrent_requests` even though the real problem is auth. The
+    tell: the one request per connection that does get through comes back
+    `403` → `status: :auth_error`. Fix the credentials, not the pool.
+  - **Sandbox runs with placeholder or dead tokens** (`BadDeviceToken` on
+    every request): same one-stream state, so throughput sits at
+    `pool_count` streams in total no matter the batch concurrency. Not a
+    capacity signal — don't tune pool sizes from such runs.
+
+  This is also why PushX (since 1.0) no longer restarts the pool on these
+  errors: a restart put every connection back into the one-stream state.
+  (With `circuit_breaker_enabled: true` the saturation failures trip the
+  breaker first and you mostly see `:circuit_open`; the `403` then shows up
+  once per cooldown on the half-open probe — check the logs for
+  `InvalidProviderToken` before touching pool sizes.)
 
 ### Stale connections after idle periods
 
@@ -1335,6 +1362,8 @@ PushX follows [Semantic Versioning](https://semver.org). From 1.0 on:
 
 ### Upgrading to 1.0
 
+Bump the requirement to `{:pushx, "~> 1.0"}` and run `mix deps.update pushx`
+(a `~> 0.15` requirement never resolves 1.0.0 — Hex silently stays on 0.15.x).
 Nothing changes at runtime; 1.0 is the stability promise above, not a
 feature release. The one removal: the `request_timeout/0` function on `PushX.Config`
 (deprecated since 0.7.0, never passed to Finch) — use `:receive_timeout` /

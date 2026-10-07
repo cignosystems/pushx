@@ -249,6 +249,48 @@ defmodule PushX.RetryTest do
       assert :counters.get(reconnect_count, 1) == 1
     end
 
+    test "a saturated pool (too_many_concurrent_requests) is retried without restarting the pool" do
+      reconnect_count = :counters.new(1, [:atomics])
+
+      reconnect_fn = fn ->
+        :counters.add(reconnect_count, 1, 1)
+        :ok
+      end
+
+      key = make_ref()
+
+      saturated =
+        PushX.HTTP.connection_error(:apns, %Finch.HTTPError{
+          reason: :too_many_concurrent_requests,
+          module: Mint.HTTP2
+        })
+
+      not_ready = PushX.HTTP.connection_error(:fcm, %Finch.Error{reason: :connection_not_ready})
+
+      for response <- [saturated, not_ready] do
+        assert {:error, ^response} =
+                 Retry.with_retry(fn -> {:error, response} end,
+                   reconnect_fn: reconnect_fn,
+                   reconnect_key: key,
+                   max_attempts: 2,
+                   base_delay_ms: 1
+                 )
+      end
+
+      assert :counters.get(reconnect_count, 1) == 0
+
+      # Same key, same cycle shape — a dead-socket error still restarts the pool,
+      # so the zero above is the capacity check and not an exhausted guard.
+      Retry.with_retry(fn -> {:error, PushX.HTTP.connection_error(:apns, :closed)} end,
+        reconnect_fn: reconnect_fn,
+        reconnect_key: key,
+        max_attempts: 2,
+        base_delay_ms: 1
+      )
+
+      assert :counters.get(reconnect_count, 1) == 1
+    end
+
     test "concurrent connection errors trigger at most one reconnect" do
       reconnect_count = :counters.new(1, [:atomics])
 

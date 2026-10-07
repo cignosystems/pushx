@@ -2,7 +2,7 @@
 
 Status: **design only** (written for 0.15; still valid for 1.x). Not implemented. Written to answer "do PushX's
 shapes — `provider()`, `target()`, `Response`, `Instance`, `Batch`, test mode —
-accommodate Expo without a breaking change?" before 1.0 freezes them.
+accommodate Expo without a breaking change?" — asked before 1.0 froze them (it did).
 
 ## What Expo Push is
 
@@ -53,4 +53,4 @@ The only 1.0-relevant decision is to **not** promise that `Response.status:
 `PushX.Response` docs should say "accepted by the provider". That wording
 landed in 0.15.
 
-Not planned before 1.0; tracked for 1.x.
+Tracked for 1.x.

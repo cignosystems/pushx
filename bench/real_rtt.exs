@@ -11,19 +11,25 @@
 #   batch sends/s        pool_count=2        pool_count=4
 #     concurrency 10          368                 413
 #     concurrency 50          813               1_515
-#     concurrency 200         359 (~230 retries) 2_598 (0 retries)
-#   (concurrency 200 on 2 connections exceeds FCM's ~100 streams/conn →
-#   retryable :connection_error + jittered retry; nothing lost, 7× slower.)
+#     concurrency 200         698 (38 retries)   2_598 (0 retries)
+#   (concurrency 200 on 2 connections overshoots FCM's 100 streams/conn →
+#   retryable :connection_error + jittered retry; nothing lost, ~4× slower.
+#   Before 1.0's fix — a pool restart on every such error — it was 359/s
+#   with ~230 retries.)
 #
 # APNS sandbox (same day, valid .p8, placeholder token → BadDeviceToken):
 #   cold send 360–510ms; warm serial p50 ~102ms
 #   first send after 300s idle: 157ms vs 155ms warm p50 (keepalive held)
-#   throughput is NOT meaningful on the sandbox: it advertises ~1 stream
-#   per connection (prod ~1000), so batches saturate at ~9–15 sends/s
-#   regardless of pool_count (2→8 measured), with too_many_concurrent_requests
-#   retries. Latency also degrades across repeated placeholder-token runs
-#   (102→155ms p50 — Apple throttling the BadDeviceToken flood), so keep
-#   sandbox runs modest and don't tune pool sizes from them.
+#   throughput with placeholder tokens is NOT a capacity number: both APNS
+#   hosts advertise 200 streams on a fresh connection, re-advertise 1 after
+#   the first request, and raise it only once a request is accepted — never,
+#   with BadDeviceToken on every send. Batches therefore run at pool_count
+#   streams in total (17 sends/s at concurrency 20 on 2 connections) with
+#   too_many_concurrent_requests retries. Latency also degrades across
+#   repeated placeholder-token runs (102→155ms p50 — Apple throttling the
+#   BadDeviceToken flood), so keep sandbox runs modest and don't tune pool
+#   sizes from them. Reproducing the FCM table: unset PUSHX_APNS_* first, or
+#   every profile also floods the sandbox.
 #
 # What gets delivered:
 #   - FCM runs with validate_only: true by default (full round trip, no

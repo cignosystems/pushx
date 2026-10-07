@@ -214,7 +214,8 @@ not the iOS bundle ID.
   no network call is made. There is no per-config default.
 - **Calling `push_data/4` for APNS.** It's for FCM (data message) and Web
   Push (the map is the payload) only. For an APNS silent
-  push, call `PushX.push(:apns, token, payload, push_type: "background", priority: 5, topic: ...)`
+  push, call `PushX.push(:apns, token, payload, push_type: "background", topic: ...)`
+  (apns-priority 5 is applied automatically for background pushes)
   — the function returns an explicit error explaining this.
 - **Confusing the `:apns`/`:fcm`/`:webpush` symbols with named instance atoms.**
   Both work as the first argument to `push/4`, but mean different things.
@@ -273,7 +274,7 @@ not the iOS bundle ID.
   defers to a power-friendly time. Apple *requires* `5` for some
   notification types — check the APNS docs for `apns-priority` rules.
 - **APNS `:push_type`:** `"alert"` (default, user-visible), `"background"`
-  (silent / data-only — must use `priority: 5`), `"voip"` (CallKit),
+  (silent / data-only — PushX sends `priority: 5` automatically), `"voip"` (CallKit),
   `"complication"`, `"liveactivity"`, etc.
 - **FCM data-only vs notification:** `push_data/4` sends `data` only — your
   app's onMessage handler runs even when the app is killed. `push/4` sends
@@ -283,9 +284,10 @@ not the iOS bundle ID.
 - **Pool knobs:** `finch_pool_count` (HTTP/2 connections per origin) is the
   one that matters for APNS/FCM — 2 by default, 4–8 for high volume;
   `finch_pool_size` only affects the HTTP/1 pool (Web Push). Don't advise
-  `finch_pool_size: 2` "for low traffic" — it does nothing for HTTP/2. For
-  FCM batches keep `finch_pool_count ≥ concurrency / 100` (≈100 streams per
-  connection; measured 7× throughput collapse past it).
+  `finch_pool_size: 2` "for low traffic" — it does nothing for HTTP/2. Finch
+  picks a connection at random per request, so give each connection headroom:
+  `finch_pool_count ≥ 2 × concurrency / streams-per-connection` (FCM 100,
+  APNS 200; measured ~4× throughput collapse at exactly concurrency/100).
 
 ## Where to find authoritative answers
 

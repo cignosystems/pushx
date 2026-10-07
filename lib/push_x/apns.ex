@@ -91,7 +91,7 @@ defmodule PushX.APNS do
     * `:topic` - Bundle ID (required)
     * `:mode` - `:prod` or `:sandbox` (default: from config)
     * `:push_type` - "alert", "background", "voip", etc. (default: "alert")
-    * `:priority` - 5 or 10 (default: 10; use 5 for `push_type: "background"`)
+    * `:priority` - 5 or 10 (default: 10, or 5 automatically when `push_type` is `"background"`)
     * `:expiration` - Unix timestamp when notification expires
     * `:collapse_id` - Group notifications with the same ID
     * `:apns_id` - Your own canonical UUID for this notification (`apns-id`
@@ -269,7 +269,7 @@ defmodule PushX.APNS do
 
         {:error, reason} ->
           Logger.error("[PushX.APNS] Connection error: #{inspect(reason)}")
-          response = Response.error(:apns, :connection_error, inspect(reason))
+          response = PushX.HTTP.connection_error(:apns, reason)
           Telemetry.error(:apns, device_token, start_time, response)
           {:error, response}
       end

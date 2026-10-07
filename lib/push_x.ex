@@ -123,7 +123,7 @@ defmodule PushX do
     * `:topic` - Bundle ID (required for APNS)
     * `:mode` - `:prod` or `:sandbox` (default: from config)
     * `:push_type` - "alert", "background", "voip", ... (default: "alert")
-    * `:priority` - 5 or 10 (default: 10; 5 for `push_type: "background"`)
+    * `:priority` - 5 or 10 (default: 10, or 5 automatically when `push_type` is `"background"`)
     * `:expiration` - Unix timestamp after which APNS drops the notification
       (`0` = deliver now or never); a `PushX.Message` `ttl` sets this for you
     * `:collapse_id` - notifications sharing an id replace each other

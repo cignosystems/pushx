@@ -320,7 +320,7 @@ defmodule PushX.WebPush do
 
       {:error, reason} ->
         Logger.error("[PushX.WebPush] Connection error: #{inspect(reason)}")
-        response = Response.error(:webpush, :connection_error, inspect(reason))
+        response = PushX.HTTP.connection_error(:webpush, reason)
         Telemetry.error(:webpush, subscription, start_time, response)
         {:error, response}
     end

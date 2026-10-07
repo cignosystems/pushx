@@ -5,23 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
 ## [1.0.0] - 2026-10-07
 
-1.0 is a stability promise, not a feature release — see README "Versioning and Support". No API changes besides the one removal below; `{:pushx, "~> 1.0"}` is a drop-in upgrade from 0.15.
+1.0 is a stability promise, not a feature release — see README "Versioning and Support". No API changes besides the one removal below. **To upgrade**, bump the requirement to `{:pushx, "~> 1.0"}` and run `mix deps.update pushx` — a `~> 0.15` requirement will never resolve 1.0.0 (Hex silently stays on 0.15.x).
 
 ### Removed
 - **`request_timeout/0` on `PushX.Config`** (deprecated since 0.7.0; it was never passed to Finch). Use `:receive_timeout` / `:pool_timeout`.
 
 ### Added
-- `@doc since:` / `@moduledoc since:` on the whole public API (the version each function first shipped in; hexdocs shows it as a badge).
+- `@doc since:` / `@moduledoc since:` on the whole public API (the version each function first shipped in, verified against git history; hexdocs shows it as a badge).
 - README "Versioning and Support": what the public API is, semver + deprecation policy, supported Elixir/OTP, "Upgrading to 1.0".
 - `SECURITY.md`, Dependabot (mix + GitHub Actions), issue and pull-request templates.
-- Measured real-RTT numbers in README "Performance and Pool Sizing" (from `bench/real_rtt.exs` against the live FCM endpoint and the APNS sandbox): warm p50 ~23 ms (FCM) / ~102 ms (APNS sandbox from the EU), no reconnect penalty after 5 min idle on either provider (PING keepalive), the batch-throughput table showing why `finch_pool_count` must cover `concurrency / 100` for FCM, and the expected (stream-math, not measured) production-APNS ceiling.
-- Troubleshooting: two cases where `too_many_concurrent_requests` is not a pool-size problem — the APNS sandbox's ~1-stream-per-connection limit, and an invalid provider token keeping Apple's stream limit at 1 so a concurrent burst fails on saturation while the real issue is `:auth_error`.
+- Measured real-RTT numbers in README "Performance and Pool Sizing" (from `bench/real_rtt.exs` against the live FCM endpoint and the APNS sandbox): warm p50 ~23 ms (FCM) / ~102 ms (APNS sandbox from the EU), no reconnect penalty after 5 min idle on either provider (PING keepalive), the batch-throughput table showing why `finch_pool_count` must cover `concurrency / 100` for FCM, and the HTTP/2 stream limits the providers actually advertise (APNS 200 per connection on both production and sandbox, FCM 100 — read from their SETTINGS frames).
+- Troubleshooting: when `too_many_concurrent_requests` is not a pool-size problem — a fresh APNS connection (production and sandbox) re-advertises **1 stream** after its first request until Apple accepts one, so an invalid provider token or a placeholder-token sandbox run saturates at any concurrency while the real issue is `:auth_error` / the test setup.
+
+- Release workflow: the CHANGELOG section for the tagged version is verified *before* the (irreversible) Hex publish, and the GitHub Release step is idempotent on re-runs.
+
+### Changed
+- **Named APNS/FCM instances default to `pool_count: 2`** (was 1 — a single HTTP/2 connection, which the docs have always called a production single point of failure: after a reconnect every retry lands on it and saturates it). Pass `pool_count: 1` explicitly to keep the old footprint.
 
 ### Fixed
-- ~30 `since:` badges corrected or added so each public function shows the version it actually first shipped in (a tag-based backfill had misattributed functions predating the first surviving tag — e.g. the retry config cluster is 0.2.0, not 0.13.0; timeouts 0.6.1; circuit breaker and `on_invalid_token` 0.8.0), and the `request_timeout/0` deprecation is correctly dated 0.7.0 everywhere.
-- Release pipeline hardened: the workflow now verifies the CHANGELOG has a section for the tagged version *before* publishing to Hex (publishing is irreversible), and creating the GitHub Release is idempotent on re-runs.
+- **A pool at its HTTP/2 stream limit no longer triggers the automatic pool restart.** `too_many_concurrent_requests` (and a fresh connection's `connection_not_ready`) are retryable `:connection_error`s, and the first retry of a connection error restarts the Finch pool to recover from dead sockets — but for a stream-limit overshoot that restart killed every healthy in-flight stream of *every* provider sharing the pool and sent the retries to cold connections (which APNS holds at one stream until a request authenticates), turning a brief overshoot into a cascade. These errors are now retried with backoff without the restart; the dead-socket reconnect is unchanged. The saturation warning also no longer tells you to raise the pool when the cause is a fresh or unauthenticated connection.
+- On finch < 0.22, per-instance keepalive overrides (`:ping_interval` etc.) are dropped with the same "ignored" warning the global `finch_http2_*` keys already logged — previously silently.
 
 ## [0.15.0] - 2026-08-22
 
@@ -453,6 +460,7 @@ are *Breaking (minor)* and are marked as such.
 - HTTP/2 connections via Finch
 - Zero external JSON dependency (uses Elixir 1.18+ built-in JSON)
 
+[Unreleased]: https://github.com/cignosystems/pushx/compare/v1.0.0...HEAD
 [1.0.0]: https://github.com/cignosystems/pushx/compare/v0.15.0...v1.0.0
 [0.15.0]: https://github.com/cignosystems/pushx/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/cignosystems/pushx/compare/v0.13.0...v0.14.0

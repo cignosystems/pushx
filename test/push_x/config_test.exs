@@ -384,6 +384,15 @@ defmodule PushX.ConfigTest do
 
       assert log =~ "need finch >= 0.22 (installed: 0.21.0); ignored"
 
+      # Per-instance overrides are dropped on old finch too — and say so.
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert Config.finch_http2_pool_entry(ping_interval: 30_000) == []
+        end)
+
+      assert log =~ ":ping_interval"
+      assert log =~ "need finch >= 0.22"
+
       # A Finch started from such a pool config must still boot — this is the
       # path a user with finch 0.21 in their lock takes (no :http2 key at all).
       name = :"finch_021_#{System.unique_integer([:positive])}"

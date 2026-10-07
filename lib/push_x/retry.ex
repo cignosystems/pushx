@@ -161,7 +161,11 @@ defmodule PushX.Retry do
 
           # Retry with appropriate delay
           true ->
-            if response.status == :connection_error and attempt == 1 do
+            # Restart the pool once per cycle for dead-socket errors — but not
+            # for a pool at its stream limit, where a restart would kill the
+            # healthy in-flight streams of every provider sharing the pool.
+            if response.status == :connection_error and attempt == 1 and
+                 not PushX.HTTP.capacity_error?(response) do
               maybe_reconnect(retry_opts)
             end
 

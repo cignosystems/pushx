@@ -249,7 +249,7 @@ defmodule PushX.FCM do
 
         {:error, reason} ->
           Logger.error("[PushX.FCM] Connection error: #{inspect(reason)}")
-          response = Response.error(:fcm, :connection_error, inspect(reason))
+          response = PushX.HTTP.connection_error(:fcm, reason)
           Telemetry.error(:fcm, device_token, start_time, response)
           {:error, response}
       end
@@ -443,7 +443,7 @@ defmodule PushX.FCM do
 
       {:error, reason} ->
         Logger.error("[PushX.FCM] Topic #{action} connection error: #{inspect(reason)}")
-        {:error, Response.error(:fcm, :connection_error, inspect(reason))}
+        {:error, PushX.HTTP.connection_error(:fcm, reason)}
     end
   end
 
@@ -694,7 +694,7 @@ defmodule PushX.FCM do
 
         {:error, reason} ->
           Logger.error("[PushX.FCM] Connection error: #{inspect(reason)}")
-          response = Response.error(:fcm, :connection_error, inspect(reason))
+          response = PushX.HTTP.connection_error(:fcm, reason)
           Telemetry.error(:fcm, device_token, start_time, response)
           {:error, response}
       end

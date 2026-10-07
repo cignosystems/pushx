@@ -132,6 +132,24 @@ defmodule PushX.HTTP do
 
   defp month_to_int(_), do: :error
 
+  @doc false
+  @spec connection_error(atom(), term()) :: PushX.Response.t()
+  def connection_error(provider, reason),
+    do: PushX.Response.error(provider, :connection_error, inspect(reason), reason)
+
+  # A pool at its HTTP/2 stream limit, or a fresh connection that has not
+  # received the server's SETTINGS yet. Retryable, but restarting the pool
+  # (which `PushX.Retry` does on the first connection error) would kill every
+  # healthy in-flight stream and land the retries on cold connections —
+  # worse, not better.
+  @doc false
+  @spec capacity_error?(PushX.Response.t()) :: boolean()
+  def capacity_error?(%PushX.Response{status: :connection_error, raw: %{reason: reason}})
+      when reason in [:too_many_concurrent_requests, :connection_not_ready],
+      do: true
+
+  def capacity_error?(_), do: false
+
   @doc "Prepends a header tuple if the value is non-nil."
   @spec maybe_add_header([{String.t(), String.t()}], String.t(), term()) ::
           [{String.t(), String.t()}]
@@ -146,9 +164,11 @@ defmodule PushX.HTTP do
   def explain_pool_error({:error, %{reason: :too_many_concurrent_requests}}, label) do
     Logger.warning(
       "[#{label}] HTTP/2 connection saturated (too_many_concurrent_requests): every stream on the " <>
-        "pool's connections is in use. This is capacity, not a network failure — raise " <>
-        ":finch_pool_count (HTTP/2 connections per origin; for instances :pool_count) or lower " <>
-        "batch :concurrency. Retried with backoff."
+        "pool's connections is in use. Retried with backoff (no pool restart). If it recurs under " <>
+        "load it is capacity: raise :finch_pool_count (HTTP/2 connections per origin; for " <>
+        "instances :pool_count) or lower batch :concurrency. If it appears on fresh connections " <>
+        "or alongside 403 responses, APNS is holding the connection at one stream until a " <>
+        "request authenticates — fix the credentials, not the pool."
     )
   end
 

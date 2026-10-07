@@ -54,7 +54,7 @@ defmodule PushX.Instance.Supervisor do
      pools: %{
        default: [
          size: Keyword.get(config, :pool_size, 2),
-         count: Keyword.get(config, :pool_count, 1),
+         count: Keyword.get(config, :pool_count, 2),
          conn_opts: [transport_opts: transport_opts(config)]
        ]
      }}

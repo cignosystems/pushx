@@ -94,12 +94,9 @@ defmodule PushX.Instance do
       Must be a P-256 (`prime256v1`) EC key — APNS signs with ES256, and a key
       on any other curve is rejected at start time.
     * `:mode` - `:prod` or `:sandbox` (default: `:prod`)
-    * `:pool_count` - HTTP/2 connections per origin (default: 1 — set 2+ in
-      production, as for `finch_pool_count`)
+    * `:pool_count` - HTTP/2 connections per origin (default: 2, as for
+      `finch_pool_count`; never 1 in production)
     * `:pool_size` - ignored for APNS/FCM (HTTP/2); default 2
-    * `:ping_interval` / `:max_connection_age` / `:max_connection_age_jitter` /
-      `:wait_for_server_settings` - per-instance HTTP/2 keepalive overrides of
-      the global `finch_http2_*` config (same semantics; finch ≥ 0.22)
     * `:ping_interval` / `:max_connection_age` / `:max_connection_age_jitter` /
       `:wait_for_server_settings` - per-instance HTTP/2 keepalive overrides of
       the global `finch_http2_*` config (same semantics; finch ≥ 0.22)
@@ -133,9 +130,12 @@ defmodule PushX.Instance do
       `{:ok, %{token: access_token}}` or `{:error, reason}`. When set, no Goth
       process is started for the instance and `:credentials` becomes optional.
       The global `:fcm_token_fetcher` config never applies to instances.
-    * `:pool_count` - HTTP/2 connections per origin (default: 1 — set 2+ in
-      production, as for `finch_pool_count`)
+    * `:pool_count` - HTTP/2 connections per origin (default: 2, as for
+      `finch_pool_count`; never 1 in production)
     * `:pool_size` - ignored for APNS/FCM (HTTP/2); default 2
+    * `:ping_interval` / `:max_connection_age` / `:max_connection_age_jitter` /
+      `:wait_for_server_settings` - per-instance HTTP/2 keepalive overrides of
+      the global `finch_http2_*` config (same semantics; finch ≥ 0.22)
     * `:receive_timeout` / `:pool_timeout` / `:connect_timeout` - as for APNS
 
   ## Returns
@@ -594,7 +594,7 @@ defmodule PushX.Instance do
 
       {:error, reason} ->
         Logger.error("[PushX.Instance] APNS connection error: #{inspect(reason)}")
-        response = Response.error(:apns, :connection_error, inspect(reason))
+        response = PushX.HTTP.connection_error(:apns, reason)
         Telemetry.error(:apns, device_token, start_time, response)
         {:error, response}
     end
@@ -694,7 +694,7 @@ defmodule PushX.Instance do
 
       {:error, reason} ->
         Logger.error("[PushX.Instance] FCM connection error: #{inspect(reason)}")
-        response = Response.error(:fcm, :connection_error, inspect(reason))
+        response = PushX.HTTP.connection_error(:fcm, reason)
         Telemetry.error(:fcm, device_token, start_time, response)
         {:error, response}
     end

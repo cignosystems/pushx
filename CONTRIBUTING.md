@@ -71,8 +71,9 @@ Notes for humans and AI assistants modifying this library itself. If you are
 
 ## Releasing
 
-1. Move the `[Unreleased]` changelog section to `[x.y.z] - YYYY-MM-DD` and add
-   the compare link; bump `@version` in `mix.exs` and, on a major bump only, the `~> x.0`
+1. Rename the `[Unreleased]` changelog section to `[x.y.z] - YYYY-MM-DD`, add
+   its compare link, and re-create an empty `## [Unreleased]` above it (the PR
+   template points contributors at it); bump `@version` in `mix.exs` and, on a major bump only, the `~> x.0`
    constraint in `README.md` / `AGENTS.md` (`~> 1.0` covers every 1.x).
 2. Commit, then `git tag vx.y.z && git push --tags`.
 3. The release workflow verifies the tag matches `@version`, runs the suite
