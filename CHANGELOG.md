@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `@doc since:` / `@moduledoc since:` on the whole public API (the version each function first shipped in; hexdocs shows it as a badge).
 - README "Versioning and Support": what the public API is, semver + deprecation policy, supported Elixir/OTP, "Upgrading to 1.0".
 - `SECURITY.md`, Dependabot (mix + GitHub Actions), issue and pull-request templates.
+- Measured real-RTT numbers in README "Pool Sizing and Keepalive" (from `bench/real_rtt.exs` against the live FCM endpoint): warm p50 ~23 ms, no reconnect penalty after 5 min idle (PING keepalive), and the batch-throughput table showing why `finch_pool_count` must cover `concurrency / 100` for FCM.
 
 ## [0.15.0] - 2026-08-22
 

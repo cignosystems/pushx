@@ -4,6 +4,17 @@
 # given concurrency, retry/connection-error counts, and whether the first
 # send after an idle period hits a dead socket (HTTP/2 PING keepalive).
 #
+# Reference numbers (2026-10-07, FCM validate_only, placeholder token, EU
+# residential fiber, Apple Silicon — see README "Pool Sizing and Keepalive"):
+#   cold send 130–170ms; warm serial p50 ~23ms p90 ~28ms
+#   first send after 300s idle: 33ms (PING keepalive held — no reconnect)
+#   batch sends/s        pool_count=2        pool_count=4
+#     concurrency 10          368                 413
+#     concurrency 50          813               1_515
+#     concurrency 200         359 (~230 retries) 2_598 (0 retries)
+#   (concurrency 200 on 2 connections exceeds FCM's ~100 streams/conn →
+#   retryable :connection_error + jittered retry; nothing lost, 7× slower.)
+#
 # What gets delivered:
 #   - FCM runs with validate_only: true by default (full round trip, no
 #     delivery); PUSHX_LOAD_DELIVER=1 turns that off. This knob is FCM-only.

@@ -33,9 +33,14 @@ plan is to reach **1.0 as a stability promise**, not as a feature milestone.
   and deprecation policy in the README; "Upgrading to 1.0" note. *(on main)*
 - [x] `SECURITY.md`, Dependabot config, issue/PR templates. *(on main)*
 - [x] Response docs: `status: :sent` = "accepted by the provider". *(0.15)*
-- [ ] A real-RTT load test against the APNS sandbox / FCM before the word
-  "production-ready" goes next to 1.0 (needs sandbox credentials).
-- [ ] Let 0.15 bake in production for a couple of weeks first.
+- [x] A real-RTT load test against the APNS sandbox / FCM before the word
+  "production-ready" goes next to 1.0. *(FCM leg run 2026-10-07 — numbers in
+  README "Pool Sizing and Keepalive" and the `bench/real_rtt.exs` header:
+  PING keepalive confirmed across a 5-min idle, pool-sizing guidance
+  confirmed by the concurrency-200 stream-exhaustion cliff. APNS leg runs
+  whenever a `.p8` lands in `priv/keys/` — the harness is ready.)*
+- [x] Let 0.15 bake in production for a couple of weeks first. *(Shipped
+  2026-08-22; six weeks, no issues reported.)*
 
 ## 1.x candidates
 

@@ -512,6 +512,26 @@ APNS and FCM are spoken over **HTTP/2**, and in Finch an HTTP/2 "pool" is **one 
 | Low (< 100/min) | 2 (default) | ~2 000 |
 | High (> 1 000/min) | 4–8 | ~4 000–8 000 |
 
+Measured against the real FCM endpoint (`bench/real_rtt.exs`, 2026-10-07,
+`validate_only`, EU residential fiber — your absolute numbers will differ,
+the shape won't): warm single-send p50 was ~23 ms (cold ~130–170 ms for
+TLS + OAuth), and the first send after **5 minutes idle took 33 ms** — the
+PING keepalive kept the connection warm, no dead-socket penalty. Throughput
+of a 200–1 000-send batch:
+
+| Batch `:concurrency` | `finch_pool_count: 2` | `finch_pool_count: 4` |
+|---------------------:|----------------------:|----------------------:|
+| 10 | 368/s | 413/s |
+| 50 | 813/s | **1 515/s** |
+| 200 | 359/s (~230 retries) | **2 598/s** (0 retries) |
+
+The bottom-left cell is the pool-sizing lesson in one number: 200 concurrent
+requests on 2 connections exceeds FCM's ~100-streams-per-connection limit,
+so sends queue, fail with retryable `:connection_error` and only complete
+through PushX's jittered retries (nothing was lost — all 1 000 eventually
+got a provider response — but throughput collapsed 7×). Keep
+`finch_pool_count ≥ concurrency / 100` for FCM bursts, with 2 as the floor.
+
 **Idle connections going stale** (Fly.io, AWS NLB, GCP drop idle HTTP/2 sockets; the first send after a quiet period then hits a dead one) is solved by **HTTP/2 PING keepalive**, not by shrinking pools: PushX sends a PING after `finch_http2_ping_interval` ms of idleness (default **60 s**, finch ≥ 0.22), which both keeps the connection warm and detects a dead one before a real send pays for it. Optional proactive recycling: `finch_http2_max_connection_age` (+ `_jitter`) drains and replaces connections on a schedule — useful behind rotating DNS/load balancers. `PushX.reconnect/0` remains for manual recovery, and the retry path still reconnects automatically (coalesced) on the first connection error.
 
 ```elixir
