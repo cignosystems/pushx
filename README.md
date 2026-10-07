@@ -532,6 +532,16 @@ through PushX's jittered retries (nothing was lost — all 1 000 eventually
 got a provider response — but throughput collapsed 7×). Keep
 `finch_pool_count ≥ concurrency / 100` for FCM bursts, with 2 as the floor.
 
+The same harness against the **APNS sandbox** (valid `.p8`, placeholder
+token → `BadDeviceToken` after full TLS + JWT auth): cold send 360–510 ms,
+warm serial p50 ~102 ms, and the first send after **5 minutes idle took
+157 ms vs a 155 ms warm p50** — keepalive confirmed on Apple's side too.
+Sandbox *throughput* is meaningless by design (~1 stream per connection vs
+~1 000 on production — see
+[`too_many_concurrent_requests`](#too_many_concurrent_requests-error) in
+Troubleshooting), so size production pools from the stream math above, not
+from sandbox runs.
+
 **Idle connections going stale** (Fly.io, AWS NLB, GCP drop idle HTTP/2 sockets; the first send after a quiet period then hits a dead one) is solved by **HTTP/2 PING keepalive**, not by shrinking pools: PushX sends a PING after `finch_http2_ping_interval` ms of idleness (default **60 s**, finch ≥ 0.22), which both keeps the connection warm and detects a dead one before a real send pays for it. Optional proactive recycling: `finch_http2_max_connection_age` (+ `_jitter`) drains and replaces connections on a schedule — useful behind rotating DNS/load balancers. `PushX.reconnect/0` remains for manual recovery, and the retry path still reconnects automatically (coalesced) on the first connection error.
 
 ```elixir
@@ -1208,6 +1218,22 @@ config :pushx,
   rate_limit_apns: 2000,
   rate_limit_fcm: 2000
 ```
+
+Two situations produce this error where raising `finch_pool_count` is **not**
+the answer:
+
+- **APNS sandbox** (`apns_mode: :sandbox`): `api.sandbox.push.apple.com`
+  advertises roughly **1 concurrent stream per connection** (production
+  advertises ~1 000), so any real batch concurrency saturates it immediately
+  and throughput sits in the tens per second no matter how many connections
+  you add (measured: 9→15 sends/s going from 2 to 8 connections). This is
+  normal sandbox behavior, not a capacity signal — don't tune pool sizes
+  from sandbox runs.
+- **Invalid provider token** (wrong `.p8` / Key ID / Team ID): Apple keeps
+  the connection's stream limit at 1 **until a request authenticates**, so a
+  concurrent burst fails with `too_many_concurrent_requests` even though the
+  real problem is auth. The tell: the few requests that do get through come
+  back `403` → `status: :auth_error`. Fix the credentials, not the pool.
 
 ### Stale connections after idle periods
 

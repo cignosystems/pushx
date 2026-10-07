@@ -15,6 +15,16 @@
 #   (concurrency 200 on 2 connections exceeds FCM's ~100 streams/conn →
 #   retryable :connection_error + jittered retry; nothing lost, 7× slower.)
 #
+# APNS sandbox (same day, valid .p8, placeholder token → BadDeviceToken):
+#   cold send 360–510ms; warm serial p50 ~102ms
+#   first send after 300s idle: 157ms vs 155ms warm p50 (keepalive held)
+#   throughput is NOT meaningful on the sandbox: it advertises ~1 stream
+#   per connection (prod ~1000), so batches saturate at ~9–15 sends/s
+#   regardless of pool_count (2→8 measured), with too_many_concurrent_requests
+#   retries. Latency also degrades across repeated placeholder-token runs
+#   (102→155ms p50 — Apple throttling the BadDeviceToken flood), so keep
+#   sandbox runs modest and don't tune pool sizes from them.
+#
 # What gets delivered:
 #   - FCM runs with validate_only: true by default (full round trip, no
 #     delivery); PUSHX_LOAD_DELIVER=1 turns that off. This knob is FCM-only.
