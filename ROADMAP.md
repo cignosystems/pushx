@@ -1,7 +1,8 @@
 # PushX roadmap
 
-PushX is at 0.x while the public API is still allowed to change shape. The
-plan is to reach **1.0 as a stability promise**, not as a feature milestone.
+PushX 1.0 (2026-10-07) is **a stability promise, not a feature milestone** —
+see README "Versioning and Support". What follows is how it got there and
+what is planned on top of it.
 
 ## Done
 
@@ -15,6 +16,8 @@ plan is to reach **1.0 as a stability promise**, not as a feature milestone.
   `Telemetry.metrics/0`, `Instance.Loader`, `mix pushx.doctor`.
 - **0.15** — standards-based Web Push (VAPID + RFC 8291), HTTP/2 keepalive
   options, pool-sizing fixes, Expo design note.
+- **1.0** — stability promise (2026-10-07): `request_timeout/0` removed, `since:`
+  badges, versioning/support policy, real-RTT load test. See CHANGELOG.
 
 ## 0.15 — shipped 2026-08-22
 
@@ -28,10 +31,10 @@ plan is to reach **1.0 as a stability promise**, not as a feature milestone.
 
 ## 1.0 — boring on purpose
 
-- [x] Remove `Config.request_timeout/0` (deprecated since 0.7.0). *(on main)*
+- [x] Remove `Config.request_timeout/0` (deprecated since 0.7.0). *(1.0.0)*
 - [x] `@since` annotations; supported-versions (Elixir ≥ 1.18 / OTP ≥ 26), semver
-  and deprecation policy in the README; "Upgrading to 1.0" note. *(on main)*
-- [x] `SECURITY.md`, Dependabot config, issue/PR templates. *(on main)*
+  and deprecation policy in the README; "Upgrading to 1.0" note. *(1.0.0)*
+- [x] `SECURITY.md`, Dependabot config, issue/PR templates. *(1.0.0)*
 - [x] Response docs: `status: :sent` = "accepted by the provider". *(0.15)*
 - [x] A real-RTT load test against the APNS sandbox / FCM before the word
   "production-ready" goes next to 1.0. *(Both legs run 2026-10-07 — numbers

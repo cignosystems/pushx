@@ -72,8 +72,6 @@ CI runs the suite on Elixir 1.20/OTP 29, 1.20/28, 1.19/28, 1.19/27 and 1.18/26,
 so anything in that range is exercised on every push; the release itself is
 built with the latest stable pair.
 
-Tested on Elixir 1.18/1.19 with OTP 26, 27, and 28.
-
 ---
 
 ## Quick Start
@@ -196,7 +194,7 @@ end
 
 ```elixir
 %PushX.Response{
-  provider: :apns | :fcm,
+  provider: :apns | :fcm | :webpush,
   status: :sent | :invalid_token | :expired_token | ...,
   id: "message-id" | nil,
   reason: "error reason" | nil,
@@ -207,11 +205,11 @@ end
 
 | Status | Description | Action |
 |--------|-------------|--------|
-| `:sent` | Successfully delivered | None |
+| `:sent` | Accepted by the provider for delivery | None |
 | `:invalid_token` | Token is malformed or invalid | Remove token |
 | `:expired_token` | Token has expired | Remove token |
 | `:unregistered` | Device unregistered | Remove token |
-| `:payload_too_large` | Payload exceeds limit (APNS: 4KB, FCM: 4000 bytes) | Reduce payload size |
+| `:payload_too_large` | Payload exceeds limit (APNS: 4 KB, FCM: 4000 bytes, Web Push: ~4 KB) | Reduce payload size |
 | `:rate_limited` | Too many requests | Automatic retry with backoff |
 | `:server_error` | Provider server error | Automatic retry with backoff |
 | `:connection_error` | Network failure | Automatic retry with backoff |
@@ -250,7 +248,7 @@ end)
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `:concurrency` | `integer()` | `50` | Max concurrent requests |
-| `:timeout` | `integer()` | `30_000` | Timeout per request (ms) |
+| `:timeout` | `integer()` | `PushX.Config.batch_timeout_ms/0` (~180 s with default retries; 30 s with `retry: :none` or retries off) | Per-task timeout (ms); a task exceeding it is killed |
 | `:validate_tokens` | `boolean()` | `false` | Filter invalid tokens before sending |
 
 For aggregate counts, use the bang variant:
@@ -426,7 +424,7 @@ PushX.validate_token(:apns, token)  # :ok | {:error, :empty | :invalid_length | 
 PushX.push_batch(:apns, tokens, message, topic: "...", validate_tokens: true)
 ```
 
-**APNS tokens:** exactly 64 hexadecimal characters (32 bytes)
+**APNS tokens:** an even-length hex string of 64–512 characters (today 64 = 32 bytes; Apple warns the length may change)
 **FCM tokens:** 20-500 characters, alphanumeric with hyphens/underscores/colons
 
 ---
@@ -465,6 +463,7 @@ config :pushx,
   rate_limit_enabled: false,   # default: false
   rate_limit_apns: 5000,       # requests per window
   rate_limit_fcm: 5000,        # requests per window
+  rate_limit_webpush: 5000,    # requests per window (one key for all push services)
   rate_limit_window_ms: 1000   # 1 second window
 ```
 
@@ -588,7 +587,7 @@ EU residential fiber; your absolute numbers will differ, the shape won't):
 |---|---|---|
 | Cold send (TLS + OAuth/JWT) | 130–170 ms | 360–510 ms |
 | Warm send, p50 | ~23 ms | ~102 ms |
-| First send after 5 min idle | **33 ms** (no reconnect) | **157 ms** (no reconnect) |
+| First send after 5 min idle | **33 ms** (no reconnect) | **157 ms** (no reconnect; vs 155 ms warm in that run) |
 | Batch throughput, `finch_pool_count: 2` | ~800 sends/s (concurrency 50) | n/a — see below |
 | Batch throughput, `finch_pool_count: 4` | **~2 600 sends/s** (concurrency 200) | n/a — see below |
 
@@ -610,8 +609,8 @@ APNS and FCM are spoken over **HTTP/2**, and in Finch an HTTP/2 "pool" is **one 
 
 | Traffic | `finch_pool_count` | Approx. concurrent streams (APNS) |
 |---------|--------------------|-----------------------------------|
-| Low (< 100/min) | 2 (default) | ~2 000 |
-| High (> 1 000/min) | 4–8 | ~4 000–8 000 |
+| Low–moderate (≤ 1 000/min) | 2 (default) | ~2 000 |
+| High / big batches | 4–8 (FCM: ≥ concurrency / 100) | ~4 000–8 000 |
 
 ### Measured: FCM
 
@@ -640,7 +639,9 @@ got a provider response — but throughput collapsed 7×). Keep
 The same harness against the **APNS sandbox** (valid `.p8`, placeholder
 token → `BadDeviceToken` after full TLS + JWT auth): cold send 360–510 ms,
 warm serial p50 ~102 ms, and the first send after **5 minutes idle took
-157 ms vs a 155 ms warm p50** — keepalive confirmed on Apple's side too.
+157 ms vs a 155 ms warm p50 in that run** (the sandbox p50 drifts 102→155 ms
+across repeated placeholder-token runs — Apple throttling the `BadDeviceToken`
+flood) — keepalive confirmed on Apple's side too.
 Sandbox *throughput* is meaningless by design (~1 stream per connection vs
 ~1 000 on production — see
 [`too_many_concurrent_requests`](#too_many_concurrent_requests-error) in
@@ -827,11 +828,15 @@ Call `MyApp.PushAdmin.boot()` from your `Application.start/2` after PushX starts
 | `:project_id` | `String.t()` | required (FCM) | Firebase project ID |
 | `:credentials` | `map()` \| `String.t()` | required (FCM, unless `:token_fetcher`) | Service account (map or JSON string); validated at start |
 | `:token_fetcher` | `{module, function, args}` | — | Bring your own OAuth for this instance (no Goth started; makes `:credentials` optional). The global `:fcm_token_fetcher` never applies to instances. |
-| `:pool_size` | `integer()` | `2` | Finch connections per pool |
-| `:pool_count` | `integer()` | `1` | Number of Finch pools |
+| `:pool_count` | `integer()` | `1` | HTTP/2 connections per origin (APNS/FCM) — set `2`+ in production, as for `finch_pool_count`; for Web Push: HTTP/1 pool count |
+| `:pool_size` | `integer()` | `2` | HTTP/1 (Web Push) connections per pool; ignored for APNS/FCM (HTTP/2) |
 | `:receive_timeout` | `integer()` | `15_000` | Response timeout (ms) |
 | `:pool_timeout` | `integer()` | `5_000` | Pool checkout timeout (ms) |
 | `:connect_timeout` | `integer()` | `10_000` | TCP connect timeout (ms) |
+| `:ping_interval`, `:max_connection_age`, `:max_connection_age_jitter`, `:wait_for_server_settings` | as global | global `finch_http2_*` values | Per-instance HTTP/2 keepalive overrides (APNS/FCM; finch ≥ 0.22) |
+| `:vapid_subject` | `String.t()` | required (Web Push) | `mailto:` or https contact |
+| `:vapid_private_key` | `String.t()` | required (Web Push) | base64url 32-byte scalar or EC PEM; validated at start |
+| `:vapid_public_key` | `String.t()` | derived | base64url 65-byte point — the front end's `applicationServerKey` |
 
 ---
 
@@ -1093,6 +1098,7 @@ PushX.health_check()
 #=> %{
 #=>   apns: %{configured: true, circuit: :closed},
 #=>   fcm: %{configured: true, circuit: :closed},
+#=>   webpush: %{configured: false, circuit: :closed},
 #=>   instances: %{
 #=>     tenant_42_apns: %{provider: :apns, enabled: true, circuit: :closed},
 #=>     tenant_7_fcm: %{provider: :fcm, enabled: false, circuit: :open}
@@ -1159,7 +1165,7 @@ If duplicates matter for your use case:
 
 ## Testing Your App
 
-Set test delivery mode and every send is validated exactly as in production (required `:topic`, target format, payload size…) but then **recorded and answered locally** instead of contacting Apple or Google. No credentials needed, no retries, no network:
+Set test delivery mode and every send is validated exactly as in production (required `:topic`, target format, payload size…) but then **recorded and answered locally** instead of contacting Apple, Google or the browser push services. No credentials needed, no retries, no network:
 
 ```elixir
 # config/test.exs
@@ -1210,7 +1216,7 @@ Checks the configuration and credentials offline — the same checks the library
 
 ```
 $ MIX_ENV=prod mix pushx.doctor && mix release
-PushX 0.14.0 — configuration check (MIX_ENV=prod)
+PushX 1.0.0 — configuration check (MIX_ENV=prod)
 
   APNS  ✔ configured (key ABC123DEFG, team TEAM123456, mode :prod)
         ✔ private key resolves and signs ES256 (P-256)

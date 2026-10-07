@@ -5,7 +5,7 @@ defmodule PushX.Response do
 
   ## Fields
 
-    * `:provider` - The provider used (`:apns` or `:fcm`)
+    * `:provider` - The provider used (`:apns`, `:fcm` or `:webpush`)
     * `:status` - The result status (see below)
     * `:id` - Provider-specific message ID (if available)
     * `:reason` - Error reason string (if failed)

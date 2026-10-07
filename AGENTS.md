@@ -15,7 +15,7 @@ A single hex package (`{:pushx, "~> 1.0"}`) that sends push notifications to
 
 | Layer | Module | Purpose |
 |-------|--------|---------|
-| Unified API | `PushX` | One call sends to either provider |
+| Unified API | `PushX` | One call sends to any provider |
 | Provider APIs | `PushX.APNS`, `PushX.FCM`, `PushX.WebPush` | Direct provider access for full control |
 | Message builder | `PushX.Message` | Fluent struct for cross-provider payloads |
 | Result | `PushX.Response` | Normalized result with semantic `:status` |
@@ -283,7 +283,9 @@ not the iOS bundle ID.
 - **Pool knobs:** `finch_pool_count` (HTTP/2 connections per origin) is the
   one that matters for APNS/FCM — 2 by default, 4–8 for high volume;
   `finch_pool_size` only affects the HTTP/1 pool (Web Push). Don't advise
-  `finch_pool_size: 2` "for low traffic" — it does nothing for HTTP/2.
+  `finch_pool_size: 2` "for low traffic" — it does nothing for HTTP/2. For
+  FCM batches keep `finch_pool_count ≥ concurrency / 100` (≈100 streams per
+  connection; measured 7× throughput collapse past it).
 
 ## Where to find authoritative answers
 

@@ -24,8 +24,8 @@ defmodule PushX.CircuitBreaker do
 
   ## Usage
 
-  The circuit breaker is checked automatically in `APNS.send_once/3` and
-  `FCM.send_once/3` when enabled. You can also check manually:
+  The circuit breaker is checked automatically on every send path (APNS,
+  FCM, Web Push and named instances) when enabled. You can also check manually:
 
       case PushX.CircuitBreaker.allow?(:apns) do
         :ok -> # Proceed

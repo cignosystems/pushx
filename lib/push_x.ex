@@ -412,12 +412,13 @@ defmodule PushX do
   @doc """
   Sends a push notification to multiple devices concurrently.
 
-  Uses `Task.async_stream` for parallel sending with configurable concurrency.
+  Runs the sends under `PushX.TaskSupervisor` (`async_stream_nolink`) with
+  configurable concurrency.
   Each result contains the token and the response.
 
   ## Arguments
 
-    * `provider` - `:apns` for iOS or `:fcm` for Android
+    * `provider` - `:apns`, `:fcm`, `:webpush`, or a named instance
     * `device_tokens` - Enumerable of device tokens (for FCM, topic/condition
       targets are accepted too — see `t:target/0`)
     * `message` - A string, map, or `PushX.Message` struct
@@ -607,7 +608,7 @@ defmodule PushX do
   @doc """
   Returns health status for the configured providers and every named instance.
 
-  For the static `:apns`/`:fcm` configuration: whether credentials are
+  For the static `:apns`/`:fcm`/`:webpush` configuration: whether credentials are
   configured and the circuit breaker state. For each `PushX.Instance`
   (keyed by name): its provider, whether it is enabled, and its own breaker
   state — instance breakers are independent of the static ones and of each

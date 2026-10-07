@@ -38,7 +38,7 @@ defmodule PushX.Config do
   ### Testing
 
     * `:delivery` - `:live` (default) or `:test` — record sends locally
-      instead of contacting APNS/FCM; see `PushX.Test`
+      instead of contacting the providers; see `PushX.Test`
 
   ### Finch Pool
 
@@ -99,8 +99,9 @@ defmodule PushX.Config do
   ### Rate Limiting (opt-in)
 
     * `:rate_limit_enabled` - (default: `false`)
-    * `:rate_limit_apns`, `:rate_limit_fcm` - max sends per window per
-      provider (default: `5_000`)
+    * `:rate_limit_apns`, `:rate_limit_fcm`, `:rate_limit_webpush` - max sends
+      per window per provider (default: `5_000`; the `:webpush` key spans every
+      push service)
     * `:rate_limit_window_ms` - fixed window length (default: `1_000`)
 
     See `PushX.RateLimiter`.
@@ -238,7 +239,8 @@ defmodule PushX.Config do
   def finch_name, do: get(:finch_name, PushX.Finch)
 
   @doc """
-  Gets the Finch pool size (connections per pool).
+  Gets `finch_pool_size`: connections in the HTTP/1 pool (Web Push) —
+  ignored for the HTTP/2 pools (APNS/FCM).
 
   Default: 25 (increased from 10 in v0.6.0 to handle traffic bursts better)
   """
@@ -247,7 +249,7 @@ defmodule PushX.Config do
   def finch_pool_size, do: get(:finch_pool_size, 25)
 
   @doc """
-  Gets the Finch pool count (number of connection pools).
+  Gets `finch_pool_count`: HTTP/2 connections per provider origin (APNS/FCM).
 
   Default: 2 (increased from 1 in v0.6.0 to handle traffic bursts better)
   """

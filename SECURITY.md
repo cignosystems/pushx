@@ -4,8 +4,8 @@
 
 | Version | Supported |
 |---------|-----------|
-| latest 1.x (when released) | yes |
-| latest 0.x | yes, until 1.0 ships |
+| latest 1.x | yes |
+| 0.15.x | security fixes only, until 2027-01-07 (1.0 is a drop-in upgrade) |
 | older | no — please upgrade |
 
 ## Reporting a vulnerability

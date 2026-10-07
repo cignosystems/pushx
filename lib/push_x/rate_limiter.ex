@@ -16,6 +16,7 @@ defmodule PushX.RateLimiter do
         rate_limit_enabled: true,
         rate_limit_apns: 5000,      # requests per window
         rate_limit_fcm: 5000,       # requests per window
+        rate_limit_webpush: 5000,   # requests per window (all push services)
         rate_limit_window_ms: 1000  # 1 second window
 
   ## Usage

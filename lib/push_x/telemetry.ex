@@ -13,7 +13,7 @@ defmodule PushX.Telemetry do
 
   **Measurements:** `%{system_time: integer}`
   **Metadata:**
-    * `:provider` - `:apns` or `:fcm`
+    * `:provider` - `:apns`, `:fcm` or `:webpush`
     * `:token` - Device token (truncated for privacy)
 
   ### `[:pushx, :push, :stop]`
@@ -22,7 +22,7 @@ defmodule PushX.Telemetry do
 
   **Measurements:** `%{duration: integer}` (in native time units)
   **Metadata:**
-    * `:provider` - `:apns` or `:fcm`
+    * `:provider` - `:apns`, `:fcm` or `:webpush`
     * `:token` - Device token (truncated)
     * `:status` - `:sent`
     * `:id` - Provider message ID (if available)
@@ -33,7 +33,7 @@ defmodule PushX.Telemetry do
 
   **Measurements:** `%{duration: integer}`
   **Metadata:**
-    * `:provider` - `:apns` or `:fcm`
+    * `:provider` - `:apns`, `:fcm` or `:webpush`
     * `:token` - Device token (truncated)
     * `:kind` - Exception kind (`:error`, `:exit`, `:throw`)
     * `:reason` - Exception reason
@@ -45,7 +45,7 @@ defmodule PushX.Telemetry do
 
   **Measurements:** `%{duration: integer}`
   **Metadata:**
-    * `:provider` - `:apns` or `:fcm`
+    * `:provider` - `:apns`, `:fcm` or `:webpush`
     * `:token` - Device token (truncated)
     * `:status` - Error status (e.g., `:invalid_token`, `:rate_limited`)
     * `:reason` - Error reason string
@@ -56,7 +56,7 @@ defmodule PushX.Telemetry do
 
   **Measurements:** `%{delay_ms: integer, attempt: integer}`
   **Metadata:**
-    * `:provider` - `:apns` or `:fcm`
+    * `:provider` - `:apns`, `:fcm` or `:webpush`
     * `:status` - The error status that triggered the retry
 
   ## Example Usage

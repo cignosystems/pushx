@@ -27,8 +27,8 @@ Notes for humans and AI assistants modifying this library itself. If you are
 - `lib/push_x/retry.ex` — exponential backoff with `reconnect_fn` hook
 - `lib/push_x/circuit_breaker.ex` — per-provider failure threshold breaker
 - `lib/push_x/rate_limiter.ex` — optional client-side limiter
-- `lib/push_x/token.ex` — APNS hex / FCM format validation
-- `lib/push_x/telemetry.ex` — `[:pushx, :push, :start | :stop | :error]` events
+- `lib/push_x/token.ex` — APNS hex / FCM / Web Push subscription validation
+- `lib/push_x/telemetry.ex` — `[:pushx, :push, :start | :stop | :error | :exception]` and `[:pushx, :retry, :attempt]` events
 - `lib/push_x/config.ex`, `lib/push_x/urls.ex`, `lib/push_x/application.ex`
   — config helpers, provider URLs, OTP application
 
@@ -72,8 +72,8 @@ Notes for humans and AI assistants modifying this library itself. If you are
 ## Releasing
 
 1. Move the `[Unreleased]` changelog section to `[x.y.z] - YYYY-MM-DD` and add
-   the compare link; bump `@version` in `mix.exs` and the `~> x.y` constraint
-   in `README.md` / `AGENTS.md`.
+   the compare link; bump `@version` in `mix.exs` and, on a major bump only, the `~> x.0`
+   constraint in `README.md` / `AGENTS.md` (`~> 1.0` covers every 1.x).
 2. Commit, then `git tag vx.y.z && git push --tags`.
 3. The release workflow verifies the tag matches `@version`, runs the suite
    with the coverage gate, and only then publishes the package and docs to Hex
@@ -94,7 +94,7 @@ Notes for humans and AI assistants modifying this library itself. If you are
 ## Coding conventions
 
 - Public modules get `@moduledoc` + `@doc` on every public function with
-  `## Examples`. Hidden internal modules (`HTTP`, `URLs`, `JWTCache`,
+  `## Examples`. Hidden internal modules (`HTTP`, `URLs`,
   `Batch`, `SendGate`, `Application`, `Instance.Server`,
   `Instance.Supervisor`, `Test.Store`, `WebPush.Encryption`, `WebPush.VAPID`)
   use `@moduledoc false`.

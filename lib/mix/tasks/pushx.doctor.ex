@@ -7,7 +7,7 @@ defmodule Mix.Tasks.Pushx.Doctor do
   runs at start/send time, reported all at once:
 
       $ mix pushx.doctor
-      PushX 0.14.0 — configuration check (MIX_ENV=dev)
+      PushX 1.0.0 — configuration check (MIX_ENV=dev)
 
         APNS  ✔ configured (key ABC123DEFG, team TEAM123456, mode :prod)
               ✔ private key resolves and signs ES256

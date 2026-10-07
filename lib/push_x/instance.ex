@@ -94,8 +94,15 @@ defmodule PushX.Instance do
       Must be a P-256 (`prime256v1`) EC key — APNS signs with ES256, and a key
       on any other curve is rejected at start time.
     * `:mode` - `:prod` or `:sandbox` (default: `:prod`)
-    * `:pool_size` - Finch pool size (default: 2)
-    * `:pool_count` - Finch pool count (default: 1)
+    * `:pool_count` - HTTP/2 connections per origin (default: 1 — set 2+ in
+      production, as for `finch_pool_count`)
+    * `:pool_size` - ignored for APNS/FCM (HTTP/2); default 2
+    * `:ping_interval` / `:max_connection_age` / `:max_connection_age_jitter` /
+      `:wait_for_server_settings` - per-instance HTTP/2 keepalive overrides of
+      the global `finch_http2_*` config (same semantics; finch ≥ 0.22)
+    * `:ping_interval` / `:max_connection_age` / `:max_connection_age_jitter` /
+      `:wait_for_server_settings` - per-instance HTTP/2 keepalive overrides of
+      the global `finch_http2_*` config (same semantics; finch ≥ 0.22)
     * `:receive_timeout` / `:pool_timeout` / `:connect_timeout` - per-instance
       request timeouts in ms (defaults: 15_000 / 5_000 / 10_000)
 
@@ -126,8 +133,9 @@ defmodule PushX.Instance do
       `{:ok, %{token: access_token}}` or `{:error, reason}`. When set, no Goth
       process is started for the instance and `:credentials` becomes optional.
       The global `:fcm_token_fetcher` config never applies to instances.
-    * `:pool_size` - Finch pool size (default: 2)
-    * `:pool_count` - Finch pool count (default: 1)
+    * `:pool_count` - HTTP/2 connections per origin (default: 1 — set 2+ in
+      production, as for `finch_pool_count`)
+    * `:pool_size` - ignored for APNS/FCM (HTTP/2); default 2
     * `:receive_timeout` / `:pool_timeout` / `:connect_timeout` - as for APNS
 
   ## Returns

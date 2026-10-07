@@ -91,7 +91,7 @@ defmodule PushX.APNS do
     * `:topic` - Bundle ID (required)
     * `:mode` - `:prod` or `:sandbox` (default: from config)
     * `:push_type` - "alert", "background", "voip", etc. (default: "alert")
-    * `:priority` - 5 or 10 (default: 10)
+    * `:priority` - 5 or 10 (default: 10; use 5 for `push_type: "background"`)
     * `:expiration` - Unix timestamp when notification expires
     * `:collapse_id` - Group notifications with the same ID
     * `:apns_id` - Your own canonical UUID for this notification (`apns-id`
