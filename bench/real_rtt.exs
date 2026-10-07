@@ -5,7 +5,7 @@
 # send after an idle period hits a dead socket (HTTP/2 PING keepalive).
 #
 # Reference numbers (2026-10-07, FCM validate_only, placeholder token, EU
-# residential fiber, Apple Silicon — see README "Pool Sizing and Keepalive"):
+# residential fiber, Apple Silicon — see README "Performance and Pool Sizing"):
 #   cold send 130–170ms; warm serial p50 ~23ms p90 ~28ms
 #   first send after 300s idle: 33ms (PING keepalive held — no reconnect)
 #   batch sends/s        pool_count=2        pool_count=4

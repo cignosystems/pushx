@@ -28,14 +28,14 @@ plan is to reach **1.0 as a stability promise**, not as a feature milestone.
 
 ## 1.0 — boring on purpose
 
-- [x] Remove `Config.request_timeout/0` (deprecated since 0.11). *(on main)*
+- [x] Remove `Config.request_timeout/0` (deprecated since 0.7.0). *(on main)*
 - [x] `@since` annotations; supported-versions (Elixir ≥ 1.18 / OTP ≥ 26), semver
   and deprecation policy in the README; "Upgrading to 1.0" note. *(on main)*
 - [x] `SECURITY.md`, Dependabot config, issue/PR templates. *(on main)*
 - [x] Response docs: `status: :sent` = "accepted by the provider". *(0.15)*
 - [x] A real-RTT load test against the APNS sandbox / FCM before the word
   "production-ready" goes next to 1.0. *(Both legs run 2026-10-07 — numbers
-  in README "Pool Sizing and Keepalive" and the `bench/real_rtt.exs` header.
+  in README "Performance and Pool Sizing" and the `bench/real_rtt.exs` header.
   FCM: PING keepalive confirmed across a 5-min idle; pool-sizing guidance
   confirmed by the concurrency-200 stream-exhaustion cliff. APNS sandbox:
   keepalive confirmed (157 ms after 5-min idle vs 155 ms warm p50); sandbox

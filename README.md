@@ -28,6 +28,7 @@
 - [Quick Start](#quick-start)
 - [Usage Guide](#usage-guide)
 - [Configuration](#configuration)
+- [Performance and Pool Sizing](#performance-and-pool-sizing)
 - [Dynamic Instances (Runtime Config)](#dynamic-instances-runtime-config)
 - [Credential Storage](#credential-storage)
 - [Getting Your Credentials](#getting-your-credentials)
@@ -500,56 +501,12 @@ config :pushx,
 |--------|------|-------------|
 | `:delivery` | `:live` \| `:test` | `:test` records sends locally instead of contacting the providers — see [Testing Your App](#testing-your-app) and `PushX.Test` |
 
-### Pool Sizing and Keepalive
+### Pools and Keepalive
 
-APNS and FCM are spoken over **HTTP/2**, and in Finch an HTTP/2 "pool" is **one multiplexed connection**. So for APNS/FCM:
-
-- **`finch_pool_count`** = number of HTTP/2 connections per provider origin (default `2`). This is the capacity *and* redundancy knob. Each connection multiplexes up to the server's stream limit (APNS ≈ 1 000 concurrent streams, FCM ≈ 100). Don't run `1` in production: a single socket is a single point of failure, and after a reconnect a retry burst lands entirely on it (`too_many_concurrent_requests`).
-- **`finch_pool_size`** is **ignored for HTTP/2** pools. It only sizes the HTTP/1 default pool (Web Push): connections per push-service origin (default 25; the pool's `count` is fixed at 1). If a Web Push batch outruns it, the excess queues for `:pool_timeout` and then fails with a retryable `:connection_error` (`pool_timeout`) — raise `finch_pool_size` or lower batch `:concurrency`. Earlier versions of this README recommended lowering it for low-traffic apps — that had no effect on APNS/FCM.
-
-| Traffic | `finch_pool_count` | Approx. concurrent streams (APNS) |
-|---------|--------------------|-----------------------------------|
-| Low (< 100/min) | 2 (default) | ~2 000 |
-| High (> 1 000/min) | 4–8 | ~4 000–8 000 |
-
-Measured against the real FCM endpoint (`bench/real_rtt.exs`, 2026-10-07,
-`validate_only`, EU residential fiber — your absolute numbers will differ,
-the shape won't): warm single-send p50 was ~23 ms (cold ~130–170 ms for
-TLS + OAuth), and the first send after **5 minutes idle took 33 ms** — the
-PING keepalive kept the connection warm, no dead-socket penalty. Throughput
-of a 200–1 000-send batch:
-
-| Batch `:concurrency` | `finch_pool_count: 2` | `finch_pool_count: 4` |
-|---------------------:|----------------------:|----------------------:|
-| 10 | 368/s | 413/s |
-| 50 | 813/s | **1 515/s** |
-| 200 | 359/s (~230 retries) | **2 598/s** (0 retries) |
-
-The bottom-left cell is the pool-sizing lesson in one number: 200 concurrent
-requests on 2 connections exceeds FCM's ~100-streams-per-connection limit,
-so sends queue, fail with retryable `:connection_error` and only complete
-through PushX's jittered retries (nothing was lost — all 1 000 eventually
-got a provider response — but throughput collapsed 7×). Keep
-`finch_pool_count ≥ concurrency / 100` for FCM bursts, with 2 as the floor.
-
-The same harness against the **APNS sandbox** (valid `.p8`, placeholder
-token → `BadDeviceToken` after full TLS + JWT auth): cold send 360–510 ms,
-warm serial p50 ~102 ms, and the first send after **5 minutes idle took
-157 ms vs a 155 ms warm p50** — keepalive confirmed on Apple's side too.
-Sandbox *throughput* is meaningless by design (~1 stream per connection vs
-~1 000 on production — see
-[`too_many_concurrent_requests`](#too_many_concurrent_requests-error) in
-Troubleshooting), so size production pools from the stream math above, not
-from sandbox runs.
-
-**Idle connections going stale** (Fly.io, AWS NLB, GCP drop idle HTTP/2 sockets; the first send after a quiet period then hits a dead one) is solved by **HTTP/2 PING keepalive**, not by shrinking pools: PushX sends a PING after `finch_http2_ping_interval` ms of idleness (default **60 s**, finch ≥ 0.22), which both keeps the connection warm and detects a dead one before a real send pays for it. Optional proactive recycling: `finch_http2_max_connection_age` (+ `_jitter`) drains and replaces connections on a schedule — useful behind rotating DNS/load balancers. `PushX.reconnect/0` remains for manual recovery, and the retry path still reconnects automatically (coalesced) on the first connection error.
-
-```elixir
-config :pushx,
-  finch_pool_count: 2,                     # HTTP/2 connections per origin
-  finch_http2_ping_interval: 60_000,       # PING after 60 s idle (default)
-  finch_http2_max_connection_age: :infinity # or e.g. 30 * 60 * 1000 behind rotating LBs
-```
+The pool knobs (`finch_pool_count`, `finch_pool_size`) and the HTTP/2
+keepalive options have their own chapter —
+[Performance and Pool Sizing](#performance-and-pool-sizing) — together with
+measured latency and throughput numbers from the real provider endpoints.
 
 ### Retry Behavior
 
@@ -619,6 +576,65 @@ end
 When enabled, rate limits are checked automatically before each `send` call.
 
 ---
+
+## Performance and Pool Sizing
+
+### HTTP/2 Pools
+
+APNS and FCM are spoken over **HTTP/2**, and in Finch an HTTP/2 "pool" is **one multiplexed connection**. So for APNS/FCM:
+
+- **`finch_pool_count`** = number of HTTP/2 connections per provider origin (default `2`). This is the capacity *and* redundancy knob. Each connection multiplexes up to the server's stream limit (APNS ≈ 1 000 concurrent streams, FCM ≈ 100). Don't run `1` in production: a single socket is a single point of failure, and after a reconnect a retry burst lands entirely on it (`too_many_concurrent_requests`).
+- **`finch_pool_size`** is **ignored for HTTP/2** pools. It only sizes the HTTP/1 default pool (Web Push): connections per push-service origin (default 25; the pool's `count` is fixed at 1). If a Web Push batch outruns it, the excess queues for `:pool_timeout` and then fails with a retryable `:connection_error` (`pool_timeout`) — raise `finch_pool_size` or lower batch `:concurrency`. Earlier versions of this README recommended lowering it for low-traffic apps — that had no effect on APNS/FCM.
+
+| Traffic | `finch_pool_count` | Approx. concurrent streams (APNS) |
+|---------|--------------------|-----------------------------------|
+| Low (< 100/min) | 2 (default) | ~2 000 |
+| High (> 1 000/min) | 4–8 | ~4 000–8 000 |
+
+### Measured: FCM
+
+Measured against the real FCM endpoint (`bench/real_rtt.exs`, 2026-10-07,
+`validate_only`, EU residential fiber — your absolute numbers will differ,
+the shape won't): warm single-send p50 was ~23 ms (cold ~130–170 ms for
+TLS + OAuth), and the first send after **5 minutes idle took 33 ms** — the
+PING keepalive kept the connection warm, no dead-socket penalty. Throughput
+of a 200–1 000-send batch:
+
+| Batch `:concurrency` | `finch_pool_count: 2` | `finch_pool_count: 4` |
+|---------------------:|----------------------:|----------------------:|
+| 10 | 368/s | 413/s |
+| 50 | 813/s | **1 515/s** |
+| 200 | 359/s (~230 retries) | **2 598/s** (0 retries) |
+
+The bottom-left cell is the pool-sizing lesson in one number: 200 concurrent
+requests on 2 connections exceeds FCM's ~100-streams-per-connection limit,
+so sends queue, fail with retryable `:connection_error` and only complete
+through PushX's jittered retries (nothing was lost — all 1 000 eventually
+got a provider response — but throughput collapsed 7×). Keep
+`finch_pool_count ≥ concurrency / 100` for FCM bursts, with 2 as the floor.
+
+### Measured: APNS Sandbox
+
+The same harness against the **APNS sandbox** (valid `.p8`, placeholder
+token → `BadDeviceToken` after full TLS + JWT auth): cold send 360–510 ms,
+warm serial p50 ~102 ms, and the first send after **5 minutes idle took
+157 ms vs a 155 ms warm p50** — keepalive confirmed on Apple's side too.
+Sandbox *throughput* is meaningless by design (~1 stream per connection vs
+~1 000 on production — see
+[`too_many_concurrent_requests`](#too_many_concurrent_requests-error) in
+Troubleshooting), so size production pools from the stream math above, not
+from sandbox runs.
+
+### Keepalive
+
+**Idle connections going stale** (Fly.io, AWS NLB, GCP drop idle HTTP/2 sockets; the first send after a quiet period then hits a dead one) is solved by **HTTP/2 PING keepalive**, not by shrinking pools: PushX sends a PING after `finch_http2_ping_interval` ms of idleness (default **60 s**, finch ≥ 0.22), which both keeps the connection warm and detects a dead one before a real send pays for it. Optional proactive recycling: `finch_http2_max_connection_age` (+ `_jitter`) drains and replaces connections on a schedule — useful behind rotating DNS/load balancers. `PushX.reconnect/0` remains for manual recovery, and the retry path still reconnects automatically (coalesced) on the first connection error.
+
+```elixir
+config :pushx,
+  finch_pool_count: 2,                     # HTTP/2 connections per origin
+  finch_http2_ping_interval: 60_000,       # PING after 60 s idle (default)
+  finch_http2_max_connection_age: :infinity # or e.g. 30 * 60 * 1000 behind rotating LBs
+```
 
 ## Dynamic Instances (Runtime Config)
 

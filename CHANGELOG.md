@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `@doc since:` / `@moduledoc since:` on the whole public API (the version each function first shipped in; hexdocs shows it as a badge).
 - README "Versioning and Support": what the public API is, semver + deprecation policy, supported Elixir/OTP, "Upgrading to 1.0".
 - `SECURITY.md`, Dependabot (mix + GitHub Actions), issue and pull-request templates.
-- Measured real-RTT numbers in README "Pool Sizing and Keepalive" (from `bench/real_rtt.exs` against the live FCM endpoint and the APNS sandbox): warm p50 ~23 ms (FCM) / ~102 ms (APNS sandbox from the EU), no reconnect penalty after 5 min idle on either provider (PING keepalive), and the batch-throughput table showing why `finch_pool_count` must cover `concurrency / 100` for FCM.
+- Measured real-RTT numbers in README "Performance and Pool Sizing" (from `bench/real_rtt.exs` against the live FCM endpoint and the APNS sandbox): warm p50 ~23 ms (FCM) / ~102 ms (APNS sandbox from the EU), no reconnect penalty after 5 min idle on either provider (PING keepalive), and the batch-throughput table showing why `finch_pool_count` must cover `concurrency / 100` for FCM.
 - Troubleshooting: two cases where `too_many_concurrent_requests` is not a pool-size problem — the APNS sandbox's ~1-stream-per-connection limit, and an invalid provider token keeping Apple's stream limit at 1 so a concurrent burst fails on saturation while the real issue is `:auth_error`.
 
 ## [0.15.0] - 2026-08-22
